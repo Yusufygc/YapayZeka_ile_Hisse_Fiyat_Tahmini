@@ -1,0 +1,26 @@
+{
+  "strategy": "grid_search",
+  "weights": {
+    "Prophet": 1.0,
+    "XGBoost": 0.0,
+    "LSTM": 0.0
+  },
+  "grid_search_rmse": 55.311016701315985,
+  "inverse_rmse_weights": {
+    "Prophet": 0.3835,
+    "XGBoost": 0.2873,
+    "LSTM": 0.3293
+  },
+  "timestamp": "20260311_205503",
+  "xgboost_best_params": {
+    "n_estimators": 400,
+    "max_depth": 3,
+    "learning_rate": 0.28012397261277433,
+    "subsample": 0.716049223495422,
+    "colsample_bytree": 0.9401050914747209,
+    "min_child_weight": 5,
+    "gamma": 0.002134595815853596,
+    "reg_alpha": 0.12966597449871234,
+    "reg_lambda": 1.9979613988389286
+  }
+}
