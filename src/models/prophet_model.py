@@ -58,7 +58,7 @@ class ProphetModel(BaseModel):
 
         self.model = Prophet(**self.prophet_kwargs)
         self.model.fit(train_df)
-        print("[✓] Prophet modeli eğitildi.")
+        print("[OK] Prophet modeli eğitildi.")
 
     def predict(self, X_test: np.ndarray, dates_test: pd.Series | None = None) -> np.ndarray:
         """
@@ -85,9 +85,9 @@ class ProphetModel(BaseModel):
     def save(self, path: str) -> None:
         """Modeli .pkl olarak kaydeder."""
         joblib.dump(self.model, path)
-        print(f"[✓] Prophet modeli kaydedildi → {path}")
+        print(f"[OK] Prophet modeli kaydedildi -> {path}")
 
     def load(self, path: str) -> None:
         """Kaydedilmiş modeli diskten yükler."""
         self.model = joblib.load(path)
-        print(f"[✓] Prophet modeli yüklendi ← {path}")
+        print(f"[OK] Prophet modeli yüklendi <- {path}")

@@ -23,7 +23,7 @@ class EnsembleModel:
         Parameters
         ----------
         weights : dict | None
-            Model adı → ağırlık eşleştirmesi.
+            Model adı -> ağırlık eşleştirmesi.
             None ise tüm modellere eşit ağırlık verilir.
             Örnek: {"Prophet": 0.2, "XGBoost": 0.4, "LSTM": 0.4}
         """
@@ -37,7 +37,7 @@ class EnsembleModel:
         Parameters
         ----------
         predictions : dict
-            Model adı → tahmin dizisi (np.ndarray).
+            Model adı -> tahmin dizisi (np.ndarray).
 
         Returns
         -------
@@ -77,11 +77,11 @@ class EnsembleModel:
         Parameters
         ----------
         y_true : np.ndarray       Gerçek değerler (orijinal ölçekte).
-        predictions : dict        Model adı → tahmin dizisi.
+        predictions : dict        Model adı -> tahmin dizisi.
 
         Returns
         -------
-        dict  Model adı → optimized ağırlık.
+        dict  Model adı -> optimized ağırlık.
         """
         y_true = y_true.ravel()
         inv_rmse = {}
@@ -118,7 +118,7 @@ class EnsembleModel:
         Parameters
         ----------
         y_true : np.ndarray       Gerçek değerler (orijinal ölçekte).
-        predictions : dict        Model adı → tahmin dizisi.
+        predictions : dict        Model adı -> tahmin dizisi.
         step : float              Grid arama adımı (varsayılan: 0.05).
 
         Returns

@@ -1,0 +1,66 @@
+# Kullanıcının Ekledikleri
+/outputs
+/models
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Sanal ortamlar
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Dağıtım ve yapım dosyaları
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# C/C++ ve Cython uzantıları
+*.so
+
+# Birim testi ve kapsama alanı raporları
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# IDE'ler ve Editörler
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+*~
+.DS_Store
+
+# Veri seti (Gerekiyorsa, bu klasörü git'e atmamak mantıklı olabilir, ancak kullanıcı verileri data/ içinde tutuyor).
+# Büyük boyutlu CSV'leri takip etmemek için:
+# /data/*.csv

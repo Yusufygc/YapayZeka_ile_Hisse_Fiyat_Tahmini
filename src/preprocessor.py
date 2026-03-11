@@ -94,7 +94,7 @@ def scale_data(
     # Scaler'ları kaydet — canlı projede yeniden kullanılacak
     joblib.dump(scaler_X, os.path.join(save_dir, "scaler_X.pkl"))
     joblib.dump(scaler_y, os.path.join(save_dir, "scaler_y.pkl"))
-    print(f"[✓] Scaler objeleri kaydedildi → {save_dir}")
+    print(f"[OK] Scaler objeleri kaydedildi -> {save_dir}")
 
     return X_train_s, X_test_s, y_train_s, y_test_s, scaler_X, scaler_y
 
@@ -107,7 +107,7 @@ def create_sequences(
     """
     LSTM için kayan pencere (sliding window) yöntemiyle 3-boyutlu tensör üretir.
 
-    Girdi  : (N, features) → Çıktı: (N - time_steps, time_steps, features)
+    Girdi  : (N, features) -> Çıktı: (N - time_steps, time_steps, features)
     Hedef  : y[time_steps:]  (T+1 tahmini)
 
     Parameters

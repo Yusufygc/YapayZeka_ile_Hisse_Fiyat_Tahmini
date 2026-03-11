@@ -12,7 +12,7 @@ import numpy as np
 import ta
 
 
-# ── Sütun eşleştirme tablosu (TR → EN) ──────────────────────────────────────
+# ── Sütun eşleştirme tablosu (TR -> EN) ──────────────────────────────────────
 _COLUMN_MAP = {
     "Tarih": "Date",
     "Açılış": "Open",
@@ -122,7 +122,7 @@ def add_features(df: pd.DataFrame, lags: int = 5) -> pd.DataFrame:
 
 def load_data(csv_path: str) -> pd.DataFrame:
     """
-    Kolaylık fonksiyonu: veriyi oku → temizle → özellik çıkar.
+    Kolaylık fonksiyonu: veriyi oku -> temizle -> özellik çıkar.
 
     Parameters
     ----------

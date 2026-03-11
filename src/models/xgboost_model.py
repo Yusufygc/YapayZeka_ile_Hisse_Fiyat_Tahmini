@@ -57,7 +57,7 @@ class XGBoostModel(BaseModel):
             eval_set=[(X_train, y_train.ravel())],
             verbose=False,
         )
-        print("[✓] XGBoost modeli eğitildi.")
+        print("[OK] XGBoost modeli eğitildi.")
 
     def tune_and_train(
         self,
@@ -145,7 +145,7 @@ class XGBoostModel(BaseModel):
             eval_set=[(X_train, y_flat)],
             verbose=False,
         )
-        print("[✓] XGBoost modeli (Optuna-tuned) eğitildi.")
+        print("[OK] XGBoost modeli (Optuna-tuned) eğitildi.")
         return self.best_params
 
     def predict(self, X_test: np.ndarray, **kwargs) -> np.ndarray:
@@ -165,9 +165,9 @@ class XGBoostModel(BaseModel):
     def save(self, path: str) -> None:
         """Modeli .pkl olarak kaydeder."""
         joblib.dump(self.model, path)
-        print(f"[✓] XGBoost modeli kaydedildi → {path}")
+        print(f"[OK] XGBoost modeli kaydedildi -> {path}")
 
     def load(self, path: str) -> None:
         """Kaydedilmiş modeli diskten yükler."""
         self.model = joblib.load(path)
-        print(f"[✓] XGBoost modeli yüklendi ← {path}")
+        print(f"[OK] XGBoost modeli yüklendi <- {path}")

@@ -66,7 +66,7 @@ class LSTMModel(BaseModel):
         early_stop = EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True, verbose=1)
         self.model.fit(X_train, y_train, epochs=self.epochs, batch_size=self.batch_size,
                        validation_split=0.1, callbacks=[early_stop], verbose=1)
-        print("[✓] LSTM modeli eğitildi.")
+        print("[OK] LSTM modeli eğitildi.")
 
     def predict(self, X_test: np.ndarray, **kwargs) -> np.ndarray:
         if self.model is None:
@@ -77,11 +77,11 @@ class LSTMModel(BaseModel):
         if self.model is None:
             raise RuntimeError("Kaydedilecek model yok.")
         self.model.save(path)
-        print(f"[✓] LSTM modeli kaydedildi → {path}")
+        print(f"[OK] LSTM modeli kaydedildi -> {path}")
 
     def load(self, path: str) -> None:
         self.model = load_model(path)
-        print(f"[✓] LSTM modeli yüklendi ← {path}")
+        print(f"[OK] LSTM modeli yüklendi <- {path}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -137,12 +137,12 @@ class AttentionLSTMModel(BaseModel):
     Bidirectional LSTM + Attention mekanizması.
 
     Mimari:
-        Input → Bidirectional(LSTM(128, return_sequences=True))
-              → Dropout
-              → Bidirectional(LSTM(64, return_sequences=True))
-              → Dropout
-              → AttentionLayer
-              → Dense(64, relu) → Dropout → Dense(1)
+        Input -> Bidirectional(LSTM(128, return_sequences=True))
+              -> Dropout
+              -> Bidirectional(LSTM(64, return_sequences=True))
+              -> Dropout
+              -> AttentionLayer
+              -> Dense(64, relu) -> Dropout -> Dense(1)
     """
 
     def __init__(
@@ -234,7 +234,7 @@ class AttentionLSTMModel(BaseModel):
             callbacks=[early_stop, reduce_lr],
             verbose=1,
         )
-        print("[✓] Attention LSTM modeli eğitildi.")
+        print("[OK] Attention LSTM modeli eğitildi.")
 
     def predict(self, X_test: np.ndarray, **kwargs) -> np.ndarray:
         """
@@ -258,9 +258,9 @@ class AttentionLSTMModel(BaseModel):
         if self.model is None:
             raise RuntimeError("Kaydedilecek model yok.")
         self.model.save(path)
-        print(f"[✓] Attention LSTM modeli kaydedildi → {path}")
+        print(f"[OK] Attention LSTM modeli kaydedildi -> {path}")
 
     def load(self, path: str) -> None:
         """Kaydedilmiş Keras modelini yükler."""
         self.model = load_model(path, custom_objects={"AttentionLayer": AttentionLayer})
-        print(f"[✓] Attention LSTM modeli yüklendi ← {path}")
+        print(f"[OK] Attention LSTM modeli yüklendi <- {path}")

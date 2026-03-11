@@ -61,7 +61,7 @@ def plot_comparison(
     Parameters
     ----------
     y_true : np.ndarray       Gerçek fiyat dizisi (ortak uzunlukta).
-    predictions : dict        Model adı → tahmin dizisi.
+    predictions : dict        Model adı -> tahmin dizisi.
     save_path : str           PNG dosyasının kaydedileceği tam yol.
     title : str               Grafik başlığı.
     """
@@ -83,7 +83,7 @@ def plot_comparison(
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     plt.savefig(save_path, dpi=150)
     plt.close()
-    print(f"[✓] Karşılaştırma grafiği kaydedildi → {save_path}")
+    print(f"[OK] Karşılaştırma grafiği kaydedildi -> {save_path}")
 
 
 # ── Metrik raporu (CSV) ──────────────────────────────────────────────────────
@@ -93,28 +93,59 @@ def save_metrics_report(
     save_path: str,
 ) -> pd.DataFrame:
     """
-    Tüm modellerin metriklerini CSV olarak kaydeder.
+    Tüm modellerin metriklerini karşılaştırmalı ve detaylı olarak kaydeder.
+    Klasik 3 metrik (RMSE, MAE, MAPE) yerine modelleri sıralar,
+    zayıf modellerin en iyi modele göre ne kadar sapma gösterdiğini (% ve mutlak) ekler.
 
     Parameters
     ----------
     metrics_dict : dict
-        Model adı → {RMSE, MAE, MAPE} sözlüğü.
+        Model adı -> {RMSE, MAE, MAPE} sözlüğü.
     save_path : str
         CSV dosyasının yolu.
 
     Returns
     -------
-    pd.DataFrame  Metrik tablosu.
+    pd.DataFrame  Gelişmiş metrik tablosu.
     """
     df = pd.DataFrame(metrics_dict).T
     df.index.name = "Model"
 
+    # ── Gelişmiş Raporlama (Rank & Farklar) ─────────────────────────────────
+    # RMSE'ye göre sırala (Düşük her zaman daha iyidir)
+    df.sort_values(by="RMSE", inplace=True)
+
+    # Sıralama kolonunu ekle (En iyi 1. Seçim, vb.)
+    df.insert(0, "Sıra", [f"{i}." for i in range(1, len(df) + 1)])
+
+    # En iyi (hedef alınan) modelin skoru
+    best_rmse = df.iloc[0]["RMSE"]
+    best_model_name = df.index[0]
+
+    # Fark hesaplamaları
+    df["RMSE_Fark_Delta"] = df["RMSE"] - best_rmse
+    df["RMSE_Fark_Yüzde"] = ((df["RMSE"] / best_rmse) - 1.0) * 100
+
+    # Formatlama — Virgülden sonra 2/4 hane, % işaretleri (okunabilirlik)
+    df["RMSE_Fark_Delta"] = df["RMSE_Fark_Delta"].apply(lambda x: f"+{x:.4f}")
+    df["RMSE_Fark_Yüzde"] = df["RMSE_Fark_Yüzde"].apply(lambda x: f"+%{x:.2f}")
+
+    # İlk satırın (en iyi) fark hanelerini temizle daha kalıcı görünsün
+    df.loc[df.index[0], "RMSE_Fark_Delta"] = "-"
+    df.loc[df.index[0], "RMSE_Fark_Yüzde"] = "Referans"
+
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    df.to_csv(save_path)
-    print(f"[✓] Metrik raporu kaydedildi → {save_path}")
-    print("\n" + "=" * 55)
-    print("  📊  MODEL KIYaSLAMA SONUÇLARI")
-    print("=" * 55)
+    
+    # Raporu Excel Türkçe standartlarına da daha uygun hale getirelim
+    df.to_csv(save_path, sep=";")
+    
+    print(f"[OK] Gelişmiş metrik raporu kaydedildi -> {save_path}")
+    print("\n" + "=" * 70)
+    print("  [INFO]  MODEL KARŞILAŞTIRMA VE PERFORMANS TABLOSU (v3)")
+    print("=" * 70)
     print(df.to_string())
-    print("=" * 55 + "\n")
+    print("-" * 70)
+    print(f"  [INFO] En başarılı model: {best_model_name} (RMSE: {best_rmse:.4f})")
+    print("=" * 70 + "\n")
+    
     return df
