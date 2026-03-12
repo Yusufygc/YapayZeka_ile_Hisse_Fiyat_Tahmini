@@ -19,32 +19,25 @@ from typing import Dict
 
 def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
     """
-    RMSE, MAE ve MAPE hesaplar. Tüm değerler **orijinal ölçekte** olmalıdır
-    (inverse_transform yapılmış).
-
-    Parameters
-    ----------
-    y_true : np.ndarray
-    y_pred : np.ndarray
-
-    Returns
-    -------
-    dict  {'RMSE': float, 'MAE': float, 'MAPE': float}
+    RMSE, MAE, MAPE ve gelişmiş finansal metrikleri hesaplar.
     """
+    from src.evaluation.financial_metrics import compute_financial_metrics
+    
     y_true = y_true.ravel()
     y_pred = y_pred.ravel()
 
-    rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
-    mae = float(mean_absolute_error(y_true, y_pred))
-
-    # MAPE — sıfır bölme korumalı
-    mask = y_true != 0
-    if mask.sum() == 0:
-        mape = float("inf")
-    else:
-        mape = float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)
-
-    return {"RMSE": round(rmse, 4), "MAE": round(mae, 4), "MAPE": round(mape, 4)}
+    # compute_financial_metrics returns MAE, RMSE, MAPE, Dir_Acc, Sharpe, Hit_Rate
+    metrics = compute_financial_metrics(y_true, y_pred)
+    
+    # Formatlama
+    return {
+        "RMSE": round(metrics["RMSE"], 4),
+        "MAE": round(metrics["MAE"], 4),
+        "MAPE": round(metrics["MAPE"], 4),
+        "Dir_Acc": round(metrics["Dir_Acc"], 2),
+        "Sharpe": round(metrics["Sharpe"], 4),
+        "Hit_Rate": round(metrics["Hit_Rate"], 2)
+    }
 
 
 # ── Karşılaştırma grafiği ────────────────────────────────────────────────────
