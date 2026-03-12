@@ -58,10 +58,17 @@ class DataManager:
         )
         
         # Sequences
+        import numpy as np
         X_train_seq, y_train_seq = create_sequences(X_train_s, y_train_s, time_steps=self.time_steps)
-        X_test_seq, y_test_seq = create_sequences(X_test_s, y_test_s, time_steps=self.time_steps)
         
-        original_y_test_aligned = test_df["Close"].values[self.time_steps:]
+        # To predict the first test sample, the model needs the previous `time_steps` samples from train_df
+        X_test_input = np.vstack((X_train_s[-self.time_steps:], X_test_s))
+        y_test_input = np.vstack((y_train_s[-self.time_steps:], y_test_s))
+        
+        X_test_seq, y_test_seq = create_sequences(X_test_input, y_test_input, time_steps=self.time_steps)
+        
+        # Now every item in test_df has exactly 1 sequence and 1 prediction
+        original_y_test_aligned = test_df["Close"].values
         
         return {
             "X_train": X_train, "y_train": y_train, "X_test": X_test, "y_test": y_test,
