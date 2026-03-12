@@ -23,7 +23,7 @@ from src.pipeline_manager import ForecastingPipeline
 # YAPILANDIRMA
 # ═════════════════════════════════════════════════════════════════════════════
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-DATA_FILE = os.path.join(PROJECT_ROOT, "data", "EREGL.csv")
+DATA_FILE = os.path.join(PROJECT_ROOT, "data", "AKSA.csv")
 
 
 def main() -> None:

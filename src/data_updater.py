@@ -31,10 +31,13 @@ class DataUpdater:
 
         # Sütun adı TR veya EN olabilir
         date_col = "Tarih" if "Tarih" in df_raw.columns else "Date"
-        last_date_str = df_raw[date_col].iloc[-1]
+        last_date_str = str(df_raw[date_col].iloc[-1])
         
         # Ham verideki son tarihi parse et
-        last_date = pd.to_datetime(last_date_str, dayfirst=True)
+        try:
+            last_date = pd.to_datetime(last_date_str, format="mixed", dayfirst=True)
+        except ValueError:
+            last_date = pd.to_datetime(last_date_str, dayfirst=True)
         today = pd.to_datetime(datetime.today().date())
 
         diff_days = (today - last_date).days
@@ -83,8 +86,21 @@ class DataUpdater:
                     common_cols = [c for c in df_raw.columns if c in new_data.columns]
                     new_data = new_data[common_cols]
                     
-                    # Eski formattaki gibi DD.MM.YYYY veya string formatına getir
-                    new_data[date_col] = new_data[date_col].dt.strftime("%d.%m.%Y")
+                    # Orijinal dosyanın tarih formatına tam uyumlu kaydet ki loader patlamasın
+                    if "-" in last_date_str:
+                        if len(last_date_str.split("-")[0]) == 4:
+                            fmt = "%Y-%m-%d"
+                        else:
+                            fmt = "%d-%m-%Y"
+                    elif "/" in last_date_str:
+                        if len(last_date_str.split("/")[0]) == 4:
+                            fmt = "%Y/%m/%d"
+                        else:
+                            fmt = "%d/%m/%Y"
+                    else:
+                        fmt = "%d.%m.%Y"
+                    
+                    new_data[date_col] = new_data[date_col].dt.strftime(fmt)
                     
                     # CSV'ye append modunda kaydet (header yazma)
                     new_data.to_csv(csv_path, mode='a', header=False, index=False)

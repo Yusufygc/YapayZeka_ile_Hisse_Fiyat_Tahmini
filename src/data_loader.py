@@ -43,8 +43,12 @@ def load_and_clean(csv_path: str, drop_zero_volume: bool = True) -> pd.DataFrame
     df = pd.read_csv(csv_path)
     df.rename(columns=_COLUMN_MAP, inplace=True)
 
-    # Tarih parse — gün/ay/yıl formatı
-    df["Date"] = pd.to_datetime(df["Date"], dayfirst=True)
+    # Tarih parse — Karışık formatlara (mixed) karşı esneklik
+    try:
+        df["Date"] = pd.to_datetime(df["Date"], format="mixed", dayfirst=True)
+    except Exception:
+        df["Date"] = pd.to_datetime(df["Date"], dayfirst=True)
+    
     df.sort_values("Date", inplace=True)
     df.reset_index(drop=True, inplace=True)
 

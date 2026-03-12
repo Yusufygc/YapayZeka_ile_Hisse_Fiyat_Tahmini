@@ -139,7 +139,15 @@ def save_metrics_report(
     # Raporu Excel Türkçe standartlarına da daha uygun hale getirelim
     df.to_csv(save_path, sep=";")
     
+    # ── Raporu Markdown Tablosu Olarak da Kaydet ────────────────────────────
+    md_save_path = save_path.replace(".csv", ".md")
+    with open(md_save_path, "w", encoding="utf-8") as f:
+        f.write(f"## {best_model_name} Modeli Liderliğinde Performans Raporu\n\n")
+        f.write(df.to_markdown(index=True))
+        f.write(f"\n\n**Analiz Sonucu:**  Bu veri seti dinamiklerinde **{best_model_name}** `{best_rmse:.4f}` skor ile en düşük RMSE'yi üreterek zirvede yer alıyor.")
+    
     print(f"[OK] Gelişmiş metrik raporu kaydedildi -> {save_path}")
+    print(f"[OK] Markdown çıktı tablosu kaydedildi -> {md_save_path}")
     print("\n" + "=" * 70)
     print("  [INFO]  MODEL KARŞILAŞTIRMA VE PERFORMANS TABLOSU (v3)")
     print("=" * 70)
