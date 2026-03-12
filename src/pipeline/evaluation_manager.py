@@ -55,7 +55,7 @@ class EvaluationManager:
         }
         self.y_true_aligned = y_test_original[-min_len:]
 
-    def evaluate_single_split(self):
+    def evaluate_single_split(self, trained_models: dict):
         print("\n" + "=" * 60)
         print("  ADIM 7 | Değerlendirme & Registry (EvaluationManager)")
         print("=" * 60)
@@ -73,7 +73,7 @@ class EvaluationManager:
             model_filename = f"{name.replace(' ', '_').lower()}_model{model_ext}"
             model_path = os.path.join(self.models_dir, model_filename)
             
-            original_model = self.trained_models[name]
+            original_model = trained_models[name]
             original_model.save(model_path)
             
             # 3. Register model into JSON manifest

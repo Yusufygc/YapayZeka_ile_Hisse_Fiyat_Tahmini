@@ -88,7 +88,7 @@ class ForecastingPipeline:
             
             # Predict & Evaluate
             self.evaluation_manager.generate_predictions(self.model_trainer.trained_models, self.data_manager.tensors)
-            self.evaluation_manager.evaluate_single_split()
+            self.evaluation_manager.evaluate_single_split(self.model_trainer.trained_models)
             
         elif self.validation_mode == "walk_forward":
             self.model_trainer.train_walk_forward(self.data_manager.wf_splits, self.data_manager)
