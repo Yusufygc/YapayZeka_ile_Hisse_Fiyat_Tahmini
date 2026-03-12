@@ -17,13 +17,13 @@ Kullanım:
 """
 
 import os
-from src.pipeline_manager import ForecastingPipeline
+from src.pipeline.orchestrator import ForecastingPipeline
 
 # ═════════════════════════════════════════════════════════════════════════════
 # YAPILANDIRMA
 # ═════════════════════════════════════════════════════════════════════════════
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-DATA_FILE = os.path.join(PROJECT_ROOT, "data", "AKSA.csv")
+DATA_FILE = os.path.join(PROJECT_ROOT, "data", "SASA.csv")
 
 
 def main() -> None:
@@ -31,7 +31,8 @@ def main() -> None:
     pipeline = ForecastingPipeline(
         data_file=DATA_FILE,
         test_ratio=0.20,
-        time_steps=30
+        time_steps=30,
+        validation_mode="single_split"  # Set to "walk_forward" to use rolling cross validation
     )
     pipeline.run_all()
 
