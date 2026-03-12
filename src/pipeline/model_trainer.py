@@ -71,12 +71,30 @@ class ModelTrainer:
         wf_tft = WalkForwardValidator(lambda: TFTModel(epochs=5), preprocessor_seq)
         wf_tft.run(wf_splits)
         
-        self.wf_results = {
-            "XGBoost": wf_xgb.aggregated_metrics,
-            "Random Forest": wf_rf.aggregated_metrics,
-            "LSTM": wf_lstm.aggregated_metrics,
-            "TFT": wf_tft.aggregated_metrics
+        self.wf_results = {}
+        self.wf_predictions = {}
+        self.wf_y_true = None
+        
+        import numpy as np
+        
+        validators = {
+            "XGBoost": wf_xgb,
+            "Random Forest": wf_rf,
+            "LSTM": wf_lstm,
+            "TFT": wf_tft
         }
+        
+        for name, validator in validators.items():
+            self.wf_results[name] = validator.aggregated_metrics
+            
+            all_preds = []
+            all_trues = []
+            for window in validator.results:
+                all_preds.extend(window["y_pred"])
+                all_trues.extend(window["y_true"])
+                
+            self.wf_predictions[name] = np.array(all_preds)
+            self.wf_y_true = np.array(all_trues)
         
         # Log and Register average results
         for model_name, metrics in self.wf_results.items():

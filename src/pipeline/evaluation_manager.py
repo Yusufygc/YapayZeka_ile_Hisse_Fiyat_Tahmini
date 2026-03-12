@@ -86,7 +86,7 @@ class EvaluationManager:
         title_str = f"{self.stock_symbol} — Model Kıyaslama (Gerçek vs Tahmin)"
         plot_comparison(self.y_true_aligned, self.predictions, save_path=plot_latest, title=title_str)
 
-    def evaluate_walk_forward(self, wf_results: dict):
+    def evaluate_walk_forward(self, wf_results: dict, wf_predictions: dict, wf_y_true: Any):
         print("\n" + "=" * 60)
         print("  ADIM 7 | Değerlendirme Gösterimi (Walk-Forward)")
         print("=" * 60)
@@ -94,3 +94,9 @@ class EvaluationManager:
         df_wf = pd.DataFrame(wf_results).T
         print("\nWalk-Forward Ortalama Metrikleri:")
         print(df_wf)
+        
+        # Grafik oluşturma
+        plot_latest = os.path.join(self.outputs_dir, "benchmark_comparison_v4_wf.png")
+        title_str = f"{self.stock_symbol} — Model Kıyaslama (Gerçek vs Tahmin) [Walk-Forward]"
+        plot_comparison(wf_y_true, wf_predictions, save_path=plot_latest, title=title_str)
+        print(f"[OK] Walk-Forward karşılaştırma grafiği kaydedildi -> {plot_latest}")

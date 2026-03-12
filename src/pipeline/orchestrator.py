@@ -94,6 +94,10 @@ class ForecastingPipeline:
             self.model_trainer.train_walk_forward(self.data_manager.wf_splits, self.data_manager)
             
             # Predict & Evaluate (Handled largely by Validator Engine, but we trigger the presentation)
-            self.evaluation_manager.evaluate_walk_forward(self.model_trainer.wf_results)
+            self.evaluation_manager.evaluate_walk_forward(
+                self.model_trainer.wf_results, 
+                self.model_trainer.wf_predictions, 
+                self.model_trainer.wf_y_true
+            )
             
         print("\n  [OK] Pipeline completed successfully!")
