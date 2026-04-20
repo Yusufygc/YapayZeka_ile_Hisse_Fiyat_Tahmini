@@ -46,6 +46,23 @@ class LSTMModel(BaseModel):
         self.learning_rate = learning_rate
         self.model: Sequential | None = None
 
+    @staticmethod
+    def _chronological_validation_split(
+        X: np.ndarray,
+        y: np.ndarray,
+        validation_ratio: float = 0.1,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        n_samples = len(X)
+        if n_samples < 4:
+            raise ValueError("LSTM eğitimi için yeterli sequence yok.")
+
+        n_val = max(1, int(n_samples * validation_ratio))
+        n_train = n_samples - n_val
+        if n_train <= 0:
+            raise ValueError("Chronological validation split sonrası train örneği kalmadı.")
+
+        return X[:n_train], y[:n_train], X[n_train:], y[n_train:]
+
     def _build_model(self, input_shape: tuple) -> Sequential:
         model = Sequential([
             LSTM(self.units_1, return_sequences=True, input_shape=input_shape),
@@ -63,9 +80,18 @@ class LSTMModel(BaseModel):
         if X_train.ndim != 3:
             raise ValueError(f"LSTM girdi tensörü 3-boyutlu olmalıdır, alınan: {X_train.ndim}D")
         self.model = self._build_model(input_shape=(X_train.shape[1], X_train.shape[2]))
+        X_tr, y_tr, X_val, y_val = self._chronological_validation_split(X_train, y_train)
         early_stop = EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True, verbose=1)
-        self.model.fit(X_train, y_train, epochs=self.epochs, batch_size=self.batch_size,
-                       validation_split=0.1, callbacks=[early_stop], verbose=1)
+        self.model.fit(
+            X_tr,
+            y_tr,
+            epochs=self.epochs,
+            batch_size=self.batch_size,
+            validation_data=(X_val, y_val),
+            callbacks=[early_stop],
+            verbose=1,
+            shuffle=False,
+        )
         print("[OK] LSTM modeli eğitildi.")
 
     def predict(self, X_test: np.ndarray, **kwargs) -> np.ndarray:
@@ -162,6 +188,25 @@ class AttentionLSTMModel(BaseModel):
         self.learning_rate = learning_rate
         self.model: Model | None = None
 
+    @staticmethod
+    def _chronological_validation_split(
+        X: np.ndarray,
+        y: np.ndarray,
+        validation_ratio: float = 0.1,
+        min_val_samples: int = 32,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        n_samples = len(X)
+        if n_samples < 4:
+            raise ValueError("Attention LSTM eğitimi için yeterli sequence yok.")
+
+        n_val = max(1, int(n_samples * validation_ratio))
+        n_val = min(max(min_val_samples, n_val), max(1, n_samples - 1))
+        n_train = n_samples - n_val
+        if n_train <= 0:
+            raise ValueError("Chronological validation split sonrası train örneği kalmadı.")
+
+        return X[:n_train], y[:n_train], X[n_train:], y[n_train:]
+
     def _build_model(self, input_shape: tuple) -> Model:
         """
         Functional API ile Bidirectional LSTM + Attention modeli oluşturur.
@@ -209,6 +254,7 @@ class AttentionLSTMModel(BaseModel):
         self.model = self._build_model(
             input_shape=(X_train.shape[1], X_train.shape[2])
         )
+        X_tr, y_tr, X_val, y_val = self._chronological_validation_split(X_train, y_train)
 
         # ── Callbacks ────────────────────────────────────────────────────────
         early_stop = EarlyStopping(
@@ -226,13 +272,14 @@ class AttentionLSTMModel(BaseModel):
         )
 
         self.model.fit(
-            X_train,
-            y_train,
+            X_tr,
+            y_tr,
             epochs=self.epochs,
             batch_size=self.batch_size,
-            validation_split=0.1,
+            validation_data=(X_val, y_val),
             callbacks=[early_stop, reduce_lr],
             verbose=1,
+            shuffle=False,
         )
         print("[OK] Attention LSTM modeli eğitildi.")
 

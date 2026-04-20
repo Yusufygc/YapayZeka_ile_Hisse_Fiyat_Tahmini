@@ -24,10 +24,16 @@ from src.pipeline.evaluation_manager import EvaluationManager
 
 class ForecastingPipeline:
     def __init__(self, data_file: str, test_ratio: float = 0.20, time_steps: int = 30,
-                 validation_mode: str = "single_split", selected_models: list = None):
+                 validation_mode: str = "single_split", selected_models: list = None,
+                 target_mode: str = "log_return",
+                 feature_mode: str = "stationary_features",
+                 scaling_mode: str = "robust_x_standard_y_clip"):
         self.data_file = data_file
         self.validation_mode = validation_mode
         self.selected_models = selected_models  # None → tüm modeller
+        self.target_mode = target_mode
+        self.feature_mode = feature_mode
+        self.scaling_mode = scaling_mode
         
         # Reproducibility
         set_global_seed(42)
@@ -56,11 +62,17 @@ class ForecastingPipeline:
             data_file, test_ratio, time_steps, self.models_dir,
             use_macro=True,
             macro_cache_dir=os.path.join(self.project_root, "data", "macro"),
+            target_mode=self.target_mode,
+            feature_mode=self.feature_mode,
+            scaling_mode=self.scaling_mode,
         )
         
         # We instantiate Trainer & Evaluation after data ingestion once features are known
         self.model_trainer = None
         self.evaluation_manager = None
+        self.registry_version = "v5"
+        self.run_dataset_metadata = {}
+        self.run_dataset_hash = "N/A"
 
     def setup_environment(self) -> None:
         for d in [self.models_dir, self.outputs_dir, self.experiment_dir, self.registry_dir]:
@@ -68,6 +80,9 @@ class ForecastingPipeline:
             
         print(f"\n  [INFO] Pipeline Modu: {self.validation_mode}")
         print(f"  [INFO] Hisse Sembolü: {self.stock_symbol}")
+        print(f"  [INFO] Target Mode : {self.target_mode}")
+        print(f"  [INFO] Feature Mode: {self.feature_mode}")
+        print(f"  [INFO] Scaling Mode: {self.scaling_mode}")
 
     def run_all(self) -> None:
         """
@@ -79,15 +94,23 @@ class ForecastingPipeline:
         # 2. Extract Data & Split
         self.data_manager.ingest_and_engineer()
         self.data_manager.split_data(self.validation_mode)
+        self.run_dataset_metadata, self.run_dataset_hash = self.data_manager.build_run_metadata(
+            self.validation_mode
+        )
         
         # Initialize Sub-managers with loaded features
         self.model_trainer = ModelTrainer(
             self.stock_symbol, self.tracker, self.registry,
             self.data_manager.feature_names, self.selected_models,
+            dataset_hash=self.run_dataset_hash,
+            dataset_metadata=self.run_dataset_metadata,
+            registry_version=self.registry_version,
         )
         self.evaluation_manager = EvaluationManager(
             self.stock_symbol, self.outputs_dir, self.models_dir,
             self.tracker, self.registry, self.data_manager.feature_names,
+            self.run_dataset_hash, self.run_dataset_metadata,
+            self.registry_version,
             stock_db=self.stock_db,
         )
         

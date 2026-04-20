@@ -14,6 +14,9 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 
 AVAILABLE_MODELS = ["Prophet", "XGBoost", "Random Forest", "LSTM", "TFT"]
+DEFAULT_TARGET_MODE = "log_return"
+DEFAULT_FEATURE_MODE = "stationary_features"
+DEFAULT_SCALING_MODE = "robust_x_standard_y_clip"
 
 PRESETS = {
     "1": ("Tüm Modeller",            AVAILABLE_MODELS),
@@ -116,6 +119,9 @@ def confirm(data_file: str, mode: str, models: list[str]) -> bool:
     print(f"  Hisse        : {stock}")
     print(f"  Validasyon   : {mode}")
     print(f"  Modeller     : {', '.join(models)}")
+    print(f"  Target Mode  : {DEFAULT_TARGET_MODE}")
+    print(f"  Feature Mode : {DEFAULT_FEATURE_MODE}")
+    print(f"  Scaling Mode : {DEFAULT_SCALING_MODE}")
     _divider()
     ans = _ask("Devam edilsin mi? [e/h]", {"e", "h", "E", "H"})
     return ans.lower() == "e"
@@ -141,6 +147,9 @@ def main() -> None:
         time_steps=30,
         validation_mode=validation_mode,
         selected_models=selected_models,
+        target_mode=DEFAULT_TARGET_MODE,
+        feature_mode=DEFAULT_FEATURE_MODE,
+        scaling_mode=DEFAULT_SCALING_MODE,
     )
     pipeline.run_all()
 

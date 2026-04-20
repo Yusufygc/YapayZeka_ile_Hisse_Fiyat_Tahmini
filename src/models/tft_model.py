@@ -51,7 +51,7 @@ class QuantileLoss(nn.Module):
         for i, q in enumerate(self.quantiles):
             err = target - preds[:, i]    # (batch,) - (batch,) ✓
             losses.append(torch.max(q * err, (q - 1) * err))
-        return torch.stack(losses, dim=1).mean()
+        return torch.stack(losses, dim=1).sum(dim=1).mean()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -333,6 +333,29 @@ class TFTModel(BaseModel):
         self.network: Optional[_TFTNetwork] = None
         self._num_features: Optional[int]   = None
 
+    @staticmethod
+    def _chronological_validation_split(
+        X: np.ndarray,
+        y: np.ndarray,
+        validation_ratio: float = 0.1,
+        min_val_samples: int = 32,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Zaman serisinde shuffle etmeden son bölümden validation ayırır.
+        """
+        n_samples = len(X)
+        if n_samples < 4:
+            raise ValueError("TFT eğitimi için yeterli sequence yok.")
+
+        n_val = max(1, int(n_samples * validation_ratio))
+        n_val = min(max(min_val_samples, n_val), max(1, n_samples - 1))
+        n_train = n_samples - n_val
+
+        if n_train <= 0:
+            raise ValueError("Chronological validation split sonrası train örneği kalmadı.")
+
+        return X[:n_train], y[:n_train], X[n_train:], y[n_train:]
+
     # ── Dahili Yardımcılar ────────────────────────────────────────────────────
     def _numpy_to_loader(
         self,
@@ -387,12 +410,7 @@ class TFTModel(BaseModel):
             optimizer, mode="min", factor=0.5, patience=5, min_lr=1e-6
         )
 
-        # Train / Validation ayrımı (%90 / %10)
-        n_val   = max(1, int(len(X_train) * 0.1))
-        n_train = len(X_train) - n_val
-
-        X_tr, y_tr = X_train[:n_train], y_train[:n_train]
-        X_val, y_val = X_train[n_train:], y_train[n_train:]
+        X_tr, y_tr, X_val, y_val = self._chronological_validation_split(X_train, y_train)
 
         train_loader = self._numpy_to_loader(X_tr, y_tr, shuffle=True)
         val_loader   = self._numpy_to_loader(X_val, y_val, shuffle=False)
@@ -403,7 +421,8 @@ class TFTModel(BaseModel):
 
         print(f"\n  [TFT-PyTorch] Eğitim başlıyor | "
               f"device={self.device} | features={num_features} | "
-              f"d_model={self.d_model} | heads={self.num_heads}")
+              f"d_model={self.d_model} | heads={self.num_heads} | "
+              f"train={len(X_tr)} | val={len(X_val)}")
 
         for epoch in range(1, self.epochs + 1):
             # --- Eğitim ---
