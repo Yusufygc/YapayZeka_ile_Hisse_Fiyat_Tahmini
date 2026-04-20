@@ -8,6 +8,29 @@ import numpy as np
 from sklearn.metrics import mean_squared_error, mean_absolute_error, mean_absolute_percentage_error
 from typing import Dict
 
+
+def _annualized_sharpe(returns: np.ndarray) -> float:
+    returns = np.asarray(returns, dtype=float).ravel()
+    if returns.size == 0:
+        return 0.0
+
+    std_returns = np.std(returns)
+    if std_returns <= 0:
+        return 0.0
+
+    return float((np.mean(returns) / std_returns) * np.sqrt(252))
+
+
+def compute_buy_hold_sharpe(y_true: np.ndarray) -> float:
+    """
+    Basit buy-and-hold referansı için fiyat farklarından yıllıklandırılmış Sharpe üretir.
+    """
+    y_true = np.asarray(y_true, dtype=float).ravel()
+    if y_true.size < 2:
+        return 0.0
+
+    return _annualized_sharpe(np.diff(y_true))
+
 def compute_financial_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
     """
     Computes both standard regression metrics and financial evaluation metrics.
@@ -31,28 +54,26 @@ def compute_financial_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[st
     else:
         dir_acc = 0.0
 
+    buy_hold_sharpe = compute_buy_hold_sharpe(y_true)
+
     # Approximated Sharpe Ratio (simulating buying on predicted up days and shorting down days)
-    # Return = P_{t} - P_{t-1}
-    # If predicted diff > 0, we hold long. If < 0, short.
+    # Neutral signals stay neutral; they are not coerced into long positions.
     if len(diff_true) > 0:
         signals = np.sign(diff_pred)
-        signals = np.where(signals == 0, 1, signals) # DEFAULT to long
         strategy_returns = signals * diff_true
-        
-        mean_strat_rtn = np.mean(strategy_returns)
-        std_strat_rtn = np.std(strategy_returns)
-        
-        if std_strat_rtn > 0:
-            # Annualize assuming approx 252 trading days (using single sample periods, rough scaling)
-            # Normally we divide percentage return, but doing price diff ratio:
-            sharpe = (mean_strat_rtn / std_strat_rtn) * np.sqrt(252) # Approximation
+        sharpe = _annualized_sharpe(strategy_returns)
+
+        active_mask = signals != 0
+        if np.any(active_mask):
+            hit_rate = float(np.mean(strategy_returns[active_mask] > 0) * 100)
         else:
-            sharpe = 0.0
-            
-        hit_rate = np.mean(strategy_returns > 0) * 100
+            hit_rate = 0.0
+
+        neutral_rate = float(np.mean(~active_mask) * 100)
     else:
         sharpe = 0.0
         hit_rate = 0.0
+        neutral_rate = 0.0
 
     return {
         "MAE": mae,
@@ -60,5 +81,7 @@ def compute_financial_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[st
         "MAPE": mape,
         "Dir_Acc": dir_acc,
         "Sharpe": sharpe,
-        "Hit_Rate": hit_rate
+        "Hit_Rate": hit_rate,
+        "Neutral_Rate": neutral_rate,
+        "BuyHold_Sharpe": buy_hold_sharpe,
     }

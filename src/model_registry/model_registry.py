@@ -7,7 +7,7 @@ Tracks models via a JSON manifest and stores their metadata.
 import os
 import json
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 class ModelRegistry:
     def __init__(self, registry_dir: str):
@@ -27,11 +27,21 @@ class ModelRegistry:
         with open(self.registry_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
-    def register(self, model_name: str, version: str, features: List[str], metrics: Dict[str, float], model_path: str, dataset_hash: str = "N/A"):
+    def register(
+        self,
+        model_name: str,
+        version: str,
+        features: List[str],
+        metrics: Dict[str, float],
+        model_path: str,
+        dataset_hash: str = "N/A",
+        dataset_metadata: Optional[Dict[str, Any]] = None,
+    ):
         """
         Registers a new model version into the JSON registry.
         """
         registry_data = self._read_registry()
+        dataset_metadata = dataset_metadata or {}
         
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
@@ -42,7 +52,8 @@ class ModelRegistry:
             "features": features,
             "metrics": metrics,
             "model_path": model_path,
-            "dataset_hash": dataset_hash
+            "dataset_hash": dataset_hash,
+            "dataset_metadata": dataset_metadata,
         }
         
         registry_data.append(entry)

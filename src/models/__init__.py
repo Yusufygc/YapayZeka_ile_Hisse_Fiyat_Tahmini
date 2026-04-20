@@ -9,6 +9,8 @@ from .prophet_model import ProphetModel
 from .xgboost_model import XGBoostModel
 from .lstm_model import LSTMModel, AttentionLSTMModel
 from .random_forest_model import RandomForestModel
+from .naive_model import NaiveLastValueModel, NaiveZeroReturnModel, NaiveDriftModel
+from .arima_model import ARIMAModel
 
 __all__ = [
     "ProphetModel",
@@ -16,4 +18,8 @@ __all__ = [
     "LSTMModel",
     "AttentionLSTMModel",
     "RandomForestModel",
+    "NaiveLastValueModel",
+    "NaiveZeroReturnModel",
+    "NaiveDriftModel",
+    "ARIMAModel",
 ]

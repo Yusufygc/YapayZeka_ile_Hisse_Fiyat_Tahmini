@@ -5,9 +5,10 @@ Saves hyperparameters, metrics, and metadata to a centralized CSV.
 """
 
 import os
+import json
 import pandas as pd
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 class ExperimentTracker:
     def __init__(self, log_dir: str):
@@ -15,11 +16,20 @@ class ExperimentTracker:
         self.log_file = os.path.join(self.log_dir, "experiment_log.csv")
         os.makedirs(self.log_dir, exist_ok=True)
 
-    def log_run(self, model_name: str, parameters: Dict[str, Any], metrics: Dict[str, float], features: List[str], dataset_hash: str = "N/A"):
+    def log_run(
+        self,
+        model_name: str,
+        parameters: Dict[str, Any],
+        metrics: Dict[str, float],
+        features: List[str],
+        dataset_hash: str = "N/A",
+        dataset_metadata: Optional[Dict[str, Any]] = None,
+    ):
         """
         Logs a single experiment run to the tracking CSV.
         """
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        dataset_metadata = dataset_metadata or {}
         
         run_data = {
             "Timestamp": timestamp,
@@ -27,7 +37,13 @@ class ExperimentTracker:
             "Parameters": str(parameters),
             "Metrics": str(metrics),
             "Features_Count": len(features),
-            "Dataset_Hash": dataset_hash
+            "Dataset_Hash": dataset_hash,
+            "Target_Mode": dataset_metadata.get("target_mode", "N/A"),
+            "Feature_Mode": dataset_metadata.get("feature_mode", "N/A"),
+            "Scaling_Mode": dataset_metadata.get("scaling_mode", "N/A"),
+            "Date_Range": dataset_metadata.get("date_range", "N/A"),
+            "Validation_Mode": dataset_metadata.get("validation_mode", "N/A"),
+            "Dataset_Metadata": json.dumps(dataset_metadata, ensure_ascii=False, sort_keys=True),
         }
         
         df_new = pd.DataFrame([run_data])

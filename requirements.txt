@@ -18,3 +18,4 @@ pandas-datareader>=0.10.0   # FRED API → Türkiye faiz oranı & CPI verileri
 # CUDA 12.8 (RTX serileri) için:
 #   pip install torch --index-url https://download.pytorch.org/whl/cu128
 torch>=2.0.0
+statsmodels>=0.14.0

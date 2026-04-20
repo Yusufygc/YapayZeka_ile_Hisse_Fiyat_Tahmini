@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS experiments (
     stock_symbol     TEXT    NOT NULL,
     model_name       TEXT    NOT NULL,
     validation_mode  TEXT    NOT NULL DEFAULT 'single_split',
+    target_mode      TEXT    NOT NULL DEFAULT 'price',
+    feature_mode     TEXT    NOT NULL DEFAULT 'legacy_price_features',
+    scaling_mode     TEXT    NOT NULL DEFAULT 'minmax',
     mae              REAL,
     rmse             REAL,
     mape             REAL,
@@ -55,6 +58,9 @@ CREATE TABLE IF NOT EXISTS best_models (
     model_name      TEXT    NOT NULL,
     experiment_id   INTEGER NOT NULL,
     composite_score REAL    NOT NULL,
+    target_mode     TEXT    NOT NULL DEFAULT 'price',
+    feature_mode    TEXT    NOT NULL DEFAULT 'legacy_price_features',
+    scaling_mode    TEXT    NOT NULL DEFAULT 'minmax',
     mae             REAL,
     rmse            REAL,
     mape            REAL,
@@ -81,34 +87,58 @@ CREATE INDEX IF NOT EXISTS idx_experiments_score
 # ─────────────────────────────────────────────────────────────────────────────
 # Yardımcı Fonksiyon
 # ─────────────────────────────────────────────────────────────────────────────
-def _compute_composite_score(metrics: Dict[str, float]) -> float:
+def compute_composite_score(metrics: Dict[str, float]) -> float:
     """
     Farklı ölçeklerdeki metrikleri 0-100 aralığına normalize edip
     ağırlıklı bileşik skor üretir.
 
-    Bileşenler:
-      - Dir_Acc  : zaten 0-100 → ağırlık 0.50
-      - Sharpe   : tanh ile 0-100'e sıkıştırılır → ağırlık 0.30
-      - MAPE     : isabetlilik = max(0, 100 - mape*100) → ağırlık 0.20
+    Yeni mantıkta benchmark-relative alanlar da hesaba katılır:
+      - RMSE_vs_naive <= 1 ise model benchmark'ı en azından hata açısından yakalamıştır
+      - DirAcc_vs_naive ve Sharpe_excess_vs_buy_hold pozitifse göreli üstünlük vardır
+      - Neutral_Rate çok yükselirse strateji pasifleştiği için ceza uygulanır
+
+    Model naive benchmark'tan daha kötü RMSE üretiyorsa skor sert biçimde aşağı çekilir;
+    böylece benchmark'ı geçemeyen model lider olamaz.
     """
     import math
 
     dir_acc = float(metrics.get("Dir_Acc", 0.0))
-    sharpe  = float(metrics.get("Sharpe",  0.0))
-    mape    = float(metrics.get("MAPE",    1.0))   # sklearn fraksiyonel döndürür
+    mape = float(metrics.get("MAPE", 1.0))   # sklearn fraksiyonel döndürür
+    rmse_vs_naive = max(float(metrics.get("RMSE_vs_naive", 1.0)), 1e-8)
+    diracc_vs_naive = float(metrics.get("DirAcc_vs_naive", 0.0))
+    sharpe_excess = float(metrics.get("Sharpe_excess_vs_buy_hold", 0.0))
+    neutral_rate = float(metrics.get("Neutral_Rate", 0.0))
 
-    # Sharpe: tanh normalizer (-∞…+∞ → 0…100)
-    sharpe_norm = (math.tanh(sharpe / 2.0) + 1.0) * 50.0   # 0-100
+    # RMSE oranı: 1.0 benchmark ile başa baş, daha düşükse daha iyi
+    rmse_score = min(100.0, 100.0 / rmse_vs_naive)
+
+    # Relative directional skill: ±12.5 puan farkı yaklaşık 0-100 bandına yay
+    diracc_relative_score = min(100.0, max(0.0, 50.0 + diracc_vs_naive * 4.0))
+
+    # Buy-and-hold üstü Sharpe'ı ödüllendir
+    sharpe_relative_score = (math.tanh(sharpe_excess / 1.5) + 1.0) * 50.0
 
     # MAPE isabetliliği: mape=0 → 100, mape=1 (yani %100) → 0
     accuracy_score = max(0.0, 100.0 - mape * 100.0)
+    neutral_penalty = min(15.0, neutral_rate * 0.15)
 
     composite = (
-        dir_acc       * 0.50 +
-        sharpe_norm   * 0.30 +
-        accuracy_score * 0.20
+        rmse_score * 0.40 +
+        diracc_relative_score * 0.20 +
+        sharpe_relative_score * 0.20 +
+        accuracy_score * 0.15 +
+        dir_acc * 0.05
     )
-    return round(composite, 4)
+    composite -= neutral_penalty
+
+    if rmse_vs_naive > 1.0:
+        composite = min(composite, 49.0)
+
+    return round(max(0.0, composite), 4)
+
+
+def _compute_composite_score(metrics: Dict[str, float]) -> float:
+    return compute_composite_score(metrics)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -141,6 +171,21 @@ class StockModelDB:
             conn.execute(_CREATE_BEST_MODELS)
             conn.execute(_CREATE_IDX_SYMBOL)
             conn.execute(_CREATE_IDX_SCORE)
+            self._ensure_column(conn, "experiments", "target_mode", "TEXT NOT NULL DEFAULT 'price'")
+            self._ensure_column(conn, "experiments", "feature_mode", "TEXT NOT NULL DEFAULT 'legacy_price_features'")
+            self._ensure_column(conn, "experiments", "scaling_mode", "TEXT NOT NULL DEFAULT 'minmax'")
+            self._ensure_column(conn, "best_models", "target_mode", "TEXT NOT NULL DEFAULT 'price'")
+            self._ensure_column(conn, "best_models", "feature_mode", "TEXT NOT NULL DEFAULT 'legacy_price_features'")
+            self._ensure_column(conn, "best_models", "scaling_mode", "TEXT NOT NULL DEFAULT 'minmax'")
+
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+        existing = {
+            row["name"]
+            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
     # ── Deney Kaydı ───────────────────────────────────────────────────────────
     def log_experiment(
@@ -152,6 +197,7 @@ class StockModelDB:
         features:        List[str]     = None,
         dataset_hash:    str           = "N/A",
         validation_mode: str           = "single_split",
+        dataset_metadata: Optional[Dict[str, Any]] = None,
     ) -> int:
         """
         Bir model eğitim çalışmasını kaydeder ve bileşik skoru hesaplar.
@@ -159,22 +205,27 @@ class StockModelDB:
         Returns:
             Yeni eklenen satırın birincil anahtarı (experiment_id).
         """
-        composite = _compute_composite_score(metrics)
+        composite = compute_composite_score(metrics)
         trained_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         features_json = json.dumps(features or [], ensure_ascii=False)
+        dataset_metadata = dataset_metadata or {}
+        target_mode = dataset_metadata.get("target_mode", "price")
+        feature_mode = dataset_metadata.get("feature_mode", "legacy_price_features")
+        scaling_mode = dataset_metadata.get("scaling_mode", "minmax")
 
         with self._connect() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO experiments
-                    (stock_symbol, model_name, validation_mode,
+                    (stock_symbol, model_name, validation_mode, target_mode, feature_mode, scaling_mode,
                      mae, rmse, mape, dir_acc, sharpe, hit_rate,
                      composite_score, model_path, features, dataset_hash, trained_at)
                 VALUES
-                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     stock_symbol, model_name, validation_mode,
+                    target_mode, feature_mode, scaling_mode,
                     metrics.get("MAE"),   metrics.get("RMSE"),
                     metrics.get("MAPE"),  metrics.get("Dir_Acc"),
                     metrics.get("Sharpe"), metrics.get("Hit_Rate"),
@@ -187,7 +238,8 @@ class StockModelDB:
         # best_models tablosunu güncelle
         self._update_best_model(
             stock_symbol, model_name, experiment_id,
-            composite, metrics, model_path, trained_at
+            composite, metrics, model_path, trained_at,
+            target_mode, feature_mode, scaling_mode,
         )
 
         print(
@@ -208,6 +260,9 @@ class StockModelDB:
         metrics:         Dict[str, float],
         model_path:      str,
         trained_at:      str,
+        target_mode:     str,
+        feature_mode:    str,
+        scaling_mode:    str,
     ) -> None:
         """
         Bu hisse için en iyi modeli günceller.
@@ -224,13 +279,17 @@ class StockModelDB:
                     """
                     INSERT INTO best_models
                         (stock_symbol, model_name, experiment_id, composite_score,
+                         target_mode, feature_mode, scaling_mode,
                          mae, rmse, mape, dir_acc, sharpe, hit_rate,
                          model_path, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(stock_symbol) DO UPDATE SET
                         model_name      = excluded.model_name,
                         experiment_id   = excluded.experiment_id,
                         composite_score = excluded.composite_score,
+                        target_mode     = excluded.target_mode,
+                        feature_mode    = excluded.feature_mode,
+                        scaling_mode    = excluded.scaling_mode,
                         mae             = excluded.mae,
                         rmse            = excluded.rmse,
                         mape            = excluded.mape,
@@ -242,6 +301,7 @@ class StockModelDB:
                     """,
                     (
                         stock_symbol, model_name, experiment_id, composite_score,
+                        target_mode, feature_mode, scaling_mode,
                         metrics.get("MAE"),   metrics.get("RMSE"),
                         metrics.get("MAPE"),  metrics.get("Dir_Acc"),
                         metrics.get("Sharpe"), metrics.get("Hit_Rate"),
