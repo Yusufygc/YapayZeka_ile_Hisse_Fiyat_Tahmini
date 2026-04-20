@@ -1,38 +1,146 @@
 # -*- coding: utf-8 -*-
 """
-main_pipeline.py — Orkestrasyon Dosyası (v3 — OOP & Clean Code Geliştirmesi)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Tüm sistemi baştan sona nesne yönelimli (OOP) mimariyle çalıştırır.
-Katmanlar ForecastingPipeline içinde kapsüllenmiştir.
-
-Adımlar:
-  1. Veri yükle & temizle (yfinance ile eksik gün tamamlama özelliği dahil)
-  2. Train/Test böl & ölçekle
-  3. Prophet, XGBoost, Random Forest ve Attention LSTM modellerini eğit (Optuna dahil)
-  4. Tahminleri orijinal ölçeğe dönüştür (Inverse Transform)
-  5. Tüm modelleri değerlendir ve metrikleri CSV/PNG olarak kaydet
-
-Kullanım:
-    python main_pipeline.py
+main_pipeline.py — İnteraktif Orkestrasyon Girişi
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Başlamadan önce bir menü sunarak hisse, validasyon modu ve
+eğitilecek modellerin seçilmesine olanak tanır.
 """
 
 import os
+import glob
 from src.pipeline.orchestrator import ForecastingPipeline
 
-# ═════════════════════════════════════════════════════════════════════════════
-# YAPILANDIRMA
-# ═════════════════════════════════════════════════════════════════════════════
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-DATA_FILE = os.path.join(PROJECT_ROOT, "data", "SASA.csv")
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 
+AVAILABLE_MODELS = ["Prophet", "XGBoost", "Random Forest", "LSTM", "TFT"]
+
+PRESETS = {
+    "1": ("Tüm Modeller",            AVAILABLE_MODELS),
+    "2": ("Yalnızca Ağaç Tabanlı",   ["XGBoost", "Random Forest"]),
+    "3": ("Yalnızca Derin Öğrenme",  ["LSTM", "TFT"]),
+    "4": ("Hızlı (XGBoost + LSTM)",  ["XGBoost", "LSTM"]),
+    "5": ("Yalnızca Prophet",        ["Prophet"]),
+    "6": ("Manuel Seçim",            None),
+}
+
+# ─── Yardımcı Fonksiyonlar ────────────────────────────────────────────────────
+
+def _divider(char="─", width=58):
+    print(char * width)
+
+def _header(title: str):
+    _divider("═")
+    print(f"  {title}")
+    _divider("═")
+
+def _ask(prompt: str, valid: set | None = None) -> str:
+    while True:
+        val = input(f"  » {prompt}: ").strip()
+        if valid is None or val in valid:
+            return val
+        print(f"  [!] Geçersiz seçim. Lütfen şunlardan birini girin: {sorted(valid)}")
+
+# ─── Adım 1 — Hisse Senedi ───────────────────────────────────────────────────
+
+def select_stock() -> str:
+    csv_files = sorted(glob.glob(os.path.join(DATA_DIR, "*.csv")))
+    if not csv_files:
+        raise FileNotFoundError(f"'{DATA_DIR}' dizininde CSV dosyası bulunamadı.")
+
+    stocks = [os.path.splitext(os.path.basename(f))[0] for f in csv_files]
+
+    _header("ADIM 1 | Hisse Senedi Seçimi")
+    for i, s in enumerate(stocks, 1):
+        print(f"  [{i}] {s}")
+
+    choice = _ask("Numara girin", {str(i) for i in range(1, len(stocks) + 1)})
+    selected = stocks[int(choice) - 1]
+    print(f"  ✔ Seçildi: {selected}\n")
+    return os.path.join(DATA_DIR, f"{selected}.csv")
+
+# ─── Adım 2 — Validasyon Modu ────────────────────────────────────────────────
+
+def select_validation_mode() -> str:
+    _header("ADIM 2 | Validasyon Modu")
+    print("  [1] single_split   — Tek seferlik eğit/test bölünmesi (hızlı)")
+    print("  [2] walk_forward   — Kayan pencere çapraz doğrulama (kapsamlı)")
+    choice = _ask("Numara girin", {"1", "2"})
+    mode = "single_split" if choice == "1" else "walk_forward"
+    print(f"  ✔ Seçildi: {mode}\n")
+    return mode
+
+# ─── Adım 3 — Model Seçimi ───────────────────────────────────────────────────
+
+def _manual_model_select() -> list[str]:
+    print()
+    for i, m in enumerate(AVAILABLE_MODELS, 1):
+        print(f"  [{i}] {m}")
+    print()
+    raw = input("  » Virgülle ayırarak numara girin (örn: 1,3,4): ").strip()
+    indices = {s.strip() for s in raw.split(",")}
+    valid = {str(i) for i in range(1, len(AVAILABLE_MODELS) + 1)}
+    chosen = []
+    for idx in indices:
+        if idx in valid:
+            chosen.append(AVAILABLE_MODELS[int(idx) - 1])
+        else:
+            print(f"  [!] '{idx}' geçersiz, atlandı.")
+    if not chosen:
+        print("  [!] Hiç model seçilmedi, tüm modeller eğitilecek.")
+        return AVAILABLE_MODELS[:]
+    return chosen
+
+def select_models() -> list[str]:
+    _header("ADIM 3 | Model Seçimi")
+    for key, (label, models) in PRESETS.items():
+        model_str = ", ".join(models) if models else "—"
+        print(f"  [{key}] {label:<28} ({model_str})")
+
+    choice = _ask("Numara girin", set(PRESETS.keys()))
+    label, models = PRESETS[choice]
+
+    if models is None:
+        selected = _manual_model_select()
+    else:
+        selected = models[:]
+
+    print(f"  ✔ Seçildi: {', '.join(selected)}\n")
+    return selected
+
+# ─── Özet & Onay ─────────────────────────────────────────────────────────────
+
+def confirm(data_file: str, mode: str, models: list[str]) -> bool:
+    stock = os.path.splitext(os.path.basename(data_file))[0]
+    _header("ÖZET — Başlamadan Önce Onayla")
+    print(f"  Hisse        : {stock}")
+    print(f"  Validasyon   : {mode}")
+    print(f"  Modeller     : {', '.join(models)}")
+    _divider()
+    ans = _ask("Devam edilsin mi? [e/h]", {"e", "h", "E", "H"})
+    return ans.lower() == "e"
+
+# ─── Ana Akış ─────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    """Temiz ve modüler ana fonksiyon."""
+    print()
+    _header("TS FORECASTING LAB")
+
+    data_file = select_stock()
+    validation_mode = select_validation_mode()
+    selected_models = select_models()
+
+    if not confirm(data_file, validation_mode, selected_models):
+        print("\n  İptal edildi.\n")
+        return
+
+    print()
     pipeline = ForecastingPipeline(
-        data_file=DATA_FILE,
+        data_file=data_file,
         test_ratio=0.20,
         time_steps=30,
-        validation_mode="single_split"  # Set to "walk_forward" to use rolling cross validation
+        validation_mode=validation_mode,
+        selected_models=selected_models,
     )
     pipeline.run_all()
 

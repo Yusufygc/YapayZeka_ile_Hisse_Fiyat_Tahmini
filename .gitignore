@@ -2,6 +2,13 @@
 /outputs
 /models
 /docs/İleri Yönlü Plan.md
+/docs/yapilmasiPlanlananlar.txt
+/docs/technical_audit_report.md
+/docs/
+
+
+/stock_models.db
+
 # Python
 __pycache__/
 *.py[cod]

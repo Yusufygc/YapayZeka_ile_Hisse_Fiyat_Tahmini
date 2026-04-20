@@ -12,7 +12,7 @@ import os
 import numpy as np
 import pandas as pd
 import joblib
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from typing import Tuple
 
 
@@ -61,20 +61,29 @@ def split_data(
 
 def scale_data(
     X_train: np.ndarray,
-    X_test: np.ndarray,
+    X_test:  np.ndarray,
     y_train: np.ndarray,
-    y_test: np.ndarray,
+    y_test:  np.ndarray,
     save_dir: str,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, MinMaxScaler, MinMaxScaler]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, MinMaxScaler, StandardScaler]:
     """
-    MinMaxScaler(0–1) ile ölçeklendirir.  Scaler yalnızca train üzerinde fit edilir.
-    Scaler objeleri disk'e kaydedilir.
+    Özellikler ve hedef değişkeni ölçeklendirir.
+    Scaler yalnızca train üzerinde fit edilir (data leakage yok).
+
+    Strateji:
+      • X (özellikler) : MinMaxScaler(0–1)
+            Teknik indikatörler sınırlı aralıkta — MinMax uygun.
+      • y (hedef fiyat): StandardScaler (z-score, mean=0 std=1)
+            Hisse fiyatları sınırsız ve durağan değil; uzun vadede
+            yukarı yönlü bias olan serilerde MinMax sistematik
+            küçük tahminlere yol açar.  StandardScaler bu etkiyi
+            ortadan kaldırır.
 
     Parameters
     ----------
     X_train, X_test : np.ndarray  Özellik matrisleri.
-    y_train, y_test : np.ndarray  Hedef vektörleri.
-    save_dir : str                Scaler'ların kaydedileceği klasör yolu.
+    y_train, y_test : np.ndarray  Hedef vektörleri (fiyat).
+    save_dir        : str         Scaler'ların kaydedileceği klasör.
 
     Returns
     -------
@@ -82,16 +91,18 @@ def scale_data(
     """
     os.makedirs(save_dir, exist_ok=True)
 
+    # Özellikler → MinMaxScaler
     scaler_X = MinMaxScaler(feature_range=(0, 1))
-    scaler_y = MinMaxScaler(feature_range=(0, 1))
-
     X_train_s = scaler_X.fit_transform(X_train)
-    X_test_s = scaler_X.transform(X_test)
+    X_test_s  = scaler_X.transform(X_test)
 
+    # Hedef fiyat → StandardScaler
+    # inverse_transform() arayüzü aynı olduğu için pipeline'ın geri kalanı değişmez.
+    scaler_y = StandardScaler()
     y_train_s = scaler_y.fit_transform(y_train)
-    y_test_s = scaler_y.transform(y_test)
+    y_test_s  = scaler_y.transform(y_test)
 
-    # Scaler'ları kaydet — canlı projede yeniden kullanılacak
+    # Scaler'ları kaydet
     joblib.dump(scaler_X, os.path.join(save_dir, "scaler_X.pkl"))
     joblib.dump(scaler_y, os.path.join(save_dir, "scaler_y.pkl"))
     print(f"[OK] Scaler objeleri kaydedildi -> {save_dir}")

@@ -15,6 +15,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 from src.utils.reproducibility import set_global_seed
 from src.experiments.experiment_tracker import ExperimentTracker
 from src.model_registry.model_registry import ModelRegistry
+from src.database.stock_model_db import StockModelDB
 
 from src.pipeline.data_manager import DataManager
 from src.pipeline.model_trainer import ModelTrainer
@@ -22,9 +23,11 @@ from src.pipeline.evaluation_manager import EvaluationManager
 
 
 class ForecastingPipeline:
-    def __init__(self, data_file: str, test_ratio: float = 0.20, time_steps: int = 30, validation_mode: str = "single_split"):
+    def __init__(self, data_file: str, test_ratio: float = 0.20, time_steps: int = 30,
+                 validation_mode: str = "single_split", selected_models: list = None):
         self.data_file = data_file
         self.validation_mode = validation_mode
+        self.selected_models = selected_models  # None → tüm modeller
         
         # Reproducibility
         set_global_seed(42)
@@ -43,9 +46,17 @@ class ForecastingPipeline:
         # Core Trackers
         self.tracker = ExperimentTracker(self.experiment_dir)
         self.registry = ModelRegistry(self.registry_dir)
-        
+
+        # SQLite — merkezi hisse-model veritabanı (proje kökünde tek dosya)
+        db_path = os.path.join(self.project_root, "stock_models.db")
+        self.stock_db = StockModelDB(db_path)
+
         # Sub-Managers
-        self.data_manager = DataManager(data_file, test_ratio, time_steps, self.models_dir)
+        self.data_manager = DataManager(
+            data_file, test_ratio, time_steps, self.models_dir,
+            use_macro=True,
+            macro_cache_dir=os.path.join(self.project_root, "data", "macro"),
+        )
         
         # We instantiate Trainer & Evaluation after data ingestion once features are known
         self.model_trainer = None
@@ -71,11 +82,13 @@ class ForecastingPipeline:
         
         # Initialize Sub-managers with loaded features
         self.model_trainer = ModelTrainer(
-            self.stock_symbol, self.tracker, self.registry, self.data_manager.feature_names
+            self.stock_symbol, self.tracker, self.registry,
+            self.data_manager.feature_names, self.selected_models,
         )
         self.evaluation_manager = EvaluationManager(
-            self.stock_symbol, self.outputs_dir, self.models_dir, 
-            self.tracker, self.registry, self.data_manager.feature_names
+            self.stock_symbol, self.outputs_dir, self.models_dir,
+            self.tracker, self.registry, self.data_manager.feature_names,
+            stock_db=self.stock_db,
         )
         
         # 3. Train

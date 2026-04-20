@@ -37,39 +37,59 @@ class TimeSeriesSplitter:
         return train_df, test_df, y_train, y_test
 
     @staticmethod
-    def walk_forward_splits(df: pd.DataFrame, n_splits: int = 3, min_train_size: int = 100, test_size: int = 30) -> List[Dict]:
+    def walk_forward_splits(
+        df:             pd.DataFrame,
+        n_splits:       int           = 3,
+        min_train_size: int           = 100,
+        test_size:      int           = 30,
+        max_train_size: int | None    = None,
+    ) -> List[Dict]:
         """
         Creates multiple chronological train/test splits for walk-forward validation.
-        Yields a list of dictionaries with 'train' and 'test' DataFrames.
+
+        Args:
+            df             : Tam veri seti (Date sütunu varsa kronolojik sıralama yapılır).
+            n_splits       : Kaç pencere oluşturulacağı.
+            min_train_size : Eğitim setinin minimum uzunluğu.
+            test_size      : Her pencerenin test uzunluğu (gün sayısı).
+            max_train_size : None → expanding window (tüm geçmiş kullanılır).
+                             int  → sliding window: her pencerede yalnızca
+                                    son ``max_train_size`` satır eğitim için
+                                    kullanılır.  Durağan olmayan fiyat serilerinde
+                                    (örn. BIST hisseleri) systematic bias'ı önler.
         """
         if "Date" in df.columns:
             df = df.sort_values(by="Date").reset_index(drop=True)
-            
+
         n = len(df)
         splits = []
-        
-        # We start from the end and work backwards to create n_splits.
-        # Alternatively, we can start from n - (n_splits * test_size)
+
         total_test_size = n_splits * test_size
         if n < min_train_size + total_test_size:
             print(f"[WARNING] Not enough data for {n_splits} splits with test_size={test_size} and min_train_size={min_train_size}.")
-            # Adjust n_splits
             n_splits = max(1, (n - min_train_size) // test_size)
             print(f"[WARNING] Adjusted n_splits to {n_splits}.")
-        
+
         for i in range(n_splits, 0, -1):
             train_end = n - (i * test_size)
-            test_end = train_end + test_size
-            
-            # Use rolling window or expanding window for train
-            # Using expanding window here (from 0 to train_end)
-            train_df = df.iloc[:train_end].copy()
-            test_df = df.iloc[train_end:test_end].copy()
-            
+            test_end  = train_end + test_size
+
+            if max_train_size is not None:
+                # Sliding window: yalnızca son max_train_size satırı kullan
+                train_start = max(0, train_end - max_train_size)
+            else:
+                # Expanding window: 0'dan train_end'e kadar tüm geçmiş
+                train_start = 0
+
+            train_df = df.iloc[train_start:train_end].copy()
+            test_df  = df.iloc[train_end:test_end].copy()
+
             splits.append({
-                "split_idx": n_splits - i + 1,
-                "train": train_df,
-                "test": test_df
+                "split_idx":   n_splits - i + 1,
+                "train":       train_df,
+                "test":        test_df,
+                "train_start": train_start,
+                "train_end":   train_end,
             })
-            
+
         return splits
