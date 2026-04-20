@@ -8,22 +8,43 @@ from typing import Dict, Any, List
 import numpy as np
 import pandas as pd
 from src.evaluation.financial_metrics import compute_financial_metrics
+from src.preprocessor import reconstruct_prices_from_logret, reconstruct_prices_from_return
 
 class WalkForwardValidator:
     """
     Orchestrates the backtesting of models across multiple chronological splits.
     """
     
-    def __init__(self, model_initializer: callable, preprocessor_fn: callable):
+    def __init__(self, model_initializer: callable, preprocessor_fn: callable, target_mode: str = "log_return"):
         """
         :param model_initializer: A function that returns a fresh instance of the BaseModel to be trained.
         :param preprocessor_fn: A function that scales and prepares data (creates sequences if needed).
-                                Signature: preprocessor_fn(train_df, test_df) -> X_train, y_train, X_test, y_test, scaler_y
+                                Signature (v2, H1 düzeltmesi):
+                                  preprocessor_fn(train_df, test_df) ->
+                                    X_train, y_train_logret_s,
+                                    X_test,  y_test_logret_s,
+                                    scaler_y,
+                                    y_test_price,     # gerçek kapanışlar (fiyat-uzayı kıyas)
+                                    prev_close_test   # fiyat inşası için t-1 kapanışları
+
+                                y_* artık **ölçekli log-getiri**. Tahminler log-getiri
+                                uzayında inverse_transform edilir, ardından
+                                reconstruct_prices_from_logret ile fiyata çevrilir.
         """
         self.model_initializer = model_initializer
         self.preprocessor = preprocessor_fn
+        self.target_mode = target_mode
         self.results = []
         self.aggregated_metrics = {}
+
+    def _target_to_price(self, preds_target: np.ndarray, prev_close: np.ndarray) -> np.ndarray:
+        if self.target_mode == "log_return":
+            return reconstruct_prices_from_logret(preds_target, prev_close)
+        if self.target_mode == "return":
+            return reconstruct_prices_from_return(preds_target, prev_close)
+        if self.target_mode == "price":
+            return np.asarray(preds_target).ravel()
+        raise ValueError(f"Desteklenmeyen target_mode: {self.target_mode}")
 
     def run(self, splits: List[Dict], verbose: bool = True) -> Dict[str, Any]:
         """
@@ -40,33 +61,39 @@ class WalkForwardValidator:
                 
             train_df = split["train"]
             test_df = split["test"]
-            
-            # 1. Preprocess specific to this window
-            X_train, y_train, X_test, y_test, scaler_y, original_y_test_aligned = self.preprocessor(train_df, test_df)
-            
+
+            # 1. Preprocess specific to this window (yeni 7'li sözleşme)
+            (X_train, y_train, X_test, y_test,
+             scaler_y, y_test_price, prev_close_test) = self.preprocessor(train_df, test_df)
+
             # 2. Initialize fresh model (prevents data leakage across iterations)
             model = self.model_initializer()
-            
+
             # 3. Train
             # Prophet requires 'dates_train', we'll rely on kwargs passing if necessary or handle it inside the model wrapper
             dates_train = train_df["Date"].values if "Date" in train_df.columns else None
             dates_test = test_df["Date"].values if "Date" in test_df.columns else None
-            
-            model.train(X_train, y_train, dates_train=dates_train)
-            
-            # 4. Predict
-            preds = model.predict(X_test, dates_test=dates_test)
-            
-            # If scaling was applied, inverse transform
-            if scaler_y is not None and preds.ndim > 0:
-                preds_original = scaler_y.inverse_transform(preds.reshape(-1, 1)).ravel()
-            else:
-                preds_original = preds
 
-            # Handle sequence prediction length mismatch
-            min_len = min(len(preds_original), len(original_y_test_aligned))
-            preds_final = preds_original[-min_len:]
-            y_true_final = original_y_test_aligned[-min_len:]
+            model.train(X_train, y_train, dates_train=dates_train)
+
+            # 4. Predict (log-getiri uzayı, ölçekli)
+            preds = model.predict(X_test, dates_test=dates_test)
+
+            # 5. Inverse transform → log-getiri
+            if scaler_y is not None and preds.ndim > 0:
+                preds_logret = scaler_y.inverse_transform(preds.reshape(-1, 1)).ravel()
+            else:
+                # scaler_y yoksa (ör. Prophet) preds zaten log-getiri
+                preds_logret = np.asarray(preds).ravel()
+
+            # 6. Sequence uzunluk uyuşmasını hizala (trailing align)
+            min_len = min(len(preds_logret), len(y_test_price), len(prev_close_test))
+            preds_logret_aligned = preds_logret[-min_len:]
+            prev_close_aligned   = prev_close_test[-min_len:]
+
+            # 7. Log-getiriyi fiyata çevir
+            preds_final = self._target_to_price(preds_logret_aligned, prev_close_aligned)
+            y_true_final = y_test_price[-min_len:]
             
             # 5. Evaluate
             metrics = compute_financial_metrics(y_true_final, preds_final)

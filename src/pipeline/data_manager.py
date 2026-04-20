@@ -7,6 +7,8 @@ train/test ayırma ve tensör hazırlama işlemlerinden sorumludur.
 """
 
 import os
+import json
+import hashlib
 import numpy as np
 import pandas as pd
 
@@ -37,6 +39,9 @@ class DataManager:
         models_dir:      str,
         use_macro:       bool = True,
         macro_cache_dir: str  = None,
+        target_mode:     str  = "log_return",
+        feature_mode:    str  = "stationary_features",
+        scaling_mode:    str  = "robust_x_standard_y_clip",
     ):
         self.data_file  = data_file
         self.test_ratio = test_ratio
@@ -59,6 +64,11 @@ class DataManager:
         self.feature_names: list         = []
         self.tensors:       dict         = {}
         self.wf_splits:     list         = []
+        self.target_mode:   str          = target_mode
+        self.feature_mode:  str          = feature_mode
+        self.scaling_mode:  str          = scaling_mode
+        self.dataset_metadata: dict      = {}
+        self.dataset_hash:  str          = "N/A"
 
     # ── Veri Yükleme & Özellik Mühendisliği ──────────────────────────────────
     def ingest_and_engineer(self) -> None:
@@ -76,7 +86,7 @@ class DataManager:
             macro_df = self._fetch_macro(raw_df)
 
         # Teknik + makro özellikler
-        feature_pipeline  = FeaturePipeline()
+        feature_pipeline  = FeaturePipeline(feature_mode=self.feature_mode)
         self.df           = feature_pipeline.engineer_features(raw_df, macro_df=macro_df)
         self.feature_names = feature_pipeline.feature_names
 
@@ -95,6 +105,7 @@ class DataManager:
                   f"Rate_Level, Rate_Change, CPI_YoY, CPI_MoM, Real_Rate, "
                   f"Relative_Strength)")
         print(f"  Toplam özellik   : {len(self.feature_names)}")
+        self._refresh_dataset_metadata()
 
     def _fetch_macro(self, raw_df: pd.DataFrame) -> pd.DataFrame:
         """MacroPipeline'ı çağırır; başarısız olursa boş DataFrame döner."""
@@ -114,44 +125,120 @@ class DataManager:
             print(f"  [MACRO] Makro veri alınamadı ({exc}), devam ediliyor.")
             return pd.DataFrame()
 
+    def _refresh_dataset_metadata(self) -> None:
+        if self.df is None or self.df.empty:
+            self.dataset_metadata = {}
+            self.dataset_hash = "N/A"
+            return
+
+        date_start = pd.to_datetime(self.df["Date"].iloc[0]).strftime("%Y-%m-%d")
+        date_end = pd.to_datetime(self.df["Date"].iloc[-1]).strftime("%Y-%m-%d")
+        self.dataset_metadata = {
+            "stock_symbol": self.stock_symbol,
+            "target_mode": self.target_mode,
+            "feature_mode": self.feature_mode,
+            "scaling_mode": self.scaling_mode,
+            "date_range": f"{date_start}:{date_end}",
+            "features_count": len(self.feature_names),
+            "features": self.feature_names,
+        }
+        payload = json.dumps(self.dataset_metadata, ensure_ascii=False, sort_keys=True)
+        self.dataset_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+    def build_run_metadata(self, validation_mode: str) -> tuple[dict, str]:
+        run_metadata = dict(self.dataset_metadata)
+        run_metadata["validation_mode"] = validation_mode
+        payload = json.dumps(run_metadata, ensure_ascii=False, sort_keys=True)
+        run_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+        return run_metadata, run_hash
+
     # ── Tensör Hazırlama ──────────────────────────────────────────────────────
+    def _build_target_series(
+        self,
+        close_values: np.ndarray,
+    ) -> np.ndarray:
+        if self.target_mode == "log_return":
+            return np.log(close_values[1:] / close_values[:-1])
+        if self.target_mode == "return":
+            return (close_values[1:] / close_values[:-1]) - 1.0
+        if self.target_mode == "price":
+            return close_values[1:]
+        raise ValueError(
+            f"Desteklenmeyen target_mode: {self.target_mode}. "
+            "Beklenen: price, return, log_return"
+        )
+
     def prepare_tensors(self, train_df: pd.DataFrame, test_df: pd.DataFrame) -> dict:
         """
         Train/test DataFrame'lerini model eğitimine uygun tensörlere çevirir.
-        Scaler yalnızca train verisi üzerine fit edilir (data leakage yok).
+        Scaler yalnızca train verisi üzerine fit edilir.
+
+        Semantik (v3):
+          X[t] = t gününün sonunda bilinen özellikler
+          y[t] = t+1 gününün log-getirisi
+
+        Böylece aynı gün bilgisinden aynı gün hedef üretilmez. Tree ve sequence
+        modeller aynı tahmin problemi üzerinde çalışır.
         """
-        exclude  = {"Date", "Close"}
+        exclude = {"Date", "Close"}
         features = [c for c in train_df.columns if c not in exclude]
 
-        X_train = train_df[features].values
-        X_test  = test_df[features].values
-        y_train = train_df["Close"].values.reshape(-1, 1)
-        y_test  = test_df["Close"].values.reshape(-1, 1)
+        train_close = train_df["Close"].values.astype(float)
+        test_close = test_df["Close"].values.astype(float)
 
-        # Ölçekleme
+        if len(train_df) < 2 or len(test_df) < 2:
+            raise ValueError("t+1 hedefi için train ve test setlerinde en az 2 satır gerekir.")
+
+        # X[t] -> y[t] = hedef(Close[t+1], Close[t])
+        X_train = train_df[features].iloc[:-1].values
+        X_test = test_df[features].iloc[:-1].values
+
+        train_target = self._build_target_series(train_close)
+        test_target = self._build_target_series(test_close)
+        test_prev_close = test_close[:-1]
+
+        y_train = train_target.reshape(-1, 1)
+        y_test = test_target.reshape(-1, 1)
+
         X_train_s, X_test_s, y_train_s, y_test_s, scaler_X, scaler_y = scale_data(
-            X_train, X_test, y_train, y_test, save_dir=self.models_dir
+            X_train, X_test, y_train, y_test,
+            save_dir=self.models_dir,
+            scaling_mode=self.scaling_mode,
         )
 
-        # Sequence oluşturma
-        X_train_seq, y_train_seq = create_sequences(X_train_s, y_train_s, time_steps=self.time_steps)
+        X_train_seq, y_train_seq = create_sequences(
+            X_train_s, y_train_s, time_steps=self.time_steps
+        )
 
-        # Test sekansı: son `time_steps` train satırını önek olarak ekle
-        X_test_input = np.vstack((X_train_s[-self.time_steps:], X_test_s))
-        y_test_input = np.vstack((y_train_s[-self.time_steps:], y_test_s))
-        X_test_seq, y_test_seq = create_sequences(X_test_input, y_test_input, time_steps=self.time_steps)
+        # İlk test örneği için son time_steps-1 train günü + ilk test günü kullanılır.
+        prefix_len = max(0, self.time_steps - 1)
+        X_test_input = np.vstack((X_train_s[-prefix_len:], X_test_s))
+        y_test_input = np.vstack((y_train_s[-prefix_len:], y_test_s))
+        X_test_seq, y_test_seq = create_sequences(
+            X_test_input, y_test_input, time_steps=self.time_steps
+        )
 
         return {
-            "X_train": X_train, "y_train": y_train,
-            "X_test":  X_test,  "y_test":  y_test,
-            "X_train_s": X_train_s, "y_train_s": y_train_s,
-            "X_test_s":  X_test_s,  "y_test_s":  y_test_s,
-            "X_train_seq": X_train_seq, "y_train_seq": y_train_seq,
-            "X_test_seq":  X_test_seq,  "y_test_seq":  y_test_seq,
-            "scaler_X": scaler_X, "scaler_y": scaler_y,
-            "original_y_test_aligned": test_df["Close"].values,
-            "dates_train": train_df["Date"] if "Date" in train_df.columns else None,
-            "dates_test":  test_df["Date"]  if "Date" in test_df.columns  else None,
+            "X_train": X_train,
+            "y_train": y_train,
+            "X_test": X_test,
+            "y_test": y_test,
+            "X_train_s": X_train_s,
+            "y_train_s": y_train_s,
+            "X_test_s": X_test_s,
+            "y_test_s": y_test_s,
+            "X_train_seq": X_train_seq,
+            "y_train_seq": y_train_seq,
+            "X_test_seq": X_test_seq,
+            "y_test_seq": y_test_seq,
+            "scaler_X": scaler_X,
+            "scaler_y": scaler_y,
+            "original_y_test_aligned": test_close[1:],
+            "prev_close_test": test_prev_close,
+            "train_close_last": float(train_close[-1]),
+            "target_mode": self.target_mode,
+            "dates_train": train_df["Date"].iloc[1:] if "Date" in train_df.columns else None,
+            "dates_test": test_df["Date"].iloc[1:] if "Date" in test_df.columns else None,
         }
 
     # ── Train/Test Bölme ──────────────────────────────────────────────────────

@@ -6,11 +6,18 @@ Teknik göstergeler + isteğe bağlı makroekonomik özellikler üretir.
 
 Adımlar:
   1. Getiri hesaplamaları (Return, Log_Return)
-  2. Hareketli ortalamalar (SMA/EMA 7/14/21/50)
-  3. Volatilite & Bollinger Bantları
-  4. Momentum göstergeleri (RSI, MACD)
-  5. Makro bağlam (USD/TRY, BIST100) — opsiyonel, macro_df verilirse eklenir
+  2. Hareketli ortalamalar → fiyata göre göreli oran (SMA_N_rel, EMA_N_rel)
+  3. Volatilite → fiyata göre normalize (RollStd_N_norm, BB_Width)
+  4. Momentum göstergeleri (RSI — zaten 0-100, MACD → fiyata göre normalize)
+  5. Makro bağlam (USD/TRY, BIST100, faiz, CPI) — opsiyonel
      + Göreli güç (Relative_Strength = hisse getirisi − BIST100 getirisi)
+
+v2 (H2 düzeltmesi):
+  Tüm fiyat-birimi özellikler (SMA, EMA, RollingStd, MACD) **stasyonerleştirildi**
+  (Close'a göre oran alınarak). Böylece trend piyasasında bu özellikler 0'ın
+  etrafında dalgalanır ve test döneminde ölçekleyici dışına fırlayıp OOD
+  üretmez. Eskiden SMA_50 train-max'ının 2-3 katı olunca MinMaxScaler
+  [0,1] aralığı dışına ekstrapole ediyor → model eğitim ortalamasına çöküyordu.
 """
 
 import pandas as pd
@@ -34,12 +41,14 @@ class FeaturePipeline:
         high_col:   str = "High",
         low_col:    str = "Low",
         volume_col: str = "Volume",
+        feature_mode: str = "stationary_features",
     ):
         self.close_col  = close_col
         self.open_col   = open_col
         self.high_col   = high_col
         self.low_col    = low_col
         self.volume_col = volume_col
+        self.feature_mode = feature_mode
         self.feature_names: list = []
 
     # ── Ana Metod ─────────────────────────────────────────────────────────────
@@ -91,24 +100,65 @@ class FeaturePipeline:
         return df
 
     def _add_moving_averages(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        v2: Mutlak seviye yerine **Close'a göre göreli sapma** saklanır.
+            SMA_N_rel = Close / SMA_N − 1
+            → %0 üstü: fiyat ortalamanın üzerinde (yukarı momentum)
+            → %0 altı: fiyat ortalamanın altında (mean-reversion adayı)
+        Bu dönüşüm serinin stasyoner olmasını sağlar: trend piyasasında
+        oranlar uzun vadede 0 civarında kalır, MinMax/Robust skalanın
+        dışına fırlamaz.
+        """
+        close = df[self.close_col]
         for w in [7, 14, 21, 50]:
-            df[f"SMA_{w}"] = ta.trend.sma_indicator(df[self.close_col], window=w)
-            df[f"EMA_{w}"] = ta.trend.ema_indicator(df[self.close_col], window=w)
+            sma = ta.trend.sma_indicator(close, window=w)
+            ema = ta.trend.ema_indicator(close, window=w)
+            if self.feature_mode in {"stationary_features", "hybrid"}:
+                df[f"SMA_{w}_rel"] = close / sma.replace(0, np.nan) - 1.0
+                df[f"EMA_{w}_rel"] = close / ema.replace(0, np.nan) - 1.0
+            if self.feature_mode in {"legacy_price_features", "hybrid"}:
+                df[f"SMA_{w}"] = sma
+                df[f"EMA_{w}"] = ema
         return df
 
     def _add_volatility(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        v2: Rolling_Std fiyat birimiydi (₺). Fiyat arttıkça büyüyor →
+            non-stationary. RollStd_N_norm = Rolling_Std_N / Close
+            (rolling coefficient of variation) ile stasyoner yapılır.
+            BB_Width zaten oran (%); olduğu gibi kalır.
+        """
+        close = df[self.close_col]
         for w in [14, 21]:
-            df[f"Rolling_Std_{w}"] = df[self.close_col].rolling(window=w).std()
-            bb = ta.volatility.BollingerBands(close=df[self.close_col], window=w, window_dev=2)
-            df[f"BB_Width_{w}"] = bb.bollinger_wband()
+            rolling_std = close.rolling(window=w).std()
+            bb = ta.volatility.BollingerBands(close=close, window=w, window_dev=2)
+            if self.feature_mode in {"stationary_features", "hybrid"}:
+                df[f"RollStd_{w}_norm"] = rolling_std / close.replace(0, np.nan)
+                df[f"BB_Width_{w}"] = bb.bollinger_wband()
+            if self.feature_mode in {"legacy_price_features", "hybrid"}:
+                df[f"Rolling_Std_{w}"] = rolling_std
+                df[f"BB_Upper_{w}"] = bb.bollinger_hband()
+                df[f"BB_Lower_{w}"] = bb.bollinger_lband()
         return df
 
     def _add_momentum_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        df["RSI_14"] = ta.momentum.rsi(close=df[self.close_col], window=14)
-        macd = ta.trend.MACD(close=df[self.close_col])
-        df["MACD"]        = macd.macd()
-        df["MACD_Signal"] = macd.macd_signal()
-        df["MACD_Diff"]   = macd.macd_diff()
+        """
+        v2: RSI zaten 0-100 arası → stasyoner, korunur.
+            MACD/MACD_Signal/MACD_Diff fiyat birimiydi → Close'a bölünür.
+        """
+        close = df[self.close_col]
+        df["RSI_14"] = ta.momentum.rsi(close=close, window=14)
+
+        macd = ta.trend.MACD(close=close)
+        close_safe = close.replace(0, np.nan)
+        if self.feature_mode in {"stationary_features", "hybrid"}:
+            df["MACD_norm"]        = macd.macd() / close_safe
+            df["MACD_Signal_norm"] = macd.macd_signal() / close_safe
+            df["MACD_Diff_norm"]   = macd.macd_diff() / close_safe
+        if self.feature_mode in {"legacy_price_features", "hybrid"}:
+            df["MACD"] = macd.macd()
+            df["MACD_Signal"] = macd.macd_signal()
+            df["MACD_Diff"] = macd.macd_diff()
         return df
 
     # ── Makro Birleştirme ─────────────────────────────────────────────────────
