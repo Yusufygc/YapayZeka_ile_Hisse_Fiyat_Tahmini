@@ -1,30 +1,37 @@
 # -*- coding: utf-8 -*-
 """
-model_trainer.py — Model Eğitim Orkestratörü
-SRP: Yalnızca modelleri başlatmak ve "single" veya "walk-forward" stratejisine göre eğitmekten sorumludur.
+model_trainer.py - Model Egitim Orkestratoru
 """
 
-from src.models.prophet_model import ProphetModel
-from src.models.xgboost_model import XGBoostModel
-from src.models.lstm_model import AttentionLSTMModel
-from src.models.random_forest_model import RandomForestModel
-from src.models.tft_model import TFTModel
-from src.models.naive_model import NaiveLastValueModel, NaiveZeroReturnModel, NaiveDriftModel
-from src.models.arima_model import ARIMAModel
+import numpy as np
 
-from src.validation.walk_forward import WalkForwardValidator
 from src.experiments.experiment_tracker import ExperimentTracker
 from src.model_registry.model_registry import ModelRegistry
+from src.models.arima_model import ARIMAModel
+from src.models.lstm_model import AttentionLSTMModel
+from src.models.naive_model import NaiveDriftModel, NaiveLastValueModel, NaiveZeroReturnModel
+from src.models.prophet_model import ProphetModel
+from src.models.random_forest_model import RandomForestModel
+from src.models.tft_model import TFTModel
+from src.models.xgboost_model import XGBoostModel
+from src.validation.walk_forward import WalkForwardValidator
 
 _ALL_MODELS = ["Prophet", "XGBoost", "Random Forest", "LSTM", "TFT"]
 _BASELINE_MODELS = ["Naive Last Value", "Naive Zero Return", "Naive Drift", "ARIMA"]
 
 
 class ModelTrainer:
-    def __init__(self, stock_symbol: str, tracker: ExperimentTracker, registry: ModelRegistry,
-                 feature_names: list, selected_models: list = None,
-                 dataset_hash: str = "N/A", dataset_metadata: dict | None = None,
-                 registry_version: str = "v5"):
+    def __init__(
+        self,
+        stock_symbol: str,
+        tracker: ExperimentTracker,
+        registry: ModelRegistry,
+        feature_names: list,
+        selected_models: list = None,
+        dataset_hash: str = "N/A",
+        dataset_metadata: dict | None = None,
+        registry_version: str = "v5",
+    ):
         self.stock_symbol = stock_symbol
         self.tracker = tracker
         self.registry = registry
@@ -37,13 +44,14 @@ class ModelTrainer:
         self.trained_models = {}
         self.wf_results = {}
         self.wf_predictions = {}
+        self.wf_backtest_inputs = {}
         self.wf_y_true = None
 
     def _skip(self, name: str) -> bool:
         if name in _BASELINE_MODELS:
             return False
         if name not in self.selected_models:
-            print(f"  [--] {name} atlandı (seçilmedi).")
+            print(f"  [--] {name} atlandi (secilmedi).")
             return True
         return False
 
@@ -59,8 +67,7 @@ class ModelTrainer:
         return specs
 
     def train_single_split(self, tensors: dict):
-        baseline_specs = self._baseline_specs()
-        for name, cls in baseline_specs:
+        for name, cls in self._baseline_specs():
             model = cls()
             model.train(tensors["X_train"], tensors["y_train"], dates_train=tensors["dates_train"])
             self.trained_models[name] = model
@@ -71,7 +78,7 @@ class ModelTrainer:
                 prophet.train(tensors["X_train"], tensors["y_train"], dates_train=tensors["dates_train"])
                 self.trained_models["Prophet"] = prophet
             except Exception as exc:
-                print(f"  [WARN] Prophet eğitimi başarısız, atlanıyor: {exc}")
+                print(f"  [WARN] Prophet egitimi basarisiz, atlaniyor: {exc}")
 
         if not self._skip("XGBoost"):
             xgb = XGBoostModel()
@@ -94,91 +101,110 @@ class ModelTrainer:
             self.trained_models["TFT"] = tft
 
     def train_walk_forward(self, wf_splits: list, data_manager):
-        # v2 (H1): preprocessor sözleşmesi 7'li tuple döner:
-        #   (X_train, y_train_logret_s, X_test, y_test_logret_s,
-        #    scaler_y, y_test_price, prev_close_test)
+        def preprocessor_baseline(train_df, test_df):
+            t = data_manager.prepare_tensors(train_df, test_df)
+            return (
+                t["X_train"], t["y_train"],
+                t["X_test"], t["y_test"],
+                None,
+                t["original_y_test_aligned"],
+                t["prev_close_test"],
+                t["dates_test"],
+            )
+
         def preprocessor_tree(train_df, test_df):
             t = data_manager.prepare_tensors(train_df, test_df)
             return (
                 t["X_train_s"], t["y_train_s"],
-                t["X_test_s"],  t["y_test_s"],
+                t["X_test_s"], t["y_test_s"],
                 t["scaler_y"],
                 t["original_y_test_aligned"],
                 t["prev_close_test"],
+                t["dates_test"],
             )
 
         def preprocessor_seq(train_df, test_df):
             t = data_manager.prepare_tensors(train_df, test_df)
             return (
                 t["X_train_seq"], t["y_train_seq"],
-                t["X_test_seq"],  t["y_test_seq"],
+                t["X_test_seq"], t["y_test_seq"],
                 t["scaler_y"],
                 t["original_y_test_aligned"],
                 t["prev_close_test"],
+                t["dates_test"],
             )
 
         if "Prophet" in self.selected_models:
-            print("  [WARN] Prophet, walk-forward modunda desteklenmiyor (log-getiri pipeline'ıyla uyumsuz). Atlanıyor.")
+            print("  [WARN] Prophet, walk-forward modunda desteklenmiyor. Atlaniyor.")
 
         validators = {}
 
         for name, cls in self._baseline_specs():
-            wf_model = WalkForwardValidator(
+            validator = WalkForwardValidator(
                 cls,
-                preprocessor_tree,
+                preprocessor_baseline,
                 target_mode=self.dataset_metadata.get("target_mode", "log_return"),
             )
-            wf_model.run(wf_splits)
-            validators[name] = wf_model
+            validator.run(wf_splits)
+            validators[name] = validator
 
         if not self._skip("XGBoost"):
-            wf_xgb = WalkForwardValidator(
+            validator = WalkForwardValidator(
                 XGBoostModel,
                 preprocessor_tree,
                 target_mode=self.dataset_metadata.get("target_mode", "log_return"),
             )
-            wf_xgb.run(wf_splits)
-            validators["XGBoost"] = wf_xgb
+            validator.run(wf_splits)
+            validators["XGBoost"] = validator
 
         if not self._skip("Random Forest"):
-            wf_rf = WalkForwardValidator(
+            validator = WalkForwardValidator(
                 RandomForestModel,
                 preprocessor_tree,
                 target_mode=self.dataset_metadata.get("target_mode", "log_return"),
             )
-            wf_rf.run(wf_splits)
-            validators["Random Forest"] = wf_rf
+            validator.run(wf_splits)
+            validators["Random Forest"] = validator
 
         if not self._skip("LSTM"):
-            wf_lstm = WalkForwardValidator(
+            validator = WalkForwardValidator(
                 lambda: AttentionLSTMModel(epochs=50),
                 preprocessor_seq,
                 target_mode=self.dataset_metadata.get("target_mode", "log_return"),
             )
-            wf_lstm.run(wf_splits)
-            validators["LSTM"] = wf_lstm
+            validator.run(wf_splits)
+            validators["LSTM"] = validator
 
         if not self._skip("TFT"):
-            wf_tft = WalkForwardValidator(
+            validator = WalkForwardValidator(
                 lambda: TFTModel(epochs=50, patience=12),
                 preprocessor_seq,
                 target_mode=self.dataset_metadata.get("target_mode", "log_return"),
             )
-            wf_tft.run(wf_splits)
-            validators["TFT"] = wf_tft
-
-        import numpy as np
+            validator.run(wf_splits)
+            validators["TFT"] = validator
 
         for name, validator in validators.items():
             self.wf_results[name] = validator.aggregated_metrics
 
             all_preds, all_trues = [], []
+            all_dates, all_prev_close, all_pred_target = [], [], []
             for window in validator.results:
-                all_preds.extend(window["y_pred"])
-                all_trues.extend(window["y_true"])
+                all_preds.extend(window["y_pred_price"])
+                all_trues.extend(window["y_true_price"])
+                all_dates.extend(window["dates"])
+                all_prev_close.extend(window["prev_close"])
+                all_pred_target.extend(window["y_pred_target"])
 
-            self.wf_predictions[name] = np.array(all_preds)
-            self.wf_y_true = np.array(all_trues)
+            self.wf_predictions[name] = np.asarray(all_preds, dtype=float)
+            self.wf_y_true = np.asarray(all_trues, dtype=float)
+            self.wf_backtest_inputs[name] = {
+                "dates": np.asarray(all_dates),
+                "y_true_price": np.asarray(all_trues, dtype=float),
+                "pred_price": np.asarray(all_preds, dtype=float),
+                "prev_close": np.asarray(all_prev_close, dtype=float),
+                "pred_target": np.asarray(all_pred_target, dtype=float),
+            }
 
         for model_name, metrics in self.wf_results.items():
             self.tracker.log_run(

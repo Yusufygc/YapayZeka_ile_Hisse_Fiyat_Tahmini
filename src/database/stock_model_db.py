@@ -20,15 +20,12 @@ Kullanım:
     best = db.get_best_model("TUPRS")   # ileriye dönük otomatik seçim için
 """
 
-import sqlite3
 import json
+import sqlite3
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DDL
-# ─────────────────────────────────────────────────────────────────────────────
 _CREATE_EXPERIMENTS = """
 CREATE TABLE IF NOT EXISTS experiments (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,7 +43,7 @@ CREATE TABLE IF NOT EXISTS experiments (
     hit_rate         REAL,
     composite_score  REAL,
     model_path       TEXT,
-    features         TEXT,   -- JSON array
+    features         TEXT,
     dataset_hash     TEXT,
     trained_at       TEXT    NOT NULL
 );
@@ -84,36 +81,34 @@ CREATE INDEX IF NOT EXISTS idx_experiments_score
 """
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Yardımcı Fonksiyon
-# ─────────────────────────────────────────────────────────────────────────────
 def compute_composite_score(metrics: Dict[str, float]) -> float:
     """
     Farklı ölçeklerdeki metrikleri 0-100 aralığına normalize edip
     ağırlıklı bileşik skor üretir.
 
     Yeni mantıkta benchmark-relative alanlar da hesaba katılır:
-      - RMSE_vs_naive <= 1 ise model benchmark'ı en azından hata açısından yakalamıştır
-      - DirAcc_vs_naive ve Sharpe_excess_vs_buy_hold pozitifse göreli üstünlük vardır
+      - RMSE_vs_benchmark <= 1 ise model seçilen benchmark'ı en azından hata açısından yakalamıştır
+      - DirAcc_vs_benchmark ve Sharpe_excess_vs_buy_hold pozitifse göreli üstünlük vardır
       - Neutral_Rate çok yükselirse strateji pasifleştiği için ceza uygulanır
 
-    Model naive benchmark'tan daha kötü RMSE üretiyorsa skor sert biçimde aşağı çekilir;
+    Model seçilen benchmark'tan daha kötü RMSE üretiyorsa skor sert biçimde aşağı çekilir;
     böylece benchmark'ı geçemeyen model lider olamaz.
     """
     import math
 
     dir_acc = float(metrics.get("Dir_Acc", 0.0))
     mape = float(metrics.get("MAPE", 1.0))   # sklearn fraksiyonel döndürür
-    rmse_vs_naive = max(float(metrics.get("RMSE_vs_naive", 1.0)), 1e-8)
-    diracc_vs_naive = float(metrics.get("DirAcc_vs_naive", 0.0))
+    # Relative alanlar artık seçilen benchmark modeline göre hesaplanır.
+    rmse_vs_benchmark = max(float(metrics.get("RMSE_vs_benchmark", 1.0)), 1e-8)
+    diracc_vs_benchmark = float(metrics.get("DirAcc_vs_benchmark", 0.0))
     sharpe_excess = float(metrics.get("Sharpe_excess_vs_buy_hold", 0.0))
     neutral_rate = float(metrics.get("Neutral_Rate", 0.0))
 
     # RMSE oranı: 1.0 benchmark ile başa baş, daha düşükse daha iyi
-    rmse_score = min(100.0, 100.0 / rmse_vs_naive)
+    rmse_score = min(100.0, 100.0 / rmse_vs_benchmark)
 
     # Relative directional skill: ±12.5 puan farkı yaklaşık 0-100 bandına yay
-    diracc_relative_score = min(100.0, max(0.0, 50.0 + diracc_vs_naive * 4.0))
+    diracc_relative_score = min(100.0, max(0.0, 50.0 + diracc_vs_benchmark * 4.0))
 
     # Buy-and-hold üstü Sharpe'ı ödüllendir
     sharpe_relative_score = (math.tanh(sharpe_excess / 1.5) + 1.0) * 50.0
@@ -131,7 +126,7 @@ def compute_composite_score(metrics: Dict[str, float]) -> float:
     )
     composite -= neutral_penalty
 
-    if rmse_vs_naive > 1.0:
+    if rmse_vs_benchmark > 1.0:
         composite = min(composite, 49.0)
 
     return round(max(0.0, composite), 4)
@@ -141,12 +136,9 @@ def _compute_composite_score(metrics: Dict[str, float]) -> float:
     return compute_composite_score(metrics)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Ana Sınıf
-# ─────────────────────────────────────────────────────────────────────────────
 class StockModelDB:
     """
-    SQLite tabanlı hisse–model kayıt yöneticisi.
+    SQLite tabanlı hisse-model kayıt yöneticisi.
 
     Args:
         db_path: Veritabanı dosyasının tam yolu.
@@ -157,11 +149,10 @@ class StockModelDB:
         self.db_path = db_path
         self._init_db()
 
-    # ── Bağlantı ──────────────────────────────────────────────────────────────
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row          # sütun adıyla erişim
-        conn.execute("PRAGMA journal_mode=WAL") # eş zamanlı yazma güvenliği
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
 
@@ -187,16 +178,15 @@ class StockModelDB:
         if column not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
-    # ── Deney Kaydı ───────────────────────────────────────────────────────────
     def log_experiment(
         self,
-        stock_symbol:    str,
-        model_name:      str,
-        metrics:         Dict[str, float],
-        model_path:      str           = "",
-        features:        List[str]     = None,
-        dataset_hash:    str           = "N/A",
-        validation_mode: str           = "single_split",
+        stock_symbol: str,
+        model_name: str,
+        metrics: Dict[str, float],
+        model_path: str = "",
+        features: List[str] = None,
+        dataset_hash: str = "N/A",
+        validation_mode: str = "single_split",
         dataset_metadata: Optional[Dict[str, Any]] = None,
     ) -> int:
         """
@@ -226,8 +216,8 @@ class StockModelDB:
                 (
                     stock_symbol, model_name, validation_mode,
                     target_mode, feature_mode, scaling_mode,
-                    metrics.get("MAE"),   metrics.get("RMSE"),
-                    metrics.get("MAPE"),  metrics.get("Dir_Acc"),
+                    metrics.get("MAE"), metrics.get("RMSE"),
+                    metrics.get("MAPE"), metrics.get("Dir_Acc"),
                     metrics.get("Sharpe"), metrics.get("Hit_Rate"),
                     composite, model_path, features_json,
                     dataset_hash, trained_at,
@@ -235,7 +225,6 @@ class StockModelDB:
             )
             experiment_id = cursor.lastrowid
 
-        # best_models tablosunu güncelle
         self._update_best_model(
             stock_symbol, model_name, experiment_id,
             composite, metrics, model_path, trained_at,
@@ -250,19 +239,18 @@ class StockModelDB:
         )
         return experiment_id
 
-    # ── Best Model Güncelleme ─────────────────────────────────────────────────
     def _update_best_model(
         self,
-        stock_symbol:    str,
-        model_name:      str,
-        experiment_id:   int,
+        stock_symbol: str,
+        model_name: str,
+        experiment_id: int,
         composite_score: float,
-        metrics:         Dict[str, float],
-        model_path:      str,
-        trained_at:      str,
-        target_mode:     str,
-        feature_mode:    str,
-        scaling_mode:    str,
+        metrics: Dict[str, float],
+        model_path: str,
+        trained_at: str,
+        target_mode: str,
+        feature_mode: str,
+        scaling_mode: str,
     ) -> None:
         """
         Bu hisse için en iyi modeli günceller.
@@ -302,8 +290,8 @@ class StockModelDB:
                     (
                         stock_symbol, model_name, experiment_id, composite_score,
                         target_mode, feature_mode, scaling_mode,
-                        metrics.get("MAE"),   metrics.get("RMSE"),
-                        metrics.get("MAPE"),  metrics.get("Dir_Acc"),
+                        metrics.get("MAE"), metrics.get("RMSE"),
+                        metrics.get("MAPE"), metrics.get("Dir_Acc"),
                         metrics.get("Sharpe"), metrics.get("Hit_Rate"),
                         model_path, trained_at,
                     ),
@@ -316,7 +304,6 @@ class StockModelDB:
                         f"(skor {existing['composite_score']:.2f} → {composite_score:.2f})"
                     )
 
-    # ── Sorgular ──────────────────────────────────────────────────────────────
     def get_best_model(self, stock_symbol: str) -> Optional[Dict[str, Any]]:
         """
         Belirtilen hisse için en iyi modelin tüm bilgilerini döndürür.
@@ -359,8 +346,8 @@ class StockModelDB:
     def get_experiments(
         self,
         stock_symbol: Optional[str] = None,
-        model_name:   Optional[str] = None,
-        limit:        int           = 100,
+        model_name: Optional[str] = None,
+        limit: int = 100,
     ) -> List[Dict[str, Any]]:
         """
         Deney geçmişini filtreli sorgular.
@@ -418,6 +405,5 @@ class StockModelDB:
             ).fetchall()
         return [dict(r) for r in rows]
 
-    # ── Yardımcı ──────────────────────────────────────────────────────────────
     def __repr__(self) -> str:
         return f"<StockModelDB path={self.db_path!r}>"
