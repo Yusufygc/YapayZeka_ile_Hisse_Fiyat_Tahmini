@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 
+import os
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -189,6 +191,38 @@ class LeakageGuardTests(unittest.TestCase):
 
         self.assertEqual(feats["Date"].iloc[0], pd.Timestamp("2024-01-04"))
         self.assertEqual(feats["Rate_Change"].iloc[1], 2.0)
+
+    def test_evds_interest_rate_fetch_normalizes_json_response(self):
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "items": [
+                        {"Tarih": "01-01-2024", "TP_PPK_H01": "42,50", "UNIXTIME": 1},
+                        {"Tarih": "01-02-2024", "TP_PPK_H01": "45.0", "UNIXTIME": 2},
+                    ]
+                }
+
+        mp = MacroPipeline()
+        with patch.dict(os.environ, {"TCMB_EVDS_API_KEY": "test-key"}):
+            with patch("src.features.macro_pipeline.requests.get", return_value=FakeResponse()) as get_mock:
+                df = mp._fetch_evds_series("TP.PPK.H01", "2024-01-01", "2024-02-01", "INTEREST_RATE")
+
+        self.assertEqual(list(df.columns), ["Date", "INTEREST_RATE"])
+        self.assertEqual(list(df["INTEREST_RATE"]), [42.5, 45.0])
+        self.assertEqual(get_mock.call_args.kwargs["params"]["startDate"], "01-01-2024")
+        self.assertEqual(get_mock.call_args.kwargs["headers"]["key"], "test-key")
+
+    def test_evds_interest_rate_fetch_skips_without_api_key(self):
+        mp = MacroPipeline()
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("src.features.macro_pipeline.requests.get") as get_mock:
+                df = mp._fetch_evds_series("TP.PPK.H01", "2024-01-01", "2024-02-01", "INTEREST_RATE")
+
+        self.assertIsNone(df)
+        get_mock.assert_not_called()
 
 
 if __name__ == "__main__":

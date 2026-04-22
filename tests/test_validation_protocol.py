@@ -31,6 +31,23 @@ class ValidationProtocolTests(unittest.TestCase):
         self.assertTrue(all(len(split["train"]) <= 756 for split in splits))
         self.assertLess(splits[0]["train"]["Date"].max(), splits[0]["test"]["Date"].min())
 
+    def test_walk_forward_embargo_creates_boundary_gap(self):
+        splits = TimeSeriesSplitter.walk_forward_splits(
+            self._frame(),
+            n_splits=3,
+            min_train_size=504,
+            test_size=21,
+            max_train_size=756,
+            embargo_size=30,
+        )
+
+        split = splits[0]
+        self.assertEqual(len(split["embargo_context"]), 30)
+        self.assertLess(split["train"]["Date"].max(), split["embargo_context"]["Date"].min())
+        self.assertLess(split["embargo_context"]["Date"].max(), split["test"]["Date"].min())
+        self.assertEqual(split["effective_train_end"], split["embargo_start"])
+        self.assertEqual(split["embargo_end"], split["test_start"])
+
     def test_expanding_walk_forward_keeps_train_start_at_zero(self):
         splits = TimeSeriesSplitter.walk_forward_splits(
             self._frame(),

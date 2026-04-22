@@ -26,16 +26,21 @@ except ImportError:  # pragma: no cover - fallback for minimal validation runtim
         return float(np.mean(np.abs((y_true - y_pred) / np.maximum(np.abs(y_true), 1e-10))))
 
 
-def _annualized_sharpe(returns: np.ndarray) -> float:
+def _daily_risk_free_rate(risk_free_annual: float) -> float:
+    return float((1.0 + risk_free_annual) ** (1.0 / 252.0) - 1.0)
+
+
+def _annualized_sharpe(returns: np.ndarray, risk_free_annual: float = 0.40) -> float:
     returns = np.asarray(returns, dtype=float).ravel()
     if returns.size == 0:
         return 0.0
 
-    std_returns = np.std(returns)
-    if std_returns <= 0:
+    excess = returns - _daily_risk_free_rate(risk_free_annual)
+    std_excess = np.std(excess)
+    if std_excess <= 0:
         return 0.0
 
-    return float((np.mean(returns) / std_returns) * np.sqrt(252))
+    return float((np.mean(excess) / std_excess) * np.sqrt(252))
 
 
 def _price_to_simple_returns(y_true: np.ndarray, prev_close: np.ndarray | None = None) -> np.ndarray:
@@ -76,11 +81,15 @@ def _price_to_target_returns(
     raise ValueError(f"Desteklenmeyen target_mode: {target_mode}")
 
 
-def compute_buy_hold_sharpe(y_true: np.ndarray, prev_close: np.ndarray | None = None) -> float:
+def compute_buy_hold_sharpe(
+    y_true: np.ndarray,
+    prev_close: np.ndarray | None = None,
+    risk_free_annual: float = 0.40,
+) -> float:
     """
     Compute buy-and-hold Sharpe from daily simple returns, not price differences.
     """
-    return _annualized_sharpe(_price_to_simple_returns(y_true, prev_close))
+    return _annualized_sharpe(_price_to_simple_returns(y_true, prev_close), risk_free_annual)
 
 
 def compute_financial_metrics(
@@ -91,6 +100,7 @@ def compute_financial_metrics(
     y_pred_target: np.ndarray | None = None,
     prev_close: np.ndarray | None = None,
     target_mode: str = "price",
+    risk_free_annual: float = 0.40,
 ) -> Dict[str, float]:
     """
     Compute price-space forecast errors and return-space financial metrics.
@@ -142,7 +152,7 @@ def compute_financial_metrics(
         return_mae = 0.0
         return_rmse = 0.0
 
-    buy_hold_sharpe = compute_buy_hold_sharpe(y_true, prev_close)
+    buy_hold_sharpe = compute_buy_hold_sharpe(y_true, prev_close, risk_free_annual)
 
     realized_simple_returns = (
         _target_to_simple_returns(true_target, target_mode)
@@ -159,7 +169,7 @@ def compute_financial_metrics(
     if k_strategy:
         signals = np.sign(predicted_signal_source[-k_strategy:])
         strategy_returns = signals * realized_simple_returns[-k_strategy:]
-        sharpe = _annualized_sharpe(strategy_returns)
+        sharpe = _annualized_sharpe(strategy_returns, risk_free_annual)
 
         active_mask = signals != 0
         hit_rate = float(np.mean(strategy_returns[active_mask] > 0) * 100) if np.any(active_mask) else 0.0

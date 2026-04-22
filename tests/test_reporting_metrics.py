@@ -8,8 +8,10 @@ import numpy as np
 import pandas as pd
 
 from src.backtesting.metrics import summarize_backtest
-from src.evaluation.financial_metrics import compute_quantile_metrics
+from src.database.stock_model_db import compute_composite_score
+from src.evaluation.financial_metrics import compute_financial_metrics, compute_quantile_metrics
 from src.evaluator import enrich_with_benchmark_metrics, save_metrics_report
+from src.pipeline.evaluation_manager import EvaluationManager
 
 
 class ReportingMetricsTests(unittest.TestCase):
@@ -103,6 +105,116 @@ class ReportingMetricsTests(unittest.TestCase):
         self.assertIn("Slippage_Drag", summary)
         self.assertEqual(summary["Avg_Holding_Period"], 2.0)
         self.assertEqual(summary["Turnover"], 2.0)
+        self.assertIn("VaR_95", summary)
+        self.assertIn("CVaR_95", summary)
+        self.assertIn("BuyHold_VaR_95", summary)
+        self.assertIn("Deflated_Sharpe", summary)
+
+    def test_deflated_sharpe_penalizes_multiple_trials(self):
+        equity_curve = pd.DataFrame({
+            "Equity": np.cumprod(1.0 + np.array([0.01, -0.004, 0.006, 0.002, -0.003, 0.008])),
+            "BuyHold_Equity": np.cumprod(1.0 + np.array([0.005, 0.004, -0.001, 0.002, 0.001, 0.003])),
+            "Net_Return": [0.01, -0.004, 0.006, 0.002, -0.003, 0.008],
+            "Realized_Return": [0.005, 0.004, -0.001, 0.002, 0.001, 0.003],
+            "Position": [1.0] * 6,
+            "Signal": [1.0] * 6,
+        })
+        result = {"model_name": "Model", "equity_curve": equity_curve, "trades": pd.DataFrame()}
+
+        single = summarize_backtest(result, risk_free_annual=0.0, trial_count=1)
+        many = summarize_backtest(result, risk_free_annual=0.0, trial_count=16)
+
+        self.assertLess(many["Deflated_Sharpe"], single["Deflated_Sharpe"])
+        self.assertLess(many["Sharpe_Probabilistic_Score"], single["Sharpe_Probabilistic_Score"])
+
+    def test_risk_free_rate_reduces_forecast_sharpe(self):
+        prev_close = np.full(5, 100.0)
+        returns = np.array([0.010, 0.012, 0.009, 0.011, 0.013])
+        y_true = prev_close * (1.0 + returns)
+        y_pred = y_true.copy()
+
+        zero_rf = compute_financial_metrics(
+            y_true,
+            y_pred,
+            prev_close=prev_close,
+            target_mode="price",
+            risk_free_annual=0.0,
+        )
+        high_rf = compute_financial_metrics(
+            y_true,
+            y_pred,
+            prev_close=prev_close,
+            target_mode="price",
+            risk_free_annual=0.40,
+        )
+
+        self.assertLess(high_rf["Sharpe"], zero_rf["Sharpe"])
+        self.assertLess(high_rf["BuyHold_Sharpe"], zero_rf["BuyHold_Sharpe"])
+
+    def test_zero_drawdown_calmar_is_infinite(self):
+        equity_curve = pd.DataFrame({
+            "Equity": [1.01, 1.02, 1.03],
+            "BuyHold_Equity": [1.01, 1.02, 1.03],
+            "Net_Return": [0.01, 0.0099, 0.0098],
+            "Realized_Return": [0.01, 0.0099, 0.0098],
+            "Position": [1.0, 1.0, 1.0],
+            "Signal": [1.0, 1.0, 1.0],
+        })
+        summary = summarize_backtest({
+            "model_name": "NoDD",
+            "equity_curve": equity_curve,
+            "trades": pd.DataFrame(),
+        })
+
+        self.assertTrue(np.isinf(summary["Calmar"]))
+
+    def test_composite_score_ignores_mape(self):
+        metrics = {
+            "RMSE_vs_benchmark": 0.90,
+            "DirAcc_vs_benchmark": 5.0,
+            "Sharpe_excess_vs_buy_hold": 0.5,
+            "Neutral_Rate": 0.0,
+            "Dir_Acc": 55.0,
+            "Eligible_For_Leader": True,
+        }
+
+        low_mape = dict(metrics, MAPE=0.01)
+        high_mape = dict(metrics, MAPE=0.95)
+
+        self.assertEqual(compute_composite_score(low_mape), compute_composite_score(high_mape))
+
+    def test_single_split_ensemble_rows_are_derived_from_predictions(self):
+        manager = EvaluationManager.__new__(EvaluationManager)
+        manager.ensemble_enabled = True
+        manager.ensemble_weights = {}
+        manager.y_true_aligned = np.array([10.0, 11.0, 12.0])
+        manager.prev_close_aligned = np.array([9.5, 10.5, 11.5])
+        manager.predictions = {
+            "Model A": np.array([10.0, 11.0, 12.0]),
+            "Model B": np.array([9.0, 10.0, 11.0]),
+        }
+        manager.prediction_targets = {
+            "Model A": np.array([0.01, 0.02, 0.03]),
+            "Model B": np.array([0.00, 0.01, 0.02]),
+        }
+        manager.single_backtest_inputs = {
+            "Model A": {
+                "dates": pd.date_range("2024-01-01", periods=3),
+                "prediction_dates": pd.date_range("2024-01-01", periods=3),
+                "y_true_price": np.array([10.0, 11.0, 12.0]),
+                "pred_price": np.array([10.0, 11.0, 12.0]),
+                "prev_close": np.array([9.5, 10.5, 11.5]),
+                "pred_target": np.array([0.01, 0.02, 0.03]),
+                "y_true_target": np.array([0.01, 0.02, 0.03]),
+            }
+        }
+
+        manager._add_single_split_ensembles()
+
+        self.assertIn("Ensemble Equal Weight", manager.predictions)
+        self.assertIn("Ensemble Inverse RMSE", manager.predictions)
+        self.assertIn("Ensemble Equal Weight", manager.single_backtest_inputs)
+        np.testing.assert_allclose(manager.predictions["Ensemble Equal Weight"], np.array([9.5, 10.5, 11.5]))
 
 
 if __name__ == "__main__":

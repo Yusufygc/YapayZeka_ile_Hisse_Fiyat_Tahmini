@@ -120,6 +120,9 @@ class Phase6BacktestStandardTests(unittest.TestCase):
         self.assertFalse(metadata["final_holdout_optimized"])
         self.assertEqual(metadata["calibration_summary"]["calibration_set"], "walk_forward_folds_only")
         self.assertFalse(metadata["calibration_summary"]["final_holdout_used"])
+        self.assertEqual(metadata["active_from_stage"], "walk_forward_backtest_signal_filtering")
+        self.assertEqual(metadata["calibration_summary"]["active_from_stage"], "walk_forward_backtest_signal_filtering")
+        self.assertEqual(metadata["calibration_summary"]["calibration_fold_count"], 3)
         self.assertGreaterEqual(metadata["quality_thresholds"]["min_directional_accuracy"], 52.0)
 
 

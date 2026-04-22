@@ -5,6 +5,7 @@ import shutil
 import unittest
 
 import numpy as np
+import pandas as pd
 
 from src.models.arima_model import ARIMAModel
 from src.models.linear_sequence_model import DLinearSequenceModel, NLinearSequenceModel, PatchTSTExperimentalModel
@@ -62,6 +63,61 @@ class Phase4ModelTests(unittest.TestCase):
         self.assertIn(model.order, candidates)
         preds = model.predict(np.zeros((2, 1)))
         self.assertEqual(preds.shape, (2,))
+
+    def test_attention_layer_bias_is_scalar_and_broadcasts(self):
+        try:
+            import tensorflow as tf
+            from src.models.lstm_model import AttentionLayer
+        except Exception as exc:
+            self.skipTest(f"tensorflow minimal runtime'da kurulu degil: {exc}")
+
+        layer = AttentionLayer()
+        x = tf.ones((2, 4, 3), dtype=tf.float32)
+        y = layer(x)
+
+        self.assertEqual(tuple(layer.b.shape), (1,))
+        self.assertEqual(tuple(y.shape), (2, 3))
+
+    def test_prophet_model_uses_available_macro_regressors(self):
+        import src.models.prophet_model as prophet_module
+        from src.models.prophet_model import ProphetModel
+
+        class FakeProphet:
+            def __init__(self, **kwargs):
+                self.regressors = []
+                self.train_df = None
+                self.future_df = None
+
+            def add_regressor(self, name):
+                self.regressors.append(name)
+
+            def fit(self, df):
+                self.train_df = df.copy()
+
+            def predict(self, df):
+                self.future_df = df.copy()
+                return pd.DataFrame({"yhat": np.full(len(df), 0.01)})
+
+        original = prophet_module.Prophet
+        prophet_module.Prophet = FakeProphet
+        try:
+            model = ProphetModel(
+                use_regressors=True,
+                regressor_names=["USDTRY_Return", "Missing_Macro"],
+                feature_names=["USDTRY_Return", "Other"],
+            )
+            X = np.array([[0.1, 1.0], [0.2, 2.0], [0.3, 3.0]])
+            y = np.array([0.01, 0.02, 0.03])
+            dates = pd.date_range("2024-01-01", periods=3)
+
+            model.train(X, y, dates_train=pd.Series(dates))
+            preds = model.predict(X, dates_test=pd.Series(dates))
+        finally:
+            prophet_module.Prophet = original
+
+        self.assertEqual(model.regressors_used, ["USDTRY_Return"])
+        self.assertEqual(model.regressors_missing, ["Missing_Macro"])
+        self.assertEqual(preds.shape, (3,))
 
 
 if __name__ == "__main__":

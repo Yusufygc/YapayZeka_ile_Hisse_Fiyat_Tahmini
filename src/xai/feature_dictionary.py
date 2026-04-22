@@ -33,6 +33,12 @@ def describe_feature(feature_name: str) -> str:
 
     if feature_name.startswith("LogRet_Lag"):
         return "gecmis gun getirilerinin bugunku tahmine etkisi"
+    if feature_name.startswith("OBV"):
+        return "hacim akisi ile fiyat yonunun birlikte guclenip guclenmedigi"
+    if feature_name.startswith("VWAP"):
+        return "fiyatin hacim agirlikli ortalamaya gore konumu"
+    if feature_name.startswith("Market_Regime"):
+        return "fiyatin SMA-200'e gore piyasa rejimi sinyali"
     if feature_name.startswith("MACD"):
         return "momentumun guclenip zayifladigi"
     if feature_name.startswith("USDTRY"):
@@ -62,6 +68,10 @@ def feature_group(feature_name: str) -> str:
     """Map a feature to the Phase 5 feature group taxonomy."""
     if feature_name.startswith("LogRet_Lag") or feature_name.endswith("_Lag") or "_Lag_" in feature_name:
         return "lag"
+    if feature_name.startswith(("OBV", "VWAP")):
+        return "volume"
+    if feature_name.startswith("Market_Regime"):
+        return "regime"
     if feature_name.startswith(("RollStd", "BB_Width", "ATR", "Volatility")):
         return "volatility"
     if feature_name == "Relative_Strength" or feature_name.startswith("BIST100"):
