@@ -30,6 +30,7 @@ DEFAULT_TARGET_MODE = "log_return"
 DEFAULT_FEATURE_MODE = "stationary_features"
 DEFAULT_SCALING_MODE = "robust_x_standard_y_clip"
 DEFAULT_SIGNAL_MODE = "professional"
+DEFAULT_QUALITY_GATE_MODE = "soft"
 DEFAULT_SIGNAL_ENTRY_COST_MULTIPLIER = 2.0
 DEFAULT_SIGNAL_VOLATILITY_MULTIPLIER = 0.25
 DEFAULT_MIN_HOLDING_BARS = 3
@@ -47,10 +48,19 @@ DEFAULT_WF_MIN_TRAIN_SIZE = 504
 DEFAULT_WF_TEST_SIZE = 21
 DEFAULT_WF_MAX_TRAIN_SIZE = 756
 DEFAULT_WF_WINDOW_TYPE = "sliding"
+DEFAULT_WF_EMBARGO_SIZE = None
 DEFAULT_FINAL_HOLDOUT_SIZE = 60
 DEFAULT_PRUNE_CORRELATED_FEATURES = False
 DEFAULT_CORRELATION_THRESHOLD = 0.98
+DEFAULT_LAG_FEATURE_COUNT = 5
+DEFAULT_USE_PROPHET_MACRO_REGRESSORS = True
+DEFAULT_ENSEMBLE_ENABLED = True
+DEFAULT_UNIVERSE_FILE = "data/bist_universe.csv"
 DEFAULT_CLIP_SHIFT_WARNING_THRESHOLD_PCT = 1.0
+DEFAULT_TRAINING_WINDOW_YEARS = 5
+DEFAULT_WINDOW_CANDIDATES = [3, 5, 7, 10, None]
+DEFAULT_MIN_HISTORY_DAYS = 504
+DEFAULT_NEW_LISTING_MIN_DAYS = 252
 DEFAULT_MODEL_CONFIG = {
     "arima": {"auto_order": False, "order": (1, 0, 0)},
     "deep_learning": {
@@ -85,6 +95,7 @@ DEFAULT_MODEL_CONFIG = {
         "patchtst_config": {"lookback": 128, "patch_length": 16, "stride": 8, "alpha": 1.0},
     },
     "gradient_boosting": {"lightgbm_optional": True},
+    "prophet": {"use_regressors": DEFAULT_USE_PROPHET_MACRO_REGRESSORS},
 }
 
 PRESETS = {
@@ -196,10 +207,16 @@ def confirm(data_file: str, mode: str, models: list[str]) -> bool:
     print(f"  Feature Mode : {DEFAULT_FEATURE_MODE}")
     print(f"  Scaling Mode : {DEFAULT_SCALING_MODE}")
     print(f"  Signal Mode  : {DEFAULT_SIGNAL_MODE}")
+    print(f"  Quality Gate : {DEFAULT_QUALITY_GATE_MODE}")
     print(f"  Macro Lag    : rate={DEFAULT_MACRO_RATE_LAG_DAYS}d, CPI={DEFAULT_MACRO_CPI_LAG_DAYS}d")
     print(
         f"  WF Config    : splits={DEFAULT_WF_N_SPLITS}, test={DEFAULT_WF_TEST_SIZE}, "
         f"max_train={DEFAULT_WF_MAX_TRAIN_SIZE}, type={DEFAULT_WF_WINDOW_TYPE}, holdout={DEFAULT_FINAL_HOLDOUT_SIZE}"
+    )
+    print(
+        "  Data Window  : "
+        f"training_window_years={DEFAULT_TRAINING_WINDOW_YEARS}, "
+        f"min_history={DEFAULT_MIN_HISTORY_DAYS}, new_listing_min={DEFAULT_NEW_LISTING_MIN_DAYS}"
     )
     print(
         "  Model Config : "
@@ -242,6 +259,7 @@ def main() -> None:
         feature_mode=DEFAULT_FEATURE_MODE,
         scaling_mode=DEFAULT_SCALING_MODE,
         signal_mode=DEFAULT_SIGNAL_MODE,
+        quality_gate_mode=DEFAULT_QUALITY_GATE_MODE,
         signal_entry_cost_multiplier=DEFAULT_SIGNAL_ENTRY_COST_MULTIPLIER,
         signal_volatility_multiplier=DEFAULT_SIGNAL_VOLATILITY_MULTIPLIER,
         min_holding_bars=DEFAULT_MIN_HOLDING_BARS,
@@ -259,11 +277,20 @@ def main() -> None:
         wf_test_size=DEFAULT_WF_TEST_SIZE,
         wf_max_train_size=DEFAULT_WF_MAX_TRAIN_SIZE,
         wf_window_type=DEFAULT_WF_WINDOW_TYPE,
+        wf_embargo_size=DEFAULT_WF_EMBARGO_SIZE,
         final_holdout_size=DEFAULT_FINAL_HOLDOUT_SIZE,
         model_config=DEFAULT_MODEL_CONFIG,
         prune_correlated_features=DEFAULT_PRUNE_CORRELATED_FEATURES,
         correlation_threshold=DEFAULT_CORRELATION_THRESHOLD,
+        lag_feature_count=DEFAULT_LAG_FEATURE_COUNT,
+        use_prophet_macro_regressors=DEFAULT_USE_PROPHET_MACRO_REGRESSORS,
+        ensemble_enabled=DEFAULT_ENSEMBLE_ENABLED,
+        universe_file=DEFAULT_UNIVERSE_FILE,
         clip_shift_warning_threshold_pct=DEFAULT_CLIP_SHIFT_WARNING_THRESHOLD_PCT,
+        training_window_years=DEFAULT_TRAINING_WINDOW_YEARS,
+        window_candidates=DEFAULT_WINDOW_CANDIDATES,
+        min_history_days=DEFAULT_MIN_HISTORY_DAYS,
+        new_listing_min_days=DEFAULT_NEW_LISTING_MIN_DAYS,
     )
     pipeline.run_all()
 
