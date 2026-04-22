@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Dict
 
 import numpy as np
@@ -88,6 +89,7 @@ def run_backtest(
         if block_reason:
             signal_frame = _blocked_signal_frame(n, block_reason, block_state)
         else:
+            cfg, quality_reason = _apply_soft_quality_gate(model_metrics or {}, cfg)
             signal_frame = generate_professional_signals(
                 pred_target=pred_target_arr,
                 pred_price=pred_price,
@@ -98,6 +100,8 @@ def run_backtest(
                 slippage_bps=slippage_bps,
                 config=cfg,
             ).reset_index(drop=True)
+            if quality_reason:
+                signal_frame["Quality_Gate_Reason"] = quality_reason
         decision_positions = signal_frame["Position"].to_numpy(dtype=float)
         signals = (signal_frame["Decision"].isin(["BUY", "HOLD"]).to_numpy(dtype=float))
     else:
@@ -211,9 +215,13 @@ def run_backtest(
     for column in [
         "Decision",
         "Expected_Return",
+        "Base_Entry_Threshold",
         "Entry_Threshold",
         "Exit_Threshold",
         "Signal_Strength",
+        "Quality_Gate_Mode",
+        "Quality_Threshold_Multiplier",
+        "Quality_Gate_Reason",
         "Rolling_Volatility",
         "Holding_Bars",
         "Trade_Return",
@@ -270,9 +278,13 @@ def _blocked_signal_frame(n: int, reason: str, risk_state: str) -> pd.DataFrame:
         "Decision": ["NO_TRADE"] * n,
         "Position": np.zeros(n, dtype=float),
         "Expected_Return": np.full(n, np.nan, dtype=float),
+        "Base_Entry_Threshold": np.full(n, np.nan, dtype=float),
         "Entry_Threshold": np.full(n, np.nan, dtype=float),
         "Exit_Threshold": np.full(n, np.nan, dtype=float),
         "Signal_Strength": np.full(n, np.nan, dtype=float),
+        "Quality_Gate_Mode": [risk_state] * n,
+        "Quality_Threshold_Multiplier": np.full(n, np.nan, dtype=float),
+        "Quality_Gate_Reason": [reason] * n,
         "Rolling_Volatility": np.full(n, np.nan, dtype=float),
         "Holding_Bars": np.zeros(n, dtype=int),
         "Trade_Return": np.zeros(n, dtype=float),
@@ -294,6 +306,9 @@ def _professional_trade_block(
             f"{model_name} sadece benchmark olarak kullanildigi icin profesyonel modda islem acilmadi.",
             "benchmark_only",
         )
+
+    if config.quality_gate_mode in {"soft", "off"}:
+        return "", ""
 
     dir_acc = _metric_float(model_metrics.get("Dir_Acc"))
     if np.isfinite(dir_acc) and dir_acc < config.min_directional_accuracy:
@@ -317,6 +332,56 @@ def _professional_trade_block(
         )
 
     return "", ""
+
+
+def _apply_soft_quality_gate(
+    model_metrics: Dict[str, Any],
+    config: SignalConfig,
+) -> tuple[SignalConfig, str]:
+    if config.quality_gate_mode != "soft":
+        return config, ""
+
+    multiplier = float(config.entry_threshold_multiplier)
+    reasons: list[str] = []
+
+    dir_acc = _metric_float(model_metrics.get("Dir_Acc"))
+    if np.isfinite(dir_acc):
+        if dir_acc < config.soft_dir_acc_low:
+            multiplier = max(multiplier, config.soft_entry_threshold_multiplier_low)
+            reasons.append(
+                f"Dir_Acc %{dir_acc:.2f} < %{config.soft_dir_acc_low:.2f}; yalnizca cok guclu sinyaller kabul edilecek."
+            )
+        elif dir_acc < config.min_directional_accuracy:
+            multiplier = max(multiplier, config.soft_entry_threshold_multiplier_mid)
+            reasons.append(
+                f"Dir_Acc %{dir_acc:.2f} < %{config.min_directional_accuracy:.2f}; entry threshold artirildi."
+            )
+
+    rmse_vs_benchmark = _metric_float(model_metrics.get("RMSE_vs_benchmark"))
+    if np.isfinite(rmse_vs_benchmark) and rmse_vs_benchmark > config.max_rmse_vs_benchmark:
+        if rmse_vs_benchmark >= config.soft_rmse_penalty_full:
+            multiplier = max(multiplier, config.soft_entry_threshold_multiplier_low)
+        else:
+            multiplier = max(multiplier, config.soft_entry_threshold_multiplier_mid)
+        reasons.append(
+            f"RMSE benchmark orani {rmse_vs_benchmark:.4f} > {config.max_rmse_vs_benchmark:.4f}; entry threshold artirildi."
+        )
+
+    composite_score = _metric_float(model_metrics.get("Composite_Score"))
+    if np.isfinite(composite_score) and composite_score < config.min_composite_score:
+        if composite_score < config.soft_composite_low:
+            multiplier = max(multiplier, config.soft_entry_threshold_multiplier_low)
+        else:
+            multiplier = max(multiplier, config.soft_entry_threshold_multiplier_mid)
+        reasons.append(
+            f"Composite score {composite_score:.4f} < {config.min_composite_score:.4f}; entry threshold artirildi."
+        )
+
+    if multiplier == config.entry_threshold_multiplier:
+        return config, "Soft kalite filtresi ek sikilastirma uygulamadi."
+
+    adjusted = replace(config, entry_threshold_multiplier=round(multiplier, 6))
+    return adjusted, " ".join(reasons)
 
 
 def _metric_float(value: Any) -> float:

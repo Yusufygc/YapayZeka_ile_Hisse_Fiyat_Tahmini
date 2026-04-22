@@ -71,7 +71,12 @@ def save_backtest_report(metrics_by_model: Dict[str, Dict[str, object]], save_pa
         handle.write(
             section_table(
                 display_df,
-                ["Model", "Net_Return", "CAGR", "Annualized_Return", "Volatility", "Sharpe", "Sortino", "Max_Drawdown", "Calmar", "Beats_BuyHold_NetReturn"],
+                [
+                    "Model", "Net_Return", "CAGR", "Annualized_Return", "Volatility",
+                    "Sharpe", "Sortino", "Max_Drawdown", "Calmar",
+                    "VaR_95", "CVaR_95", "Deflated_Sharpe", "Sharpe_Probabilistic_Score",
+                    "Beats_BuyHold_NetReturn",
+                ],
             )
         )
 
@@ -115,7 +120,11 @@ def save_backtest_report(metrics_by_model: Dict[str, Dict[str, object]], save_pa
         handle.write(
             section_table(
                 display_df,
-                ["Model", "Initial_Capital", "End_Capital", "Profit_TL", "BuyHold_End_Capital", "BuyHold_Profit_TL", "BuyHold_Return", "BuyHold_Sharpe"],
+                [
+                    "Model", "Initial_Capital", "End_Capital", "Profit_TL",
+                    "BuyHold_End_Capital", "BuyHold_Profit_TL", "BuyHold_Return",
+                    "BuyHold_Sharpe", "BuyHold_VaR_95", "BuyHold_CVaR_95",
+                ],
             )
         )
 
@@ -128,8 +137,10 @@ def save_fold_backtest_report(
     backtest_results: Dict[str, Dict[str, object]],
     save_path: str,
     initial_capital: float = 100000.0,
+    trial_count: int | None = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     rows = []
+    trial_count = len(backtest_results) if trial_count is None else max(1, int(trial_count))
     for model_name, result in backtest_results.items():
         curve = result.get("equity_curve")
         if curve is None or curve.empty or "Fold" not in curve.columns:
@@ -147,6 +158,7 @@ def save_fold_backtest_report(
                     "trades": fold_trades,
                 },
                 initial_capital=initial_capital,
+                trial_count=trial_count,
             )
             summary["Fold"] = fold_id
             rows.append(summary)
@@ -178,9 +190,9 @@ def save_fold_backtest_report(
     with open(md_path, "w", encoding="utf-8") as handle:
         handle.write("# Walk-Forward Fold Backtest Raporu\n\n")
         handle.write("## Fold Dagilimi\n\n")
-        handle.write(section_table(display_fold, ["Model", "Fold", "Net_Return", "Sharpe", "Max_Drawdown", "Exposure", "Turnover", "Avg_Holding_Period", "Trade_Count"]))
+        handle.write(section_table(display_fold, ["Model", "Fold", "Net_Return", "Sharpe", "Deflated_Sharpe", "VaR_95", "CVaR_95", "Max_Drawdown", "Exposure", "Turnover", "Avg_Holding_Period", "Trade_Count"]))
         handle.write("\n\n## Worst-Fold Ozeti\n\n")
-        handle.write(section_table(display_worst, ["Model", "Fold", "Net_Return", "Sharpe", "Max_Drawdown", "Exposure", "Turnover", "Avg_Holding_Period", "Worst_Fold_Rule"]))
+        handle.write(section_table(display_worst, ["Model", "Fold", "Net_Return", "Sharpe", "Deflated_Sharpe", "VaR_95", "CVaR_95", "Max_Drawdown", "Exposure", "Turnover", "Avg_Holding_Period", "Worst_Fold_Rule"]))
         if len(backtest_results) >= 8:
             handle.write(
                 "\n\n## Overfitting Kontrolu\n\n"

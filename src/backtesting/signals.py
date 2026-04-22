@@ -30,9 +30,16 @@ class SignalConfig:
     cooldown_bars: int = 2
     min_entry_threshold: float = 0.0
     benchmark_only_models: Tuple[str, ...] = ("Naive Last Value", "Naive Zero Return", "Naive Drift")
+    quality_gate_mode: str = "soft"
     min_directional_accuracy: float = 52.0
     max_rmse_vs_benchmark: float = 1.05
     min_composite_score: float = 50.0
+    entry_threshold_multiplier: float = 1.0
+    soft_dir_acc_low: float = 48.0
+    soft_entry_threshold_multiplier_mid: float = 1.25
+    soft_entry_threshold_multiplier_low: float = 1.75
+    soft_rmse_penalty_full: float = 1.10
+    soft_composite_low: float = 45.0
     emergency_stop_overrides_min_hold: bool = True
 
 
@@ -108,6 +115,8 @@ def generate_professional_signals(
         rolling_vol * cfg.volatility_multiplier,
     )
     entry_threshold = np.maximum(entry_threshold, cfg.min_entry_threshold)
+    base_entry_threshold = entry_threshold.copy()
+    entry_threshold = entry_threshold * cfg.entry_threshold_multiplier
     exit_threshold = np.maximum(
         total_cost * cfg.exit_cost_multiplier,
         rolling_vol * cfg.exit_volatility_multiplier,
@@ -216,9 +225,12 @@ def generate_professional_signals(
         "Decision": decisions,
         "Position": positions,
         "Expected_Return": expected_return,
+        "Base_Entry_Threshold": base_entry_threshold,
         "Entry_Threshold": entry_threshold,
         "Exit_Threshold": exit_threshold,
         "Signal_Strength": signal_strength,
+        "Quality_Gate_Mode": [cfg.quality_gate_mode] * n,
+        "Quality_Threshold_Multiplier": np.full(n, cfg.entry_threshold_multiplier, dtype=float),
         "Rolling_Volatility": rolling_vol,
         "Holding_Bars": holding_bars_values,
         "Trade_Return": trade_return_values,
@@ -249,12 +261,26 @@ def _validate_config(config: SignalConfig) -> None:
         raise ValueError("stop_loss_vol_multiplier pozitif olmalidir.")
     if config.cooldown_bars < 0:
         raise ValueError("cooldown_bars negatif olamaz.")
+    if config.quality_gate_mode not in {"hard", "soft", "off"}:
+        raise ValueError("quality_gate_mode 'hard', 'soft' veya 'off' olmalidir.")
     if config.min_directional_accuracy < 0 or config.min_directional_accuracy > 100:
         raise ValueError("min_directional_accuracy 0-100 arasinda olmalidir.")
     if config.max_rmse_vs_benchmark <= 0:
         raise ValueError("max_rmse_vs_benchmark pozitif olmalidir.")
     if config.min_composite_score < 0:
         raise ValueError("min_composite_score negatif olamaz.")
+    if config.entry_threshold_multiplier < 1.0:
+        raise ValueError("entry_threshold_multiplier 1.0 veya daha buyuk olmalidir.")
+    if config.soft_dir_acc_low < 0 or config.soft_dir_acc_low > 100:
+        raise ValueError("soft_dir_acc_low 0-100 arasinda olmalidir.")
+    if config.soft_entry_threshold_multiplier_mid < 1.0:
+        raise ValueError("soft_entry_threshold_multiplier_mid 1.0 veya daha buyuk olmalidir.")
+    if config.soft_entry_threshold_multiplier_low < config.soft_entry_threshold_multiplier_mid:
+        raise ValueError("soft_entry_threshold_multiplier_low mid carpandan kucuk olamaz.")
+    if config.soft_rmse_penalty_full <= 0:
+        raise ValueError("soft_rmse_penalty_full pozitif olmalidir.")
+    if config.soft_composite_low < 0:
+        raise ValueError("soft_composite_low negatif olamaz.")
 
 
 def _expected_return(

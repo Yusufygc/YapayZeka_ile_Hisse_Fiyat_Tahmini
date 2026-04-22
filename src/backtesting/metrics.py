@@ -4,30 +4,38 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+import math
 import numpy as np
 import pandas as pd
 
 
+def _daily_risk_free_rate(risk_free_annual: float) -> float:
+    return float((1.0 + risk_free_annual) ** (1.0 / 252.0) - 1.0)
+
+
 def _annualized_sharpe(returns: np.ndarray, risk_free_annual: float = 0.40) -> float:
-    rf_daily = (1 + risk_free_annual) ** (1/252) - 1
-    excess = returns - rf_daily
+    returns = np.asarray(returns, dtype=float).ravel()
+    if returns.size == 0:
+        return 0.0
+    excess = returns - _daily_risk_free_rate(risk_free_annual)
     std_excess = np.std(excess)
     if std_excess <= 0:
         return 0.0
     return float(np.mean(excess) / std_excess * np.sqrt(252))
 
 
-def _annualized_sortino(returns: np.ndarray) -> float:
+def _annualized_sortino(returns: np.ndarray, risk_free_annual: float = 0.40) -> float:
     returns = np.asarray(returns, dtype=float).ravel()
     if returns.size == 0:
         return 0.0
-    downside = returns[returns < 0]
+    excess = returns - _daily_risk_free_rate(risk_free_annual)
+    downside = excess[excess < 0]
     if downside.size == 0:
         return 0.0
     downside_std = np.std(downside)
     if downside_std <= 0:
         return 0.0
-    return float((np.mean(returns) / downside_std) * np.sqrt(252))
+    return float((np.mean(excess) / downside_std) * np.sqrt(252))
 
 
 def _max_drawdown(equity: np.ndarray) -> float:
@@ -39,9 +47,45 @@ def _max_drawdown(equity: np.ndarray) -> float:
     return float(drawdowns.min())
 
 
+def _var_cvar(returns: np.ndarray, confidence: float = 0.95) -> tuple[float, float]:
+    returns = np.asarray(returns, dtype=float).ravel()
+    returns = returns[np.isfinite(returns)]
+    if returns.size == 0:
+        return 0.0, 0.0
+
+    var = float(np.quantile(returns, 1.0 - confidence))
+    tail = returns[returns <= var]
+    cvar = float(tail.mean()) if tail.size else var
+    return var, cvar
+
+
+def _normal_cdf(value: float) -> float:
+    return 0.5 * (1.0 + math.erf(value / math.sqrt(2.0)))
+
+
+def _deflated_sharpe(
+    sharpe: float,
+    returns: np.ndarray,
+    trial_count: int = 1,
+) -> tuple[float, float]:
+    returns = np.asarray(returns, dtype=float).ravel()
+    returns = returns[np.isfinite(returns)]
+    if returns.size < 3 or not np.isfinite(sharpe):
+        return 0.0, 0.0
+
+    trials = max(1, int(trial_count))
+    std_error = math.sqrt(max(1e-12, (1.0 + 0.5 * sharpe * sharpe) / returns.size))
+    multiple_testing_penalty = math.sqrt(2.0 * math.log(trials)) * std_error if trials > 1 else 0.0
+    deflated = float(sharpe - multiple_testing_penalty)
+    probabilistic_score = float(_normal_cdf(deflated / std_error) * 100.0)
+    return deflated, probabilistic_score
+
+
 def summarize_backtest(
     backtest_result: Dict[str, Any],
     initial_capital: float = 100000.0,
+    risk_free_annual: float = 0.40,
+    trial_count: int = 1,
 ) -> Dict[str, float | str | bool]:
     equity_curve: pd.DataFrame = backtest_result["equity_curve"]
     trades: pd.DataFrame = backtest_result["trades"]
@@ -58,6 +102,10 @@ def summarize_backtest(
             "Sortino": 0.0,
             "Max_Drawdown": 0.0,
             "Calmar": 0.0,
+            "VaR_95": 0.0,
+            "CVaR_95": 0.0,
+            "Deflated_Sharpe": 0.0,
+            "Sharpe_Probabilistic_Score": 0.0,
             "Exposure": 0.0,
             "Active_Bars": 0,
             "Signal_Count": 0,
@@ -81,6 +129,8 @@ def summarize_backtest(
             "End_Capital": round(initial_capital, 2),
             "Profit_TL": 0.0,
             "BuyHold_Return": 0.0,
+            "BuyHold_VaR_95": 0.0,
+            "BuyHold_CVaR_95": 0.0,
             "BuyHold_End_Capital": round(initial_capital, 2),
             "BuyHold_Profit_TL": 0.0,
             "BuyHold_Sharpe": 0.0,
@@ -98,11 +148,18 @@ def summarize_backtest(
     annualized_return = float((equity[-1] ** (252.0 / max(periods, 1))) - 1.0) if periods > 0 else 0.0
     cagr = annualized_return
     volatility = float(np.std(strategy_returns) * np.sqrt(252)) if periods > 1 else 0.0
-    sharpe = _annualized_sharpe(strategy_returns)
-    sortino = _annualized_sortino(strategy_returns)
-    buy_hold_sharpe = _annualized_sharpe(buy_hold_returns)
+    sharpe = _annualized_sharpe(strategy_returns, risk_free_annual)
+    sortino = _annualized_sortino(strategy_returns, risk_free_annual)
+    buy_hold_sharpe = _annualized_sharpe(buy_hold_returns, risk_free_annual)
+    var_95, cvar_95 = _var_cvar(strategy_returns, confidence=0.95)
+    buy_hold_var_95, buy_hold_cvar_95 = _var_cvar(buy_hold_returns, confidence=0.95)
+    deflated_sharpe, sharpe_probabilistic_score = _deflated_sharpe(
+        sharpe,
+        strategy_returns,
+        trial_count=trial_count,
+    )
     max_drawdown = _max_drawdown(equity)
-    calmar = float(annualized_return / abs(max_drawdown)) if max_drawdown < 0 else 0.0
+    calmar = float(annualized_return / abs(max_drawdown)) if max_drawdown < 0 else float("inf")
     exposure = float(np.mean(equity_curve["Position"].to_numpy(dtype=float)) * 100.0)
     active_bars = int(np.sum(equity_curve["Position"].to_numpy(dtype=float) > 0))
     signal_count = int(np.sum(equity_curve["Signal"].to_numpy(dtype=float) > 0))
@@ -138,6 +195,10 @@ def summarize_backtest(
         "Sortino": round(sortino, 6),
         "Max_Drawdown": round(max_drawdown, 6),
         "Calmar": round(calmar, 6),
+        "VaR_95": round(var_95, 6),
+        "CVaR_95": round(cvar_95, 6),
+        "Deflated_Sharpe": round(deflated_sharpe, 6),
+        "Sharpe_Probabilistic_Score": round(sharpe_probabilistic_score, 6),
         "Exposure": round(exposure, 4),
         "Active_Bars": active_bars,
         "Signal_Count": signal_count,
@@ -161,6 +222,8 @@ def summarize_backtest(
         "End_Capital": round(end_capital, 2),
         "Profit_TL": round(profit_tl, 2),
         "BuyHold_Return": round(buy_hold_return, 6),
+        "BuyHold_VaR_95": round(buy_hold_var_95, 6),
+        "BuyHold_CVaR_95": round(buy_hold_cvar_95, 6),
         "BuyHold_End_Capital": round(buy_hold_end_capital, 2),
         "BuyHold_Profit_TL": round(buy_hold_profit_tl, 2),
         "BuyHold_Sharpe": round(buy_hold_sharpe, 6),
