@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 import os
-from typing import Dict
+from typing import Dict, Tuple
 
-import matplotlib.pyplot as plt
 import pandas as pd
 
-from src.reporting_utils import bullet_list, prepare_csv_dataframe, section_table, write_csv_and_aligned_view
+try:
+    import matplotlib.pyplot as plt
+except ImportError:  # pragma: no cover - plotting is skipped in minimal runtimes
+    plt = None
+
+from src.backtesting.metrics import summarize_backtest
+from src.reporting_utils import (
+    bullet_list,
+    prepare_csv_dataframe,
+    route_output_path,
+    section_table,
+    with_output_extension,
+    write_csv_and_aligned_view,
+)
 
 
 def save_backtest_report(metrics_by_model: Dict[str, Dict[str, object]], save_path: str) -> pd.DataFrame:
@@ -20,9 +32,10 @@ def save_backtest_report(metrics_by_model: Dict[str, Dict[str, object]], save_pa
         df.sort_values(by=["Net_Return", "Sharpe"], ascending=[False, False], inplace=True)
 
     csv_df = df.reset_index()
-    write_csv_and_aligned_view(csv_df, save_path)
+    output_paths = write_csv_and_aligned_view(csv_df, save_path)
 
-    md_path = save_path.replace(".csv", ".md")
+    md_path = with_output_extension(save_path, ".md")
+    os.makedirs(os.path.dirname(md_path), exist_ok=True)
     display_df = prepare_csv_dataframe(csv_df)
     with open(md_path, "w", encoding="utf-8") as handle:
         handle.write("# Backtest Raporu\n\n")
@@ -39,15 +52,26 @@ def save_backtest_report(metrics_by_model: Dict[str, Dict[str, object]], save_pa
                         f"Donem sonu sermaye: `{best_end_capital:,.2f} TL`",
                         f"Net kar/zarar: `{best_profit_tl:,.2f} TL`",
                         f"Buy & Hold donem sonu: `{buy_hold_end_capital:,.2f} TL`",
+                        f"Islem kalitesi: Profit Factor `{float(df.iloc[0].get('Profit_Factor', 0.0)):.4f}`, "
+                        f"Expectancy `{float(df.iloc[0].get('Expectancy', 0.0)):.6f}`",
                     ]
                 )
             )
+            if len(df) >= 8:
+                handle.write(
+                    "\n\n"
+                    + bullet_list(
+                        [
+                            "Multiple testing risk: cok sayida model/parametre denemesi raporlandigi icin lider strateji performansi temkinli yorumlanmalidir.",
+                        ]
+                    )
+                )
 
         handle.write("\n\n## Getiri ve Risk Ozeti\n\n")
         handle.write(
             section_table(
                 display_df,
-                ["Model", "Net_Return", "Annualized_Return", "Volatility", "Sharpe", "Max_Drawdown", "Calmar", "Beats_BuyHold_NetReturn"],
+                ["Model", "Net_Return", "CAGR", "Annualized_Return", "Volatility", "Sharpe", "Sortino", "Max_Drawdown", "Calmar", "Beats_BuyHold_NetReturn"],
             )
         )
 
@@ -55,7 +79,35 @@ def save_backtest_report(metrics_by_model: Dict[str, Dict[str, object]], save_pa
         handle.write(
             section_table(
                 display_df,
-                ["Model", "Exposure", "Active_Bars", "Signal_Count", "Days_In_Market", "Trade_Count", "Turnover", "Win_Rate", "Avg_Trade_Return"],
+                ["Model", "Exposure", "Active_Bars", "Signal_Count", "Days_In_Market", "Trade_Count", "Turnover", "Avg_Holding_Period", "Win_Rate", "Avg_Trade_Return"],
+            )
+        )
+
+        handle.write("\n\n## Zamanlama Varsayimlari\n\n")
+        handle.write(
+            bullet_list(
+                [
+                    "Prediction_Date: tahminin uretildigi karar tarihi.",
+                    "Desired_Position karar barinda uretilir; Position bir sonraki bar getirisinde uygulanan yurutme pozisyonudur.",
+                    "Execution_Date / Realized_Return_Date: bir onceki karar pozisyonunun getirisinin olculdugu bar.",
+                    "Professional sinyal modu karar aninda gerceklesen fiyat bilgisini kullanmaz.",
+                ]
+            )
+        )
+
+        handle.write("\n\n## Islem Kalitesi ve Maliyet\n\n")
+        handle.write(
+            section_table(
+                display_df,
+                ["Model", "Profit_Factor", "Avg_Win", "Avg_Loss", "Expectancy", "Cost_Drag", "Commission_Drag", "Slippage_Drag", "Entry_Cost_Drag", "Exit_Cost_Drag", "Trade_Efficiency"],
+            )
+        )
+
+        handle.write("\n\n## Leakage Guard\n\n")
+        handle.write(
+            section_table(
+                display_df,
+                ["Model", "Target_Semantics", "Execution_Lag", "Macro_Release_Lag", "Transaction_Costs", "Threshold_Config", "Validation_Protocol"],
             )
         )
 
@@ -67,9 +119,82 @@ def save_backtest_report(metrics_by_model: Dict[str, Dict[str, object]], save_pa
             )
         )
 
-    print(f"[OK] Backtest raporu kaydedildi -> {save_path}")
+    print(f"[OK] Backtest raporu kaydedildi -> {output_paths['csv']}")
     print(f"[OK] Backtest markdown raporu kaydedildi -> {md_path}")
     return df
+
+
+def save_fold_backtest_report(
+    backtest_results: Dict[str, Dict[str, object]],
+    save_path: str,
+    initial_capital: float = 100000.0,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    rows = []
+    for model_name, result in backtest_results.items():
+        curve = result.get("equity_curve")
+        if curve is None or curve.empty or "Fold" not in curve.columns:
+            continue
+        trades = result.get("trades", pd.DataFrame())
+        for fold_id, fold_curve in curve.groupby("Fold", sort=False):
+            fold_curve = fold_curve.copy()
+            fold_curve["Equity"] = (1.0 + fold_curve["Net_Return"].to_numpy(dtype=float)).cumprod()
+            fold_curve["BuyHold_Equity"] = (1.0 + fold_curve["Realized_Return"].to_numpy(dtype=float)).cumprod()
+            fold_trades = trades[trades["Fold"] == fold_id].copy() if isinstance(trades, pd.DataFrame) and "Fold" in trades.columns else pd.DataFrame()
+            summary = summarize_backtest(
+                {
+                    "model_name": model_name,
+                    "equity_curve": fold_curve,
+                    "trades": fold_trades,
+                },
+                initial_capital=initial_capital,
+            )
+            summary["Fold"] = fold_id
+            rows.append(summary)
+
+    fold_df = pd.DataFrame(rows)
+    if not fold_df.empty:
+        fold_df.sort_values(by=["Model", "Fold"], inplace=True)
+
+    fold_paths = write_csv_and_aligned_view(fold_df, save_path)
+
+    worst_rows = []
+    if not fold_df.empty:
+        for model_name, model_df in fold_df.groupby("Model", sort=False):
+            worst = model_df.sort_values(
+                by=["Net_Return", "Sharpe", "Max_Drawdown"],
+                ascending=[True, True, True],
+            ).iloc[0].copy()
+            worst["Worst_Fold_Rule"] = "min_net_return_then_min_sharpe"
+            worst_rows.append(worst)
+    worst_df = pd.DataFrame(worst_rows)
+
+    worst_path = with_output_extension(save_path.replace(".csv", "_worst.csv"), ".csv")
+    worst_paths = write_csv_and_aligned_view(worst_df, worst_path)
+
+    md_path = with_output_extension(save_path, ".md")
+    display_fold = prepare_csv_dataframe(fold_df)
+    display_worst = prepare_csv_dataframe(worst_df)
+    os.makedirs(os.path.dirname(md_path), exist_ok=True)
+    with open(md_path, "w", encoding="utf-8") as handle:
+        handle.write("# Walk-Forward Fold Backtest Raporu\n\n")
+        handle.write("## Fold Dagilimi\n\n")
+        handle.write(section_table(display_fold, ["Model", "Fold", "Net_Return", "Sharpe", "Max_Drawdown", "Exposure", "Turnover", "Avg_Holding_Period", "Trade_Count"]))
+        handle.write("\n\n## Worst-Fold Ozeti\n\n")
+        handle.write(section_table(display_worst, ["Model", "Fold", "Net_Return", "Sharpe", "Max_Drawdown", "Exposure", "Turnover", "Avg_Holding_Period", "Worst_Fold_Rule"]))
+        if len(backtest_results) >= 8:
+            handle.write(
+                "\n\n## Overfitting Kontrolu\n\n"
+                + bullet_list(
+                    [
+                        "Multiple testing risk: walk-forward raporda cok sayida model/strateji karsilastiriliyor; worst-fold ve fold dagilimi lider performansi ile birlikte okunmalidir.",
+                    ]
+                )
+            )
+
+    print(f"[OK] Fold backtest dagilim raporu kaydedildi -> {fold_paths['csv']}")
+    print(f"[OK] Worst-fold backtest raporu kaydedildi -> {worst_paths['csv']}")
+    print(f"[OK] Fold backtest markdown raporu kaydedildi -> {md_path}")
+    return fold_df, worst_df
 
 
 def save_trade_logs(trades_by_model: Dict[str, pd.DataFrame], save_path: str) -> pd.DataFrame:
@@ -83,8 +208,8 @@ def save_trade_logs(trades_by_model: Dict[str, pd.DataFrame], save_path: str) ->
         frames.append(frame)
 
     combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-    write_csv_and_aligned_view(combined, save_path)
-    print(f"[OK] Backtest trade log kaydedildi -> {save_path}")
+    output_paths = write_csv_and_aligned_view(combined, save_path)
+    print(f"[OK] Backtest trade log kaydedildi -> {output_paths['csv']}")
     return combined
 
 
@@ -94,6 +219,10 @@ def plot_equity_curves(
     title: str,
     selected_models: set[str] | None = None,
 ) -> None:
+    if plt is None:
+        print("[WARN] matplotlib yok; backtest equity curve grafigi atlandi.")
+        return
+    save_path = route_output_path(save_path)
     curves = equity_curves
     if selected_models is not None:
         curves = {name: curve for name, curve in equity_curves.items() if name in selected_models}
