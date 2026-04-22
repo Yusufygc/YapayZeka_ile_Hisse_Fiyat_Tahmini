@@ -43,6 +43,7 @@ class TimeSeriesSplitter:
         min_train_size: int           = 100,
         test_size:      int           = 30,
         max_train_size: int | None    = None,
+        embargo_size:   int           = 0,
     ) -> List[Dict]:
         """
         Creates multiple chronological train/test splits for walk-forward validation.
@@ -63,16 +64,21 @@ class TimeSeriesSplitter:
 
         n = len(df)
         splits = []
+        embargo_size = max(0, int(embargo_size))
 
         total_test_size = n_splits * test_size
-        if n < min_train_size + total_test_size:
+        min_required = min_train_size + embargo_size + total_test_size
+        if n < min_required:
             print(f"[WARNING] Not enough data for {n_splits} splits with test_size={test_size} and min_train_size={min_train_size}.")
-            n_splits = max(1, (n - min_train_size) // test_size)
+            n_splits = max(1, (n - min_train_size - embargo_size) // test_size)
             print(f"[WARNING] Adjusted n_splits to {n_splits}.")
 
         for i in range(n_splits, 0, -1):
-            train_end = n - (i * test_size)
-            test_end  = train_end + test_size
+            test_start = n - (i * test_size)
+            train_end = max(0, test_start - embargo_size)
+            embargo_start = train_end
+            embargo_end = test_start
+            test_end = test_start + test_size
 
             if max_train_size is not None:
                 # Sliding window: yalnızca son max_train_size satırı kullan
@@ -82,17 +88,26 @@ class TimeSeriesSplitter:
                 train_start = 0
 
             train_df = df.iloc[train_start:train_end].copy()
-            test_df  = df.iloc[train_end:test_end].copy()
+            embargo_df = df.iloc[embargo_start:embargo_end].copy()
+            test_df  = df.iloc[test_start:test_end].copy()
 
             splits.append({
                 "split_idx":   n_splits - i + 1,
                 "train":       train_df,
+                "embargo_context": embargo_df,
                 "test":        test_df,
                 "train_start": train_start,
                 "train_end":   train_end,
+                "effective_train_end": train_end,
+                "embargo_start": embargo_start,
+                "embargo_end": embargo_end,
+                "test_start": test_start,
                 "test_end":    test_end,
+                "embargo_size": embargo_size,
                 "train_date_start": train_df["Date"].iloc[0] if "Date" in train_df.columns and not train_df.empty else None,
                 "train_date_end": train_df["Date"].iloc[-1] if "Date" in train_df.columns and not train_df.empty else None,
+                "embargo_date_start": embargo_df["Date"].iloc[0] if "Date" in embargo_df.columns and not embargo_df.empty else None,
+                "embargo_date_end": embargo_df["Date"].iloc[-1] if "Date" in embargo_df.columns and not embargo_df.empty else None,
                 "test_date_start": test_df["Date"].iloc[0] if "Date" in test_df.columns and not test_df.empty else None,
                 "test_date_end": test_df["Date"].iloc[-1] if "Date" in test_df.columns and not test_df.empty else None,
             })

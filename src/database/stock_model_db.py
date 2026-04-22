@@ -10,9 +10,7 @@ Tablolar:
   - best_models  : Her hisse için anlık en iyi model (otomatik güncellenir)
 
 Bileşik Skor Formülü (0–100 arası):
-  composite = Dir_Acc * 0.50
-            + sharpe_normalized * 0.30      (Sharpe -∞…+∞ → 0–100)
-            + accuracy_score * 0.20         (MAPE'den türetilmiş isabetlilik)
+  composite = benchmark-relative hata, yön, Sharpe ve aktiflik bileşenlerinden üretilir.
 
 Kullanım:
     db = StockModelDB("path/to/stock_models.db")
@@ -97,7 +95,6 @@ def compute_composite_score(metrics: Dict[str, float]) -> float:
     import math
 
     dir_acc = float(metrics.get("Dir_Acc", 0.0))
-    mape = float(metrics.get("MAPE", 1.0))   # sklearn fraksiyonel döndürür
     # Relative alanlar artık seçilen benchmark modeline göre hesaplanır.
     rmse_vs_benchmark = max(float(metrics.get("RMSE_vs_benchmark", 1.0)), 1e-8)
     diracc_vs_benchmark = float(metrics.get("DirAcc_vs_benchmark", 0.0))
@@ -113,16 +110,13 @@ def compute_composite_score(metrics: Dict[str, float]) -> float:
     # Buy-and-hold üstü Sharpe'ı ödüllendir
     sharpe_relative_score = (math.tanh(sharpe_excess / 1.5) + 1.0) * 50.0
 
-    # MAPE isabetliliği: mape=0 → 100, mape=1 (yani %100) → 0
-    accuracy_score = max(0.0, 100.0 - mape * 100.0)
     neutral_penalty = min(15.0, neutral_rate * 0.15)
 
     composite = (
-        rmse_score * 0.40 +
-        diracc_relative_score * 0.20 +
+        rmse_score * 0.45 +
+        diracc_relative_score * 0.25 +
         sharpe_relative_score * 0.20 +
-        accuracy_score * 0.15 +
-        dir_acc * 0.05
+        dir_acc * 0.10
     )
     composite -= neutral_penalty
 

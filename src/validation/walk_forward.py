@@ -48,6 +48,7 @@ class WalkForwardValidator:
 
             train_df = split["train"]
             test_df = split["test"]
+            context_df = split.get("embargo_context")
 
             (
                 X_train,
@@ -60,7 +61,7 @@ class WalkForwardValidator:
                 dates_test,
                 prediction_dates_test,
                 y_test_target,
-            ) = self.preprocessor(train_df, test_df)
+            ) = self.preprocessor(train_df, test_df, context_df=context_df)
 
             model = self.model_initializer()
             dates_train = train_df["Date"].values if "Date" in train_df.columns else None
