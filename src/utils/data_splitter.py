@@ -90,6 +90,11 @@ class TimeSeriesSplitter:
                 "test":        test_df,
                 "train_start": train_start,
                 "train_end":   train_end,
+                "test_end":    test_end,
+                "train_date_start": train_df["Date"].iloc[0] if "Date" in train_df.columns and not train_df.empty else None,
+                "train_date_end": train_df["Date"].iloc[-1] if "Date" in train_df.columns and not train_df.empty else None,
+                "test_date_start": test_df["Date"].iloc[0] if "Date" in test_df.columns and not test_df.empty else None,
+                "test_date_end": test_df["Date"].iloc[-1] if "Date" in test_df.columns and not test_df.empty else None,
             })
 
         return splits

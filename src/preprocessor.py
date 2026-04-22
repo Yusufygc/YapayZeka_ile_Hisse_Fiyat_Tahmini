@@ -138,8 +138,20 @@ def scale_data(
     y_test_s = scaler_y.transform(y_test)
 
     if clip_enabled:
+        train_clip_rate = float(np.mean((X_train_s < _CLIP_LOW) | (X_train_s > _CLIP_HIGH)) * 100.0)
+        test_clip_rate = float(np.mean((X_test_s < _CLIP_LOW) | (X_test_s > _CLIP_HIGH)) * 100.0)
         X_train_s = np.clip(X_train_s, _CLIP_LOW, _CLIP_HIGH)
         X_test_s = np.clip(X_test_s, _CLIP_LOW, _CLIP_HIGH)
+        scaler_X.clip_report_ = {
+            "train_clip_rate_pct": train_clip_rate,
+            "test_clip_rate_pct": test_clip_rate,
+            "clip_low": _CLIP_LOW,
+            "clip_high": _CLIP_HIGH,
+        }
+        print(
+            f"[INFO] Clip raporu -> train={train_clip_rate:.3f}%, "
+            f"test={test_clip_rate:.3f}% aralik=[{_CLIP_LOW}, {_CLIP_HIGH}]"
+        )
 
     # Scaler'ları kaydet (reproducibility + inference)
     joblib.dump(scaler_X, os.path.join(save_dir, "scaler_X.pkl"))

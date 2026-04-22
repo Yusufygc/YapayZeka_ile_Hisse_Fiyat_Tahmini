@@ -52,10 +52,46 @@ def load_and_clean(csv_path: str, drop_zero_volume: bool = True) -> pd.DataFrame
     df.sort_values("Date", inplace=True)
     df.reset_index(drop=True, inplace=True)
 
+    corporate_action_report = {
+        "adj_close_available": False,
+        "price_source": "Close",
+        "warning": "Adj_Close bulunamadi; corporate action duzeltmesi dogrulanamadi.",
+        "max_abs_adj_close_diff_pct": None,
+        "mean_abs_adj_close_diff_pct": None,
+        "rows_with_adj_close": 0,
+    }
+
+    if "Adj_Close" in df.columns and df["Adj_Close"].notna().any():
+        raw_close = pd.to_numeric(df["Close"], errors="coerce")
+        adj_close = pd.to_numeric(df["Adj_Close"], errors="coerce")
+        valid = raw_close.notna() & adj_close.notna() & (raw_close != 0)
+        if valid.any():
+            diff_ratio = (adj_close[valid] / raw_close[valid]) - 1.0
+            max_abs_diff = float(diff_ratio.abs().max())
+            mean_abs_diff = float(diff_ratio.abs().mean())
+            corporate_action_report = {
+                "adj_close_available": True,
+                "price_source": "Adj_Close",
+                "warning": "",
+                "max_abs_adj_close_diff_pct": max_abs_diff * 100.0,
+                "mean_abs_adj_close_diff_pct": mean_abs_diff * 100.0,
+                "rows_with_adj_close": int(valid.sum()),
+            }
+            if max_abs_diff > 1e-6:
+                print(
+                    "  [DATA] Adj_Close bulundu; hedef ve teknik feature hesaplari "
+                    f"duzeltilmis kapanis uzerinden yapilacak (max fark={max_abs_diff:.4%})."
+                )
+            df["Close"] = adj_close.combine_first(raw_close)
+        df.drop(columns=["Adj_Close"], inplace=True)
+    else:
+        print("  [DATA] Adj_Close bulunamadi; corporate action duzeltmesi dogrulanamadi.")
+
     if drop_zero_volume:
         df = df[df["Volume"] > 0].copy()
         df.reset_index(drop=True, inplace=True)
 
+    df.attrs["corporate_action_report"] = corporate_action_report
     return df
 
 

@@ -41,6 +41,10 @@ class WalkForwardValidator:
             if verbose:
                 print(f"\n  [INFO] Walk-Forward Window {idx + 1}/{len(splits)} (Split Index: {split['split_idx']})")
                 print(f"         Train points: {len(split['train'])}, Test points: {len(split['test'])}")
+                print(
+                    f"         Train dates : {split.get('train_date_start')} -> {split.get('train_date_end')} | "
+                    f"Test dates: {split.get('test_date_start')} -> {split.get('test_date_end')}"
+                )
 
             train_df = split["train"]
             test_df = split["test"]
@@ -54,6 +58,8 @@ class WalkForwardValidator:
                 y_test_price,
                 prev_close_test,
                 dates_test,
+                prediction_dates_test,
+                y_test_target,
             ) = self.preprocessor(train_df, test_df)
 
             model = self.model_initializer()
@@ -68,21 +74,39 @@ class WalkForwardValidator:
             else:
                 preds_target = np.asarray(preds).ravel()
 
-            min_len = min(len(preds_target), len(y_test_price), len(prev_close_test), len(dates_test))
+            min_len = min(
+                len(preds_target),
+                len(y_test_price),
+                len(prev_close_test),
+                len(dates_test),
+                len(prediction_dates_test),
+                len(y_test_target),
+            )
             preds_target_aligned = preds_target[-min_len:]
             prev_close_aligned = np.asarray(prev_close_test).ravel()[-min_len:]
             y_true_final = np.asarray(y_test_price).ravel()[-min_len:]
+            y_true_target_aligned = np.asarray(y_test_target).ravel()[-min_len:]
             dates_aligned = np.asarray(dates_test)[-min_len:]
+            prediction_dates_aligned = np.asarray(prediction_dates_test)[-min_len:]
             preds_final = self._target_to_price(preds_target_aligned, prev_close_aligned)
 
-            metrics = compute_financial_metrics(y_true_final, preds_final)
+            metrics = compute_financial_metrics(
+                y_true_final,
+                preds_final,
+                y_true_target=y_true_target_aligned,
+                y_pred_target=preds_target_aligned,
+                prev_close=prev_close_aligned,
+                target_mode=self.target_mode,
+            )
             all_metrics.append(metrics)
 
             self.results.append({
                 "split_idx": split["split_idx"],
                 "dates": dates_aligned.tolist(),
+                "prediction_dates": prediction_dates_aligned.tolist(),
                 "prev_close": prev_close_aligned.tolist(),
                 "y_true_price": y_true_final.tolist(),
+                "y_true_target": y_true_target_aligned.tolist(),
                 "y_pred_price": preds_final.tolist(),
                 "y_pred_target": preds_target_aligned.tolist(),
                 "metrics": metrics,

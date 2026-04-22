@@ -128,6 +128,8 @@ def compute_composite_score(metrics: Dict[str, float]) -> float:
 
     if rmse_vs_benchmark > 1.0:
         composite = min(composite, 49.0)
+    if metrics.get("Eligible_For_Leader") is False:
+        composite = min(composite, 49.0)
 
     return round(max(0.0, composite), 4)
 
