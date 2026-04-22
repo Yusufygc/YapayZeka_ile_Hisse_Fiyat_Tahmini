@@ -37,6 +37,10 @@ class LSTMModel(BaseModel):
         epochs: int = 50,
         batch_size: int = 32,
         learning_rate: float = 0.001,
+        patience: int = 10,
+        lr_patience: int = 5,
+        validation_ratio: float = 0.1,
+        min_val_samples: int = 32,
     ):
         self.units_1 = units_1
         self.units_2 = units_2
@@ -44,19 +48,23 @@ class LSTMModel(BaseModel):
         self.epochs = epochs
         self.batch_size = batch_size
         self.learning_rate = learning_rate
+        self.patience = patience
+        self.lr_patience = lr_patience
+        self.validation_ratio = validation_ratio
+        self.min_val_samples = min_val_samples
         self.model: Sequential | None = None
 
-    @staticmethod
     def _chronological_validation_split(
+        self,
         X: np.ndarray,
         y: np.ndarray,
-        validation_ratio: float = 0.1,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         n_samples = len(X)
         if n_samples < 4:
             raise ValueError("LSTM eğitimi için yeterli sequence yok.")
 
-        n_val = max(1, int(n_samples * validation_ratio))
+        n_val = max(1, int(n_samples * self.validation_ratio))
+        n_val = min(max(self.min_val_samples, n_val), max(1, n_samples - 1))
         n_train = n_samples - n_val
         if n_train <= 0:
             raise ValueError("Chronological validation split sonrası train örneği kalmadı.")
@@ -81,7 +89,7 @@ class LSTMModel(BaseModel):
             raise ValueError(f"LSTM girdi tensörü 3-boyutlu olmalıdır, alınan: {X_train.ndim}D")
         self.model = self._build_model(input_shape=(X_train.shape[1], X_train.shape[2]))
         X_tr, y_tr, X_val, y_val = self._chronological_validation_split(X_train, y_train)
-        early_stop = EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True, verbose=1)
+        early_stop = EarlyStopping(monitor="val_loss", patience=self.patience, restore_best_weights=True, verbose=1)
         self.model.fit(
             X_tr,
             y_tr,
@@ -179,6 +187,10 @@ class AttentionLSTMModel(BaseModel):
         epochs: int = 80,
         batch_size: int = 32,
         learning_rate: float = 0.001,
+        patience: int = 15,
+        lr_patience: int = 5,
+        validation_ratio: float = 0.1,
+        min_val_samples: int = 32,
     ):
         self.units_1 = units_1
         self.units_2 = units_2
@@ -186,21 +198,23 @@ class AttentionLSTMModel(BaseModel):
         self.epochs = epochs
         self.batch_size = batch_size
         self.learning_rate = learning_rate
+        self.patience = patience
+        self.lr_patience = lr_patience
+        self.validation_ratio = validation_ratio
+        self.min_val_samples = min_val_samples
         self.model: Model | None = None
 
-    @staticmethod
     def _chronological_validation_split(
+        self,
         X: np.ndarray,
         y: np.ndarray,
-        validation_ratio: float = 0.1,
-        min_val_samples: int = 32,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         n_samples = len(X)
         if n_samples < 4:
             raise ValueError("Attention LSTM eğitimi için yeterli sequence yok.")
 
-        n_val = max(1, int(n_samples * validation_ratio))
-        n_val = min(max(min_val_samples, n_val), max(1, n_samples - 1))
+        n_val = max(1, int(n_samples * self.validation_ratio))
+        n_val = min(max(self.min_val_samples, n_val), max(1, n_samples - 1))
         n_train = n_samples - n_val
         if n_train <= 0:
             raise ValueError("Chronological validation split sonrası train örneği kalmadı.")
@@ -259,14 +273,14 @@ class AttentionLSTMModel(BaseModel):
         # ── Callbacks ────────────────────────────────────────────────────────
         early_stop = EarlyStopping(
             monitor="val_loss",
-            patience=15,
+            patience=self.patience,
             restore_best_weights=True,
             verbose=1,
         )
         reduce_lr = ReduceLROnPlateau(
             monitor="val_loss",
             factor=0.5,
-            patience=5,
+            patience=self.lr_patience,
             min_lr=1e-6,
             verbose=1,
         )

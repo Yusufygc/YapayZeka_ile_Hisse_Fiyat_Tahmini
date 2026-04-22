@@ -2,6 +2,10 @@
 """
 tft_model.py — Temporal Fusion Transformer (Pure PyTorch Implementation)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Phase 4 naming: this implementation is documented as a
+"TFT-like Quantile Sequence Model". A full TFT v2 should add static
+covariates, known future inputs, observed historical inputs,
+encoder-decoder structure, and multi-horizon output.
 Makaledeki (Lim et al., 2021) orijinal TFT mimarisini uygular:
 
   • Variable Selection Networks (VSN)   — hangi özelliğin önemli olduğunu öğrenir
@@ -317,6 +321,9 @@ class TFTModel(BaseModel):
         patience:      int   = 15,
         weight_decay:  float = 1e-4,   # L2 regularizasyon — overfitting'e karşı
         quantiles:     List[float] = None,
+        validation_ratio: float = 0.1,
+        min_val_samples: int = 32,
+        lr_patience: int = 5,
     ):
         self.d_model       = d_model
         self.num_heads     = num_heads
@@ -328,17 +335,18 @@ class TFTModel(BaseModel):
         self.patience      = patience
         self.weight_decay  = weight_decay
         self.quantiles     = quantiles or [0.1, 0.5, 0.9]
+        self.validation_ratio = validation_ratio
+        self.min_val_samples = min_val_samples
+        self.lr_patience = lr_patience
 
         self.device   = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.network: Optional[_TFTNetwork] = None
         self._num_features: Optional[int]   = None
 
-    @staticmethod
     def _chronological_validation_split(
+        self,
         X: np.ndarray,
         y: np.ndarray,
-        validation_ratio: float = 0.1,
-        min_val_samples: int = 32,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Zaman serisinde shuffle etmeden son bölümden validation ayırır.
@@ -347,8 +355,8 @@ class TFTModel(BaseModel):
         if n_samples < 4:
             raise ValueError("TFT eğitimi için yeterli sequence yok.")
 
-        n_val = max(1, int(n_samples * validation_ratio))
-        n_val = min(max(min_val_samples, n_val), max(1, n_samples - 1))
+        n_val = max(1, int(n_samples * self.validation_ratio))
+        n_val = min(max(self.min_val_samples, n_val), max(1, n_samples - 1))
         n_train = n_samples - n_val
 
         if n_train <= 0:
@@ -407,7 +415,7 @@ class TFTModel(BaseModel):
             weight_decay=self.weight_decay,   # L2 regularizasyon
         )
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode="min", factor=0.5, patience=5, min_lr=1e-6
+            optimizer, mode="min", factor=0.5, patience=self.lr_patience, min_lr=1e-6
         )
 
         X_tr, y_tr, X_val, y_val = self._chronological_validation_split(X_train, y_train)
@@ -551,6 +559,9 @@ class TFTModel(BaseModel):
             "weight_decay":  self.weight_decay,
             "quantiles":     self.quantiles,
             "num_features":  self._num_features,
+            "validation_ratio": self.validation_ratio,
+            "min_val_samples": self.min_val_samples,
+            "lr_patience": self.lr_patience,
         }
 
         torch.save(
@@ -574,9 +585,16 @@ class TFTModel(BaseModel):
         self.num_heads     = config["num_heads"]
         self.lstm_layers   = config["lstm_layers"]
         self.dropout       = config["dropout"]
+        self.epochs        = config.get("epochs", self.epochs)
+        self.batch_size    = config.get("batch_size", self.batch_size)
+        self.learning_rate = config.get("learning_rate", self.learning_rate)
+        self.patience      = config.get("patience", self.patience)
         self.weight_decay  = config.get("weight_decay", 1e-4)  # eski kayıtlarla uyumluluk
         self.quantiles     = config["quantiles"]
         self._num_features = config["num_features"]
+        self.validation_ratio = config.get("validation_ratio", 0.1)
+        self.min_val_samples = config.get("min_val_samples", 32)
+        self.lr_patience = config.get("lr_patience", 5)
 
         self.network = self._build_network(self._num_features)
         self.network.load_state_dict(checkpoint["state_dict"])
