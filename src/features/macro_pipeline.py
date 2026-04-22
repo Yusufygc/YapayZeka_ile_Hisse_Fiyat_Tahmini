@@ -96,8 +96,15 @@ class MacroPipeline:
         cache_dir : Ham veri CSV'lerinin saklanacağı dizin.
     """
 
-    def __init__(self, cache_dir: str = "data/macro"):
+    def __init__(
+        self,
+        cache_dir: str = "data/macro",
+        rate_release_lag_days: int = 1,
+        cpi_release_lag_days: int = 15,
+    ):
         self.cache_dir = cache_dir
+        self.rate_release_lag_days = max(0, int(rate_release_lag_days))
+        self.cpi_release_lag_days = max(0, int(cpi_release_lag_days))
         os.makedirs(cache_dir, exist_ok=True)
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -331,10 +338,20 @@ class MacroPipeline:
         monthly_rate_feats = None
         if interest_df is not None and not interest_df.empty:
             monthly_rate_feats = self._engineer_monthly_rate(interest_df)
+            monthly_rate_feats["Rate_Raw_Date"] = monthly_rate_feats["Date"]
+            monthly_rate_feats["Date"] = monthly_rate_feats["Date"] + pd.to_timedelta(
+                self.rate_release_lag_days,
+                unit="D",
+            )
 
         monthly_cpi_feats = None
         if cpi_df is not None and not cpi_df.empty:
             monthly_cpi_feats = self._engineer_monthly_cpi(cpi_df)
+            monthly_cpi_feats["CPI_Raw_Date"] = monthly_cpi_feats["Date"]
+            monthly_cpi_feats["Date"] = monthly_cpi_feats["Date"] + pd.to_timedelta(
+                self.cpi_release_lag_days,
+                unit="D",
+            )
 
         # ══════════════════════════════════════════════════════════════════════
         # ADIM 2: Günlük takvim kur (USD/TRY + BIST100 outer join)
@@ -363,6 +380,10 @@ class MacroPipeline:
         # Real_Rate: her iki sütun ffill'den geçtikten sonra basit çıkarma
         if "Rate_Level" in macro.columns and "CPI_YoY" in macro.columns:
             macro["Real_Rate"] = macro["Rate_Level"] - macro["CPI_YoY"]
+
+        raw_date_cols = [c for c in macro.columns if c.endswith("_Raw_Date")]
+        if raw_date_cols:
+            macro.drop(columns=raw_date_cols, inplace=True)
 
         macro.reset_index(drop=True, inplace=True)
 

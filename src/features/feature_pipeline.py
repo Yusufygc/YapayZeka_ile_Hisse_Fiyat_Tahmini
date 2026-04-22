@@ -25,6 +25,8 @@ import numpy as np
 import ta
 from typing import Optional
 
+from src.xai.feature_dictionary import feature_group
+
 
 class FeaturePipeline:
     """
@@ -42,6 +44,8 @@ class FeaturePipeline:
         low_col:    str = "Low",
         volume_col: str = "Volume",
         feature_mode: str = "stationary_features",
+        prune_correlated_features: bool = False,
+        correlation_threshold: float = 0.98,
     ):
         self.close_col  = close_col
         self.open_col   = open_col
@@ -50,6 +54,14 @@ class FeaturePipeline:
         self.volume_col = volume_col
         self.feature_mode = feature_mode
         self.feature_names: list = []
+        self.prune_correlated_features = prune_correlated_features
+        self.correlation_threshold = correlation_threshold
+        self.feature_groups: dict[str, str] = {}
+        self.pruning_report: dict = {
+            "enabled": prune_correlated_features,
+            "threshold": correlation_threshold,
+            "dropped_features": [],
+        }
 
     # ── Ana Metod ─────────────────────────────────────────────────────────────
     def engineer_features(
@@ -90,8 +102,45 @@ class FeaturePipeline:
         # NaN temizle
         df = df.dropna().reset_index(drop=True)
 
-        self.feature_names = [c for c in df.columns if c not in ["Date", self.close_col]]
+        candidate_features = [c for c in df.columns if c not in ["Date", self.close_col]]
+        if self.prune_correlated_features:
+            df, candidate_features = self._prune_correlated(df, candidate_features)
+
+        self.feature_names = candidate_features
+        self.feature_groups = {name: feature_group(name) for name in self.feature_names}
         return df
+
+    def _prune_correlated(self, df: pd.DataFrame, feature_names: list[str]) -> tuple[pd.DataFrame, list[str]]:
+        numeric_features = [name for name in feature_names if pd.api.types.is_numeric_dtype(df[name])]
+        if len(numeric_features) < 2:
+            return df, feature_names
+
+        corr = df[numeric_features].corr().abs()
+        upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
+        dropped = []
+        for col in upper.columns:
+            high_corr = upper[col][upper[col] > self.correlation_threshold]
+            if not high_corr.empty:
+                dropped.append({
+                    "feature": col,
+                    "correlated_with": str(high_corr.idxmax()),
+                    "abs_corr": float(high_corr.max()),
+                })
+
+        drop_names = [item["feature"] for item in dropped]
+        if drop_names:
+            df = df.drop(columns=drop_names)
+            feature_names = [name for name in feature_names if name not in drop_names]
+            print(
+                "  [FEATURE] Korelasyon pruning uygulandi: "
+                f"{len(drop_names)} feature dusuruldu (threshold={self.correlation_threshold})."
+            )
+        self.pruning_report = {
+            "enabled": True,
+            "threshold": self.correlation_threshold,
+            "dropped_features": dropped,
+        }
+        return df, feature_names
 
     # ── Teknik Göstergeler ────────────────────────────────────────────────────
     def _add_returns(self, df: pd.DataFrame) -> pd.DataFrame:
