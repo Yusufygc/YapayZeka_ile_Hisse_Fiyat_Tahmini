@@ -11,8 +11,15 @@ Ağırlık belirleme stratejileri:
 
 import numpy as np
 from itertools import product
-from sklearn.metrics import mean_squared_error
 from typing import Dict, List, Tuple
+
+try:
+    from sklearn.metrics import mean_squared_error
+except ImportError:  # pragma: no cover - minimal runtimes
+    def mean_squared_error(y_true, y_pred):
+        y_true = np.asarray(y_true, dtype=float).ravel()
+        y_pred = np.asarray(y_pred, dtype=float).ravel()
+        return float(np.mean((y_true - y_pred) ** 2))
 
 
 class EnsembleModel:

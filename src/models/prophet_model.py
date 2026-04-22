@@ -1,93 +1,143 @@
 # -*- coding: utf-8 -*-
 """
-prophet_model.py — Facebook Prophet Sarmalayıcı
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Prophet, tarih (ds) ve hedef (y) çiftleriyle çalışır.
-Bu sınıf, BaseModel arayüzüne uygun bir Prophet sarmalayıcısıdır.
-Modelin kaydedilmesi/yüklenmesi joblib ile yapılır.
+prophet_model.py - Prophet wrapper.
 """
+
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import joblib
-from prophet import Prophet
+
+try:
+    import joblib
+except ImportError:  # pragma: no cover - optional until save/load is used
+    joblib = None
+
+try:
+    from prophet import Prophet
+except ImportError:  # pragma: no cover - optional dependency in minimal runtimes
+    Prophet = None
 
 from .base_model import BaseModel
 
+DEFAULT_PROPHET_REGRESSORS = [
+    "USDTRY_Return",
+    "BIST100_Return",
+    "Rate_Level",
+    "CPI_YoY",
+    "Real_Rate",
+    "Relative_Strength",
+]
+
 
 class ProphetModel(BaseModel):
-    """Facebook Prophet sarmalayıcısı."""
+    """BaseModel-compatible Prophet wrapper with optional macro regressors."""
 
-    def __init__(self, **prophet_kwargs):
-        """
-        Parameters
-        ----------
-        **prophet_kwargs
-            Prophet modeline iletilecek ek parametreler
-            (örn. yearly_seasonality, weekly_seasonality).
-        """
+    def __init__(
+        self,
+        use_regressors: bool = False,
+        regressor_names: list[str] | None = None,
+        feature_names: list[str] | None = None,
+        **prophet_kwargs,
+    ):
         self.prophet_kwargs = prophet_kwargs
-        self.model: Prophet | None = None
-        # Eğitim sırasında tarih bilgisi saklanır
+        self.use_regressors = bool(use_regressors)
+        self.regressor_names = regressor_names or DEFAULT_PROPHET_REGRESSORS[:]
+        self.feature_names = feature_names
+        self.regressors_used: list[str] = []
+        self.regressors_missing: list[str] = []
+        self.model: object | None = None
         self._train_dates: pd.Series | None = None
+
+    def _feature_frame(self, X: np.ndarray | pd.DataFrame | None) -> pd.DataFrame:
+        if isinstance(X, pd.DataFrame):
+            return X.reset_index(drop=True).copy()
+        if X is None:
+            return pd.DataFrame()
+        array = np.asarray(X)
+        if array.ndim == 1:
+            array = array.reshape(-1, 1)
+        if self.feature_names and len(self.feature_names) == array.shape[1]:
+            return pd.DataFrame(array, columns=self.feature_names)
+        return pd.DataFrame(array)
+
+    def _select_train_regressors(self, X: np.ndarray | pd.DataFrame | None, length: int) -> pd.DataFrame:
+        feature_df = self._feature_frame(X).iloc[:length].reset_index(drop=True)
+        if feature_df.empty:
+            self.regressors_used = []
+            self.regressors_missing = self.regressor_names[:]
+            return pd.DataFrame(index=range(length))
+
+        self.regressors_used = [name for name in self.regressor_names if name in feature_df.columns]
+        self.regressors_missing = [name for name in self.regressor_names if name not in self.regressors_used]
+        if not self.regressors_used:
+            return pd.DataFrame(index=range(length))
+        return feature_df[self.regressors_used].copy()
 
     def train(
         self,
-        X_train: np.ndarray,
+        X_train: np.ndarray | pd.DataFrame,
         y_train: np.ndarray,
         dates_train: pd.Series | None = None,
         **kwargs,
     ) -> None:
-        """
-        Prophet modelini eğitir.
-
-        Parameters
-        ----------
-        X_train : np.ndarray  (kullanılmaz — Prophet sadece ds+y ister)
-        y_train : np.ndarray  Hedef değerler (orijinal ölçekte).
-        dates_train : pd.Series  Eğitim tarih dizisi.
-        """
+        if Prophet is None:
+            raise ImportError("prophet paketi kurulu degil; Prophet modeli atlanacak.")
         if dates_train is None:
-            raise ValueError("Prophet modeli için 'dates_train' parametresi gereklidir.")
+            raise ValueError("Prophet modeli icin 'dates_train' parametresi gereklidir.")
 
-        self._train_dates = dates_train.reset_index(drop=True)
+        y_values = np.asarray(y_train).ravel()
+        dates = pd.Series(dates_train).reset_index(drop=True)
+        n = min(len(dates), len(y_values), len(X_train) if X_train is not None else len(y_values))
+        self._train_dates = dates.iloc[:n].reset_index(drop=True)
         train_df = pd.DataFrame({
             "ds": self._train_dates,
-            "y": y_train.ravel(),
+            "y": y_values[:n],
         })
 
+        if self.use_regressors:
+            regressor_df = self._select_train_regressors(X_train, n)
+            for col in self.regressors_used:
+                train_df[col] = pd.to_numeric(regressor_df[col], errors="coerce").fillna(0.0).values
+
         self.model = Prophet(**self.prophet_kwargs)
+        for col in self.regressors_used:
+            self.model.add_regressor(col)
         self.model.fit(train_df)
-        print("[OK] Prophet modeli eğitildi.")
+        if self.use_regressors:
+            print(f"[OK] Prophet regressors used: {self.regressors_used or 'none'}")
+        print("[OK] Prophet modeli egitildi.")
 
-    def predict(self, X_test: np.ndarray, dates_test: pd.Series | None = None) -> np.ndarray:
-        """
-        Test tarihleri üzerinde tahmin üretir.
-
-        Parameters
-        ----------
-        X_test : np.ndarray   (kullanılmaz)
-        dates_test : pd.Series  Test tarih dizisi.
-
-        Returns
-        -------
-        np.ndarray  Tahmin dizisi.
-        """
+    def predict(self, X_test: np.ndarray | pd.DataFrame, dates_test: pd.Series | None = None) -> np.ndarray:
         if self.model is None:
-            raise RuntimeError("Model henüz eğitilmedi. Önce train() çağrılmalıdır.")
+            raise RuntimeError("Model henuz egitilmedi. Once train() cagrilmalidir.")
         if dates_test is None:
-            raise ValueError("Prophet tahmini için 'dates_test' parametresi gereklidir.")
+            raise ValueError("Prophet tahmini icin 'dates_test' parametresi gereklidir.")
 
-        future_df = pd.DataFrame({"ds": dates_test.reset_index(drop=True)})
+        dates = pd.Series(dates_test).reset_index(drop=True)
+        n = min(len(dates), len(X_test) if X_test is not None else len(dates))
+        future_df = pd.DataFrame({"ds": dates.iloc[:n].reset_index(drop=True)})
+
+        if self.regressors_used:
+            feature_df = self._feature_frame(X_test).iloc[:n].reset_index(drop=True)
+            for col in self.regressors_used:
+                if col in feature_df.columns:
+                    values = pd.to_numeric(feature_df[col], errors="coerce").fillna(0.0).values
+                else:
+                    values = np.zeros(n, dtype=float)
+                future_df[col] = values
+
         forecast = self.model.predict(future_df)
         return forecast["yhat"].values
 
     def save(self, path: str) -> None:
-        """Modeli .pkl olarak kaydeder."""
+        if joblib is None:
+            raise ImportError("joblib paketi kurulu degil; Prophet modeli kaydedilemez.")
         joblib.dump(self.model, path)
         print(f"[OK] Prophet modeli kaydedildi -> {path}")
 
     def load(self, path: str) -> None:
-        """Kaydedilmiş modeli diskten yükler."""
+        if joblib is None:
+            raise ImportError("joblib paketi kurulu degil; Prophet modeli yuklenemez.")
         self.model = joblib.load(path)
-        print(f"[OK] Prophet modeli yüklendi <- {path}")
+        print(f"[OK] Prophet modeli yuklendi <- {path}")

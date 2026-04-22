@@ -142,7 +142,7 @@ class AttentionLayer(Layer):
         )
         self.b = self.add_weight(
             name="attention_bias",
-            shape=(int(input_shape[1]), 1),
+            shape=(1,),
             initializer="zeros",
             trainable=True,
         )
