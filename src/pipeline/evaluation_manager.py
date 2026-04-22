@@ -13,6 +13,7 @@ import pandas as pd
 from src.backtesting import plot_equity_curves, run_backtest, save_backtest_report, save_fold_backtest_report, save_trade_logs, summarize_backtest
 from src.backtesting.signals import SignalConfig
 from src.database.stock_model_db import StockModelDB, compute_composite_score
+from src.ensemble import EnsembleModel
 from src.evaluation.financial_metrics import compute_quantile_metrics
 from src.evaluator import compute_metrics, enrich_with_benchmark_metrics, plot_comparison, plot_prediction_interval, save_metrics_report
 from src.experiments.experiment_tracker import ExperimentTracker
@@ -53,6 +54,7 @@ class EvaluationManager:
         slippage_bps: float = 5.0,
         initial_capital: float = 100000.0,
         signal_mode: str = "legacy",
+        quality_gate_mode: str = "soft",
         signal_entry_cost_multiplier: float = 2.0,
         signal_volatility_multiplier: float = 0.25,
         min_holding_bars: int = 3,
@@ -63,6 +65,7 @@ class EvaluationManager:
         max_rmse_vs_benchmark: float = 1.05,
         min_composite_score: float = 50.0,
         emergency_stop_overrides_min_hold: bool = True,
+        ensemble_enabled: bool = True,
     ):
         self.stock_symbol = stock_symbol
         self.outputs_dir = outputs_dir
@@ -81,6 +84,7 @@ class EvaluationManager:
         self.initial_capital = initial_capital
         self.signal_mode = signal_mode
         self.signal_config = SignalConfig(
+            quality_gate_mode=quality_gate_mode,
             entry_cost_multiplier=signal_entry_cost_multiplier,
             volatility_multiplier=signal_volatility_multiplier,
             min_holding_bars=min_holding_bars,
@@ -107,6 +111,8 @@ class EvaluationManager:
         self.xai_dir = os.path.join(self.outputs_dir, "xai")
         self.latest_tensors = {}
         self.latest_backtest_results = {}
+        self.ensemble_enabled = ensemble_enabled
+        self.ensemble_weights: Dict[str, Dict[str, float]] = {}
 
     @staticmethod
     def _attach_composite_scores(metrics_dict: Dict[str, Dict[str, float]]) -> Dict[str, Dict[str, float]]:
@@ -130,6 +136,9 @@ class EvaluationManager:
             model_metrics["Feature_Groups"] = str(self.dataset_metadata.get("feature_groups", {}))
             model_metrics["Scaling_Clip_Report"] = str(self.dataset_metadata.get("scaling_reports", []))
             model_metrics["Threshold_Config"] = str(self.dataset_metadata.get("signal_threshold_config", {}))
+            model_metrics["Market_Regime_Source"] = "Market_Regime_SMA200"
+            model_metrics["Prophet_Regressors_Used"] = str(self.dataset_metadata.get("prophet_regressors_used", []))
+            model_metrics["Survivorship_Bias_Check"] = str(self.dataset_metadata.get("survivorship_bias", {}))
         return metrics_dict
 
     def _signal_threshold_metadata(self) -> Dict[str, Any]:
@@ -138,13 +147,20 @@ class EvaluationManager:
             "phase": "phase6_backtest_standard",
             "source": self.signal_threshold_source,
             "selection_scope": "walk_forward_calibration_folds" if self.signal_threshold_source != "default_config" else "configured_defaults",
+            "active_from_stage": (
+                "walk_forward_backtest_signal_filtering"
+                if self.signal_threshold_source != "default_config"
+                else "initial_signal_filtering"
+            ),
             "final_holdout_optimized": False,
             "quality_thresholds": {
+                "quality_gate_mode": self.signal_config.quality_gate_mode,
                 "min_directional_accuracy": self.signal_config.min_directional_accuracy,
                 "max_rmse_vs_benchmark": self.signal_config.max_rmse_vs_benchmark,
                 "min_composite_score": self.signal_config.min_composite_score,
             },
             "default_quality_thresholds": {
+                "quality_gate_mode": self.default_signal_config.quality_gate_mode,
                 "min_directional_accuracy": self.default_signal_config.min_directional_accuracy,
                 "max_rmse_vs_benchmark": self.default_signal_config.max_rmse_vs_benchmark,
                 "min_composite_score": self.default_signal_config.min_composite_score,
@@ -218,6 +234,8 @@ class EvaluationManager:
             self.signal_threshold_calibration_summary = {
                 "status": "skipped_insufficient_calibration_folds",
                 "fold_metric_rows": len(rows),
+                "calibration_fold_count": len({row.get("Fold") for row in rows}),
+                "active_from_stage": "initial_signal_filtering",
             }
             self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
             return
@@ -248,10 +266,12 @@ class EvaluationManager:
         self.signal_threshold_calibration_summary = {
             "status": "applied",
             "fold_metric_rows": int(len(rows)),
+            "calibration_fold_count": int(calibration_df["Fold"].nunique()) if "Fold" in calibration_df.columns else None,
             "dir_acc_q25": round(float(dir_values.quantile(0.25)), 4) if not dir_values.empty else None,
             "rmse_vs_benchmark_q75": round(float(rmse_values.quantile(0.75)), 4) if not rmse_values.empty else None,
             "composite_score_q25": round(float(composite_values.quantile(0.25)), 4) if not composite_values.empty else None,
             "calibration_set": "walk_forward_folds_only",
+            "active_from_stage": "walk_forward_backtest_signal_filtering",
             "final_holdout_used": False,
         }
         self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
@@ -265,7 +285,11 @@ class EvaluationManager:
             .get("model_label", "TFT-like Quantile Sequence Model")
         )
         for model_name, model_metrics in metrics_dict.items():
-            if model_name == "TFT":
+            if model_name.startswith("Ensemble "):
+                model_metrics["Model_Family"] = "ensemble"
+                model_metrics["Ensemble_Method"] = model_name.replace("Ensemble ", "")
+                model_metrics["Ensemble_Weights"] = str(self.ensemble_weights.get(model_name, {}))
+            elif model_name == "TFT":
                 model_metrics["Model_Family"] = tft_label
             elif model_name in {"DLinear", "NLinear", "PatchTST Experimental"}:
                 model_metrics["Model_Family"] = "low_parameter_sequence_baseline"
@@ -274,6 +298,123 @@ class EvaluationManager:
             else:
                 model_metrics.setdefault("Model_Family", model_name)
         return metrics_dict
+
+    @staticmethod
+    def _weighted_average(predictions: Dict[str, np.ndarray], weights: Dict[str, float]) -> np.ndarray:
+        names = list(predictions)
+        arrays = [np.asarray(predictions[name], dtype=float).ravel() for name in names]
+        min_len = min(len(arr) for arr in arrays)
+        stacked = np.stack([arr[-min_len:] for arr in arrays], axis=0)
+        weight_array = np.asarray([weights.get(name, 0.0) for name in names], dtype=float)
+        if weight_array.sum() <= 0:
+            weight_array = np.ones(len(names), dtype=float) / len(names)
+        else:
+            weight_array = weight_array / weight_array.sum()
+        return np.average(stacked, axis=0, weights=weight_array)
+
+    def _base_predictions_for_ensemble(self, predictions: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+        return {
+            name: np.asarray(preds, dtype=float).ravel()
+            for name, preds in predictions.items()
+            if not name.startswith("Ensemble ") and len(np.asarray(preds).ravel()) > 0
+        }
+
+    def _add_single_split_ensembles(self) -> None:
+        if not self.ensemble_enabled:
+            return
+        base_preds = self._base_predictions_for_ensemble(self.predictions)
+        if len(base_preds) < 2 or self.y_true_aligned is None:
+            return
+
+        equal_name = "Ensemble Equal Weight"
+        inv_name = "Ensemble Inverse RMSE"
+        equal_preds = EnsembleModel().combine(base_preds)
+        inverse_weights = EnsembleModel.optimize_inverse_rmse(np.asarray(self.y_true_aligned), base_preds)
+        inverse_preds = EnsembleModel(inverse_weights).combine(base_preds)
+        self.ensemble_weights[equal_name] = {name: round(1.0 / len(base_preds), 6) for name in base_preds}
+        self.ensemble_weights[inv_name] = inverse_weights
+
+        base_targets = {name: self.prediction_targets[name] for name in base_preds if name in self.prediction_targets}
+        equal_target = EnsembleModel().combine(base_targets) if len(base_targets) >= 2 else None
+        inverse_target = self._weighted_average(base_targets, inverse_weights) if len(base_targets) >= 2 else None
+
+        for name, pred_price, pred_target in [
+            (equal_name, equal_preds, equal_target),
+            (inv_name, inverse_preds, inverse_target),
+        ]:
+            k = min(len(pred_price), len(self.y_true_aligned), len(self.prev_close_aligned))
+            self.predictions[name] = np.asarray(pred_price)[-k:]
+            if pred_target is not None:
+                self.prediction_targets[name] = np.asarray(pred_target)[-k:]
+            template = next(iter(self.single_backtest_inputs.values()), None)
+            if template:
+                payload = {}
+                for key, value in template.items():
+                    arr = np.asarray(value)
+                    payload[key] = arr[-k:] if arr.ndim > 0 and len(arr) >= k else value
+                payload["pred_price"] = self.predictions[name]
+                payload["pred_target"] = self.prediction_targets.get(name)
+                self.single_backtest_inputs[name] = payload
+        print("  [OK] Ensemble tahminleri eklendi: Equal Weight, Inverse RMSE")
+
+    def _add_walk_forward_ensembles(
+        self,
+        wf_results: Dict[str, Dict[str, Any]],
+        wf_predictions: Dict[str, np.ndarray],
+        wf_y_true: Any,
+        wf_backtest_inputs: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> None:
+        if not self.ensemble_enabled or wf_y_true is None:
+            return
+        base_preds = self._base_predictions_for_ensemble(wf_predictions)
+        if len(base_preds) < 2:
+            return
+
+        equal_name = "Ensemble Equal Weight"
+        inv_name = "Ensemble Inverse RMSE"
+        equal_preds = EnsembleModel().combine(base_preds)
+        inverse_weights = EnsembleModel.optimize_inverse_rmse(np.asarray(wf_y_true), base_preds)
+        inverse_preds = EnsembleModel(inverse_weights).combine(base_preds)
+        self.ensemble_weights[equal_name] = {name: round(1.0 / len(base_preds), 6) for name in base_preds}
+        self.ensemble_weights[inv_name] = inverse_weights
+
+        bt_inputs = wf_backtest_inputs or {}
+        template = next(iter(bt_inputs.values()), None)
+        base_targets = {name: bt_inputs[name]["pred_target"] for name in base_preds if name in bt_inputs and "pred_target" in bt_inputs[name]}
+        equal_target = EnsembleModel().combine(base_targets) if len(base_targets) >= 2 else None
+        inverse_target = self._weighted_average(base_targets, inverse_weights) if len(base_targets) >= 2 else None
+
+        for name, pred_price, pred_target in [
+            (equal_name, equal_preds, equal_target),
+            (inv_name, inverse_preds, inverse_target),
+        ]:
+            k = min(len(pred_price), len(np.asarray(wf_y_true).ravel()))
+            wf_predictions[name] = np.asarray(pred_price)[-k:]
+            y_true_price = np.asarray(wf_y_true).ravel()[-k:]
+            if template:
+                y_true_target = np.asarray(template.get("y_true_target", []), dtype=float).ravel()[-k:]
+                prev_close = np.asarray(template.get("prev_close", []), dtype=float).ravel()[-k:]
+            else:
+                y_true_target = None
+                prev_close = None
+            wf_results[name] = compute_metrics(
+                y_true_price,
+                wf_predictions[name],
+                y_true_target=y_true_target,
+                y_pred_target=np.asarray(pred_target)[-k:] if pred_target is not None else None,
+                prev_close=prev_close,
+                target_mode=self.dataset_metadata.get("target_mode", "log_return"),
+            )
+            if template:
+                payload = {}
+                for key, value in template.items():
+                    arr = np.asarray(value)
+                    payload[key] = arr[-k:] if arr.ndim > 0 and len(arr) >= k else value
+                payload["y_true_price"] = y_true_price
+                payload["pred_price"] = wf_predictions[name]
+                payload["pred_target"] = np.asarray(pred_target)[-k:] if pred_target is not None else None
+                bt_inputs[name] = payload
+        print("  [OK] Walk-forward ensemble tahminleri eklendi.")
 
     @staticmethod
     def _select_best_model(metrics_dict: Dict[str, Dict[str, Any]]) -> Optional[str]:
@@ -347,6 +488,7 @@ class EvaluationManager:
                 metrics_by_model[model_name] = summarize_backtest(
                     result,
                     initial_capital=self.initial_capital,
+                    trial_count=max(1, len(backtest_inputs)),
                 )
                 metrics_by_model[model_name].update({
                     "Target_Semantics": self.dataset_metadata.get("target_semantics", ""),
@@ -372,9 +514,22 @@ class EvaluationManager:
 
         save_backtest_report(metrics_by_model, report_path)
         save_trade_logs(trades_by_model, trades_path)
+        self._save_signal_gate_diagnostics(
+            backtest_inputs=backtest_inputs,
+            backtest_results=results,
+            backtest_metrics=metrics_by_model,
+            model_metrics_by_model=model_metrics_by_model or {},
+            suffix=suffix,
+            target_mode=target_mode,
+        )
         if suffix == "wf":
             fold_report_path = os.path.join(self.outputs_dir, "backtest_fold_report_v6_wf.csv")
-            save_fold_backtest_report(results, fold_report_path, initial_capital=self.initial_capital)
+            save_fold_backtest_report(
+                results,
+                fold_report_path,
+                initial_capital=self.initial_capital,
+                trial_count=max(1, len(backtest_inputs)),
+            )
         plot_equity_curves(
             equity_curves,
             save_path=equity_path,
@@ -389,6 +544,138 @@ class EvaluationManager:
                 title=f"{self.stock_symbol} - Selected Backtest Equity Curve [{suffix}]",
                 selected_models=self.selected_models,
             )
+
+    def _save_signal_gate_diagnostics(
+        self,
+        *,
+        backtest_inputs: Dict[str, Dict[str, Any]],
+        backtest_results: Dict[str, Dict[str, Any]],
+        backtest_metrics: Dict[str, Dict[str, Any]],
+        model_metrics_by_model: Dict[str, Dict[str, Any]],
+        suffix: str,
+        target_mode: str,
+    ) -> None:
+        rows = []
+        for model_name, payload in backtest_inputs.items():
+            current_result = backtest_results.get(model_name, {})
+            current_curve = current_result.get("equity_curve", pd.DataFrame())
+            current_states = (
+                current_curve["Risk_State"].astype(str)
+                if isinstance(current_curve, pd.DataFrame) and "Risk_State" in current_curve.columns
+                else pd.Series(dtype=str)
+            )
+            model_metrics = model_metrics_by_model.get(model_name, {})
+            bt_metrics = backtest_metrics.get(model_name, {})
+            n_bars = int(len(current_curve)) if isinstance(current_curve, pd.DataFrame) else 0
+            dir_acc = self._diagnostic_float(model_metrics.get("Dir_Acc"))
+            rmse_vs_benchmark = self._diagnostic_float(model_metrics.get("RMSE_vs_benchmark"))
+            composite_score = self._diagnostic_float(model_metrics.get("Composite_Score"))
+
+            probe_status = "skipped_benchmark_only"
+            probe_curve = pd.DataFrame()
+            if model_name not in self.signal_config.benchmark_only_models:
+                try:
+                    probe_result = run_backtest(
+                        dates=payload.get("dates"),
+                        prediction_dates=payload.get("prediction_dates"),
+                        y_true_price=payload["y_true_price"],
+                        pred_price=payload["pred_price"],
+                        prev_close=payload["prev_close"],
+                        fold_ids=payload.get("fold_ids"),
+                        pred_target=payload.get("pred_target"),
+                        model_name=model_name,
+                        validation_mode=f"{suffix}_gate_probe",
+                        target_mode=target_mode,
+                        commission_bps=self.commission_bps,
+                        slippage_bps=self.slippage_bps,
+                        signal_mode="professional",
+                        signal_config=self.signal_config,
+                        model_metrics={},
+                    )
+                    probe_curve = probe_result.get("equity_curve", pd.DataFrame())
+                    probe_status = "ok"
+                except Exception as exc:
+                    probe_status = f"failed: {exc}"
+
+            expected_return = self._diagnostic_numeric(probe_curve, "Expected_Return")
+            entry_threshold = self._diagnostic_numeric(probe_curve, "Entry_Threshold")
+            if expected_return.size == 0:
+                expected_return = self._payload_expected_return(payload, target_mode)
+
+            above_entry = np.array([], dtype=bool)
+            if expected_return.size and entry_threshold.size:
+                k = min(expected_return.size, entry_threshold.size)
+                above_entry = expected_return[-k:] > entry_threshold[-k:]
+
+            rows.append({
+                "Model": model_name,
+                "Validation_Suffix": suffix,
+                "Gate_Mode": f"{self.signal_mode}_current",
+                "Probe_Status": probe_status,
+                "Dir_Acc": dir_acc,
+                "RMSE_vs_benchmark": rmse_vs_benchmark,
+                "Composite_Score": composite_score,
+                "Would_Buy_Count": self._count_decision(probe_curve, "BUY"),
+                "Blocked_By_DirAcc": n_bars if np.isfinite(dir_acc) and dir_acc < self.signal_config.min_directional_accuracy else 0,
+                "Blocked_By_RMSE": n_bars if np.isfinite(rmse_vs_benchmark) and rmse_vs_benchmark > self.signal_config.max_rmse_vs_benchmark else 0,
+                "Blocked_By_Composite": n_bars if np.isfinite(composite_score) and composite_score < self.signal_config.min_composite_score else 0,
+                "Primary_Blocked_By_DirAcc": int((current_states == "quality_dir_acc").sum()),
+                "Primary_Blocked_By_RMSE": int((current_states == "quality_rmse").sum()),
+                "Primary_Blocked_By_Composite": int((current_states == "quality_composite").sum()),
+                "Blocked_By_BenchmarkOnly": int((current_states == "benchmark_only").sum()),
+                "Below_Entry_Threshold": int((probe_curve.get("Risk_State", pd.Series(dtype=str)).astype(str) == "below_threshold").sum()) if isinstance(probe_curve, pd.DataFrame) else 0,
+                "Trade_Count": self._diagnostic_float(bt_metrics.get("Trade_Count")),
+                "Exposure": self._diagnostic_float(bt_metrics.get("Exposure")),
+                "Net_Return": self._diagnostic_float(bt_metrics.get("Net_Return")),
+                "BuyHold_Return": self._diagnostic_float(bt_metrics.get("BuyHold_Return")),
+                "Mean_Abs_Predicted_Return": float(np.nanmean(np.abs(expected_return))) if expected_return.size else np.nan,
+                "Median_Entry_Threshold": float(np.nanmedian(entry_threshold)) if entry_threshold.size else np.nan,
+                "Pct_Pred_Above_Threshold": float(np.nanmean(above_entry) * 100.0) if above_entry.size else np.nan,
+                "Min_Directional_Accuracy_Config": self.signal_config.min_directional_accuracy,
+                "Max_RMSE_vs_Benchmark_Config": self.signal_config.max_rmse_vs_benchmark,
+                "Min_Composite_Score_Config": self.signal_config.min_composite_score,
+                "Entry_Cost_Multiplier": self.signal_config.entry_cost_multiplier,
+                "Volatility_Multiplier": self.signal_config.volatility_multiplier,
+            })
+
+        if not rows:
+            return
+
+        diagnostics_df = pd.DataFrame(rows)
+        diagnostics_path = os.path.join(self.outputs_dir, f"signal_gate_diagnostics_v1_{suffix}.csv")
+        output_paths = write_csv_and_aligned_view(diagnostics_df, diagnostics_path)
+        print(f"[OK] Signal gate diagnostik raporu kaydedildi -> {output_paths['csv']}")
+
+    @staticmethod
+    def _diagnostic_numeric(frame: pd.DataFrame, column: str) -> np.ndarray:
+        if not isinstance(frame, pd.DataFrame) or column not in frame.columns:
+            return np.array([], dtype=float)
+        return pd.to_numeric(frame[column], errors="coerce").dropna().to_numpy(dtype=float)
+
+    @staticmethod
+    def _diagnostic_float(value: Any) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return np.nan
+
+    @staticmethod
+    def _count_decision(frame: pd.DataFrame, decision: str) -> int:
+        if not isinstance(frame, pd.DataFrame) or "Decision" not in frame.columns:
+            return 0
+        return int((frame["Decision"].astype(str) == decision).sum())
+
+    @staticmethod
+    def _payload_expected_return(payload: Dict[str, Any], target_mode: str) -> np.ndarray:
+        pred_target = payload.get("pred_target")
+        if pred_target is not None and target_mode in {"log_return", "return"}:
+            return np.asarray(pred_target, dtype=float).ravel()
+        pred_price = np.asarray(payload.get("pred_price", []), dtype=float).ravel()
+        prev_close = np.asarray(payload.get("prev_close", []), dtype=float).ravel()
+        k = min(len(pred_price), len(prev_close))
+        if k == 0:
+            return np.array([], dtype=float)
+        return (pred_price[-k:] / np.maximum(prev_close[-k:], 1e-12)) - 1.0
 
     def _run_xai_single_split(self, trained_models: dict, tensors: dict) -> None:
         if not self.predictions:
@@ -519,6 +806,8 @@ class EvaluationManager:
                     "pred_target": preds_target,
                     "y_true_target": y_true_target_aligned,
                 }
+                if name == "Prophet":
+                    self.dataset_metadata["prophet_regressors_used"] = getattr(model, "regressors_used", [])
                 print(f"  [OK] {name} tahmini uretildi - {len(raw_preds[name])} adim")
             except Exception as exc:
                 print(f"  [WARN] {name} tahmini basarisiz, atlaniyor: {exc}")
@@ -533,6 +822,7 @@ class EvaluationManager:
         self.y_true_aligned = y_test_price[-min_len:]
         self.y_true_target_aligned = y_test_target[-min_len:]
         self.prev_close_aligned = prev_close_test[-min_len:]
+        self._add_single_split_ensembles()
 
     def _predict_single_model(
         self,
@@ -561,6 +851,7 @@ class EvaluationManager:
 
         if model_name == "Prophet":
             preds_target = model.predict(tensors["X_test"], dates_test=tensors["dates_test"])
+            self.dataset_metadata["prophet_regressors_used"] = getattr(model, "regressors_used", [])
         elif model_name in tree_models:
             preds_scaled = model.predict(tensors["X_test_s"])
             preds_target = tensors["scaler_y"].inverse_transform(np.asarray(preds_scaled).reshape(-1, 1)).ravel()
@@ -768,7 +1059,8 @@ class EvaluationManager:
 
             original_model = trained_models.get(name)
             if original_model is None:
-                print(f"  [WARN] {name} icin kayitli model bulunamadi, dosya kaydi atlaniyor.")
+                if not name.startswith("Ensemble "):
+                    print(f"  [WARN] {name} icin kayitli model bulunamadi, dosya kaydi atlaniyor.")
                 model_path = ""
             else:
                 original_model.save(model_path)
@@ -834,6 +1126,7 @@ class EvaluationManager:
         print("  ADIM 7 | Degerlendirme Gosterimi (Walk-Forward)")
         print("=" * 60)
 
+        self._add_walk_forward_ensembles(wf_results, wf_predictions, wf_y_true, wf_backtest_inputs)
         wf_results = self._attach_composite_scores(wf_results)
         enriched_fold_metrics = self._enrich_wf_fold_metrics(wf_fold_metrics or {})
         self._save_wf_fold_metric_report(enriched_fold_metrics)

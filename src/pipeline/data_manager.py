@@ -49,10 +49,17 @@ class DataManager:
         wf_test_size: int = 21,
         wf_max_train_size: int | None = 756,
         wf_window_type: str = "sliding",
+        wf_embargo_size: int | None = None,
         final_holdout_size: int = 60,
         prune_correlated_features: bool = False,
         correlation_threshold: float = 0.98,
+        lag_feature_count: int = 5,
+        universe_file: str = "data/bist_universe.csv",
         clip_shift_warning_threshold_pct: float = 1.0,
+        training_window_years: int | None = 5,
+        window_candidates: list[int | None] | None = None,
+        min_history_days: int = 504,
+        new_listing_min_days: int = 252,
     ):
         self.data_file  = data_file
         self.test_ratio = test_ratio
@@ -84,7 +91,17 @@ class DataManager:
         self.macro_cpi_lag_days = macro_cpi_lag_days
         self.prune_correlated_features = prune_correlated_features
         self.correlation_threshold = correlation_threshold
+        self.lag_feature_count = max(0, int(lag_feature_count))
+        self.project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self.universe_file = universe_file
+        if self.universe_file and not os.path.isabs(self.universe_file):
+            self.universe_file = os.path.join(self.project_root, self.universe_file)
         self.clip_shift_warning_threshold_pct = clip_shift_warning_threshold_pct
+        self.training_window_years = training_window_years
+        self.window_candidates = window_candidates or [3, 5, 7, 10, None]
+        self.min_history_days = int(min_history_days)
+        self.new_listing_min_days = int(new_listing_min_days)
+        effective_wf_embargo_size = self.time_steps if wf_embargo_size is None else max(0, int(wf_embargo_size))
         if wf_window_type not in {"sliding", "expanding"}:
             raise ValueError("wf_window_type 'sliding' veya 'expanding' olmalidir.")
         if wf_window_type == "expanding":
@@ -96,6 +113,7 @@ class DataManager:
             "wf_test_size": wf_test_size,
             "wf_max_train_size": wf_max_train_size,
             "wf_window_type": wf_window_type,
+            "wf_embargo_size": effective_wf_embargo_size,
             "final_holdout_size": final_holdout_size,
         }
         self.dataset_metadata: dict      = {}
@@ -103,6 +121,8 @@ class DataManager:
         self.corporate_action_report: dict = {}
         self.feature_groups: dict[str, str] = {}
         self.feature_pruning_report: dict = {}
+        self.survivorship_bias_report: dict = {}
+        self.training_window_report: dict = {}
         self.scaling_reports: list[dict] = []
         self._prepare_tensors_call_idx = 0
 
@@ -116,6 +136,7 @@ class DataManager:
         DataUpdater.check_and_update(self.data_file, self.stock_symbol)
         raw_df = load_data(self.data_file)
         self.corporate_action_report = dict(raw_df.attrs.get("corporate_action_report", {}))
+        raw_df = self._apply_training_window(raw_df)
 
         # Makro veri (isteğe bağlı)
         macro_df = None
@@ -127,11 +148,13 @@ class DataManager:
             feature_mode=self.feature_mode,
             prune_correlated_features=self.prune_correlated_features,
             correlation_threshold=self.correlation_threshold,
+            lag_feature_count=self.lag_feature_count,
         )
         self.df           = feature_pipeline.engineer_features(raw_df, macro_df=macro_df)
         self.feature_names = feature_pipeline.feature_names
         self.feature_groups = feature_pipeline.feature_groups
         self.feature_pruning_report = feature_pipeline.pruning_report
+        self.survivorship_bias_report = self._check_survivorship_bias()
 
         # Özet
         has_rel_str  = "Relative_Strength" in self.feature_names
@@ -161,7 +184,167 @@ class DataManager:
                 "  [FEATURE] Pruning   : "
                 f"{len(self.feature_pruning_report.get('dropped_features', []))} feature dropped"
             )
+        if self.training_window_report:
+            print(
+                "  [DATA] Train window  : "
+                f"{self.training_window_report.get('effective_training_window_years_label')} "
+                f"({self.training_window_report.get('effective_date_start')} -> "
+                f"{self.training_window_report.get('effective_date_end')}, "
+                f"{self.training_window_report.get('history_days')} satir)"
+            )
         self._refresh_dataset_metadata()
+
+    def _apply_training_window(self, raw_df: pd.DataFrame) -> pd.DataFrame:
+        if raw_df is None or raw_df.empty:
+            self.training_window_report = {
+                "status": "empty_dataset",
+                "requested_training_window_years": self.training_window_years,
+                "window_candidates": self._format_window_candidates(),
+                "min_history_days": self.min_history_days,
+                "new_listing_min_days": self.new_listing_min_days,
+            }
+            return raw_df
+
+        df = raw_df.copy()
+        df["Date"] = pd.to_datetime(df["Date"])
+        df.sort_values("Date", inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        df.attrs.update(raw_df.attrs)
+
+        raw_start = pd.to_datetime(df["Date"].iloc[0]).normalize()
+        raw_end = pd.to_datetime(df["Date"].iloc[-1]).normalize()
+        raw_history_days = int(len(df))
+        new_listing_mode = raw_history_days < self.new_listing_min_days
+        insufficient_history = raw_history_days < self.min_history_days
+
+        effective_df = df
+        effective_years = self.training_window_years
+        effective_label = "all"
+        cutoff_date = None
+        status = "all_data_used"
+
+        if self.training_window_years is not None:
+            window_years = int(self.training_window_years)
+            cutoff_date = raw_end - pd.DateOffset(years=window_years)
+            candidate_df = df[df["Date"] >= cutoff_date].copy()
+            if len(candidate_df) >= self.min_history_days and len(candidate_df) < len(df):
+                effective_df = candidate_df
+                effective_df.reset_index(drop=True, inplace=True)
+                effective_df.attrs.update(raw_df.attrs)
+                effective_label = f"{window_years}y"
+                status = "window_applied"
+            elif len(candidate_df) < self.min_history_days:
+                effective_years = None
+                status = "window_skipped_min_history"
+            else:
+                effective_years = None
+                effective_label = "all"
+                status = "window_not_needed"
+        else:
+            effective_years = None
+
+        effective_start = pd.to_datetime(effective_df["Date"].iloc[0]).normalize()
+        effective_end = pd.to_datetime(effective_df["Date"].iloc[-1]).normalize()
+        self.training_window_report = {
+            "status": status,
+            "raw_date_start": raw_start.strftime("%Y-%m-%d"),
+            "raw_date_end": raw_end.strftime("%Y-%m-%d"),
+            "raw_history_days": raw_history_days,
+            "requested_training_window_years": self.training_window_years,
+            "effective_training_window_years": effective_years,
+            "effective_training_window_years_label": effective_label,
+            "effective_date_start": effective_start.strftime("%Y-%m-%d"),
+            "effective_date_end": effective_end.strftime("%Y-%m-%d"),
+            "history_days": int(len(effective_df)),
+            "min_history_days": self.min_history_days,
+            "new_listing_min_days": self.new_listing_min_days,
+            "new_listing_mode": bool(new_listing_mode),
+            "insufficient_history_warning": bool(insufficient_history),
+            "window_candidates": self._format_window_candidates(),
+            "cutoff_date": "" if cutoff_date is None else pd.to_datetime(cutoff_date).strftime("%Y-%m-%d"),
+            "filter_stage": "raw_after_load_before_feature_engineering",
+        }
+        return effective_df
+
+    def _format_window_candidates(self) -> list[str]:
+        return ["all" if years is None else f"{int(years)}y" for years in self.window_candidates]
+
+    def _check_survivorship_bias(self) -> dict:
+        if self.df is None or self.df.empty:
+            return {"survivorship_bias_warning": True, "status": "empty_dataset"}
+
+        date_start = pd.to_datetime(self.df["Date"].iloc[0]).normalize()
+        date_end = pd.to_datetime(self.df["Date"].iloc[-1]).normalize()
+        report = {
+            "universe_file": self.universe_file,
+            "symbol": self.stock_symbol,
+            "date_start": date_start.strftime("%Y-%m-%d"),
+            "date_end": date_end.strftime("%Y-%m-%d"),
+            "required_schema": "Symbol,Listed_Date,Delisted_Date,Status",
+        }
+
+        if not self.universe_file or not os.path.exists(self.universe_file):
+            report.update({
+                "universe_file_exists": False,
+                "symbol_found": False,
+                "coverage_ok": None,
+                "survivorship_bias_warning": True,
+                "status": "missing_universe_file",
+            })
+            print("  [DATA] Survivorship bias kontrolu: universe dosyasi yok, uyari kaydedildi.")
+            return report
+
+        try:
+            universe = pd.read_csv(self.universe_file)
+            required = {"Symbol", "Listed_Date", "Delisted_Date", "Status"}
+            missing = sorted(required - set(universe.columns))
+            if missing:
+                report.update({
+                    "universe_file_exists": True,
+                    "symbol_found": False,
+                    "coverage_ok": False,
+                    "survivorship_bias_warning": True,
+                    "status": f"invalid_schema_missing_{','.join(missing)}",
+                })
+                return report
+
+            symbol_rows = universe[universe["Symbol"].astype(str).str.upper() == self.stock_symbol.upper()].copy()
+            if symbol_rows.empty:
+                report.update({
+                    "universe_file_exists": True,
+                    "symbol_found": False,
+                    "coverage_ok": False,
+                    "survivorship_bias_warning": True,
+                    "status": "symbol_not_found",
+                })
+                return report
+
+            row = symbol_rows.iloc[0]
+            listed = pd.to_datetime(row.get("Listed_Date"), errors="coerce")
+            delisted = pd.to_datetime(row.get("Delisted_Date"), errors="coerce")
+            listed_ok = pd.isna(listed) or listed.normalize() <= date_start
+            delisted_ok = pd.isna(delisted) or delisted.normalize() >= date_end
+            coverage_ok = bool(listed_ok and delisted_ok)
+            report.update({
+                "universe_file_exists": True,
+                "symbol_found": True,
+                "listed_date": "" if pd.isna(listed) else listed.strftime("%Y-%m-%d"),
+                "delisted_date": "" if pd.isna(delisted) else delisted.strftime("%Y-%m-%d"),
+                "status_value": row.get("Status", ""),
+                "coverage_ok": coverage_ok,
+                "survivorship_bias_warning": not coverage_ok,
+                "status": "covered" if coverage_ok else "symbol_not_listed_for_full_period",
+            })
+            return report
+        except Exception as exc:
+            report.update({
+                "universe_file_exists": True,
+                "symbol_found": False,
+                "coverage_ok": False,
+                "survivorship_bias_warning": True,
+                "status": f"universe_read_failed: {exc}",
+            })
+            return report
 
     def _fetch_macro(self, raw_df: pd.DataFrame) -> pd.DataFrame:
         """MacroPipeline'ı çağırır; başarısız olursa boş DataFrame döner."""
@@ -211,6 +394,8 @@ class DataManager:
             "feature_groups": self.feature_groups,
             "feature_pruning": self.feature_pruning_report,
             "corporate_action": self.corporate_action_report,
+            "survivorship_bias": self.survivorship_bias_report,
+            "training_window": self.training_window_report,
         }
         payload = json.dumps(self.dataset_metadata, ensure_ascii=False, sort_keys=True)
         self.dataset_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
@@ -270,7 +455,12 @@ class DataManager:
             "Beklenen: price, return, log_return"
         )
 
-    def prepare_tensors(self, train_df: pd.DataFrame, test_df: pd.DataFrame) -> dict:
+    def prepare_tensors(
+        self,
+        train_df: pd.DataFrame,
+        test_df: pd.DataFrame,
+        context_df: pd.DataFrame | None = None,
+    ) -> dict:
         """
         Train/test DataFrame'lerini model eğitimine uygun tensörlere çevirir.
         Scaler yalnızca train verisi üzerine fit edilir.
@@ -287,6 +477,7 @@ class DataManager:
 
         train_close = train_df["Close"].values.astype(float)
         test_close = test_df["Close"].values.astype(float)
+        context_df = context_df.copy() if context_df is not None and not context_df.empty else None
 
         if len(train_df) < 2 or len(test_df) < 2:
             raise ValueError("t+1 hedefi için train ve test setlerinde en az 2 satır gerekir.")
@@ -315,8 +506,20 @@ class DataManager:
 
         # İlk test örneği için son time_steps-1 train günü + ilk test günü kullanılır.
         prefix_len = max(0, self.time_steps - 1)
-        X_test_input = np.vstack((X_train_s[-prefix_len:], X_test_s))
-        y_test_input = np.vstack((y_train_s[-prefix_len:], y_test_s))
+        if context_df is not None and prefix_len > 0:
+            prefix_source = pd.concat([train_df.tail(prefix_len), context_df], ignore_index=True)
+            X_prefix_raw = prefix_source[features].tail(prefix_len).values
+            X_prefix_s = scaler_X.transform(X_prefix_raw)
+            clip_report = getattr(scaler_X, "clip_report_", {}) or {}
+            if clip_report.get("clip_low") is not None and clip_report.get("clip_high") is not None:
+                X_prefix_s = np.clip(X_prefix_s, clip_report["clip_low"], clip_report["clip_high"])
+            y_prefix_s = np.zeros((len(X_prefix_s), 1), dtype=float)
+        else:
+            X_prefix_s = X_train_s[-prefix_len:] if prefix_len else np.empty((0, X_train_s.shape[1]))
+            y_prefix_s = y_train_s[-prefix_len:] if prefix_len else np.empty((0, 1))
+
+        X_test_input = np.vstack((X_prefix_s, X_test_s))
+        y_test_input = np.vstack((y_prefix_s, y_test_s))
         X_test_seq, y_test_seq = create_sequences(
             X_test_input, y_test_input, time_steps=self.time_steps
         )
@@ -337,6 +540,7 @@ class DataManager:
             "scaler_X": scaler_X,
             "scaler_y": scaler_y,
             "clip_report": getattr(scaler_X, "clip_report_", {}),
+            "context_rows": 0 if context_df is None else len(context_df),
             "original_y_test_aligned": test_close[1:],
             "prev_close_test": test_prev_close,
             "train_close_last": float(train_close[-1]),
@@ -400,6 +604,7 @@ class DataManager:
             holdout_size = int(self.validation_config.get("final_holdout_size", 0) or 0)
             min_required = (
                 self.validation_config["wf_min_train_size"]
+                + self.validation_config["wf_embargo_size"]
                 + self.validation_config["wf_test_size"] * self.validation_config["wf_n_splits"]
                 + holdout_size
             )
@@ -426,6 +631,7 @@ class DataManager:
                 # Durağan olmayan (trend gösteren) BIST hisselerinde MinMaxScaler'ın
                 # neden olduğu sistematik küçük tahmini engeller.
                 max_train_size=self.validation_config["wf_max_train_size"],
+                embargo_size=self.validation_config["wf_embargo_size"],
             )
             print(
                 "  [INFO] Walk-Forward splitleri olusturuldu "
@@ -449,8 +655,13 @@ class DataManager:
                 "Test_Rows": len(test_df),
                 "Train_Date_Start": split.get("train_date_start"),
                 "Train_Date_End": split.get("train_date_end"),
+                "Embargo_Rows": len(split.get("embargo_context", [])),
+                "Embargo_Date_Start": split.get("embargo_date_start"),
+                "Embargo_Date_End": split.get("embargo_date_end"),
                 "Test_Date_Start": split.get("test_date_start"),
                 "Test_Date_End": split.get("test_date_end"),
+                "Effective_Train_End": split.get("effective_train_end"),
+                "Test_Start": split.get("test_start"),
                 "Scaler_Fit_Start": split.get("train_date_start"),
                 "Scaler_Fit_End": split.get("train_date_end"),
                 "Features_Count": len(self.feature_names),
@@ -520,6 +731,24 @@ class DataManager:
         scaling_path = os.path.join(outputs_dir, "scaling_clip_report_v1.csv")
         pd.DataFrame(self.scaling_reports).to_csv(scaling_path, sep=";", index=False, encoding="utf-8-sig")
         paths["scaling_clip"] = scaling_path
+
+        survivorship_path = os.path.join(outputs_dir, "data_quality_survivorship_v1.csv")
+        pd.DataFrame([self.survivorship_bias_report or {}]).to_csv(
+            survivorship_path,
+            sep=";",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        paths["survivorship"] = survivorship_path
+
+        training_window_path = os.path.join(outputs_dir, "data_training_window_v1.csv")
+        pd.DataFrame([self.training_window_report or {}]).to_csv(
+            training_window_path,
+            sep=";",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        paths["training_window"] = training_window_path
 
         print(f"  [INFO] Data quality raporlari kaydedildi -> {outputs_dir}")
         return paths

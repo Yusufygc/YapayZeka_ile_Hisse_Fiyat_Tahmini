@@ -34,6 +34,7 @@ class ForecastingPipeline:
         slippage_bps: float = 5.0,
         initial_capital: float = 100000.0,
         signal_mode: str = "legacy",
+        quality_gate_mode: str = "soft",
         signal_entry_cost_multiplier: float = 2.0,
         signal_volatility_multiplier: float = 0.25,
         min_holding_bars: int = 3,
@@ -51,11 +52,20 @@ class ForecastingPipeline:
         wf_test_size: int = 21,
         wf_max_train_size: int | None = 756,
         wf_window_type: str = "sliding",
+        wf_embargo_size: int | None = None,
         final_holdout_size: int = 60,
         model_config: dict | None = None,
         prune_correlated_features: bool = False,
         correlation_threshold: float = 0.98,
+        lag_feature_count: int = 5,
+        use_prophet_macro_regressors: bool = True,
+        ensemble_enabled: bool = True,
+        universe_file: str = "data/bist_universe.csv",
         clip_shift_warning_threshold_pct: float = 1.0,
+        training_window_years: int | None = 5,
+        window_candidates: list[int | None] | None = None,
+        min_history_days: int = 504,
+        new_listing_min_days: int = 252,
     ):
         self.data_file = data_file
         self.validation_mode = validation_mode
@@ -68,6 +78,7 @@ class ForecastingPipeline:
         self.slippage_bps = slippage_bps
         self.initial_capital = initial_capital
         self.signal_mode = signal_mode
+        self.quality_gate_mode = quality_gate_mode
         self.signal_entry_cost_multiplier = signal_entry_cost_multiplier
         self.signal_volatility_multiplier = signal_volatility_multiplier
         self.min_holding_bars = min_holding_bars
@@ -85,10 +96,24 @@ class ForecastingPipeline:
         self.wf_test_size = wf_test_size
         self.wf_max_train_size = wf_max_train_size
         self.wf_window_type = wf_window_type
+        self.wf_embargo_size = wf_embargo_size
         self.final_holdout_size = final_holdout_size
         self.prune_correlated_features = prune_correlated_features
         self.correlation_threshold = correlation_threshold
+        self.lag_feature_count = lag_feature_count
+        self.use_prophet_macro_regressors = use_prophet_macro_regressors
+        self.ensemble_enabled = ensemble_enabled
+        self.universe_file = universe_file
         self.clip_shift_warning_threshold_pct = clip_shift_warning_threshold_pct
+        self.training_window_years = training_window_years
+        self.window_candidates = window_candidates or [3, 5, 7, 10, None]
+        self.min_history_days = min_history_days
+        self.new_listing_min_days = new_listing_min_days
+        if self.wf_window_type == "sliding" and self.training_window_years is not None:
+            self.wf_max_train_size = max(
+                int(self.training_window_years) * 252,
+                int(self.wf_max_train_size or 0),
+            )
         self.model_config = model_config or {
             "arima": {"auto_order": False, "order": (1, 0, 0)},
             "deep_learning": {
@@ -123,7 +148,10 @@ class ForecastingPipeline:
                 "patchtst_config": {"lookback": 128, "patch_length": 16, "stride": 8, "alpha": 1.0},
             },
             "gradient_boosting": {"lightgbm_optional": True},
+            "prophet": {"use_regressors": self.use_prophet_macro_regressors},
         }
+        self.model_config.setdefault("prophet", {})
+        self.model_config["prophet"].setdefault("use_regressors", self.use_prophet_macro_regressors)
 
         set_global_seed(42)
 
@@ -158,10 +186,17 @@ class ForecastingPipeline:
             wf_test_size=self.wf_test_size,
             wf_max_train_size=self.wf_max_train_size,
             wf_window_type=self.wf_window_type,
+            wf_embargo_size=self.wf_embargo_size,
             final_holdout_size=self.final_holdout_size,
             prune_correlated_features=self.prune_correlated_features,
             correlation_threshold=self.correlation_threshold,
+            lag_feature_count=self.lag_feature_count,
+            universe_file=self.universe_file,
             clip_shift_warning_threshold_pct=self.clip_shift_warning_threshold_pct,
+            training_window_years=self.training_window_years,
+            window_candidates=self.window_candidates,
+            min_history_days=self.min_history_days,
+            new_listing_min_days=self.new_listing_min_days,
         )
 
         self.model_trainer = None
@@ -186,8 +221,14 @@ class ForecastingPipeline:
             f"min_train={self.wf_min_train_size}, max_train={self.wf_max_train_size}, "
             f"type={self.wf_window_type}, holdout={self.final_holdout_size}"
         )
+        print(
+            "  [INFO] Data Window : "
+            f"training_window_years={self.training_window_years}, "
+            f"min_history={self.min_history_days}, new_listing_min={self.new_listing_min_days}"
+        )
         print(f"  [INFO] Backtest    : {'acik' if self.backtest_enabled else 'kapali'}")
         print(f"  [INFO] Signal Mode : {self.signal_mode}")
+        print(f"  [INFO] Quality Gate: {self.quality_gate_mode}")
         print(
             "  [INFO] Feature QC  : "
             f"corr_prune={self.prune_correlated_features}, "
@@ -225,6 +266,7 @@ class ForecastingPipeline:
             "selection_scope": "configured_defaults_or_calibration_set",
             "final_holdout_optimized": False,
             "quality_thresholds": {
+                "quality_gate_mode": self.quality_gate_mode,
                 "min_directional_accuracy": self.min_directional_accuracy,
                 "max_rmse_vs_benchmark": self.max_rmse_vs_benchmark,
                 "min_composite_score": self.min_composite_score,
@@ -265,6 +307,7 @@ class ForecastingPipeline:
             slippage_bps=self.slippage_bps,
             initial_capital=self.initial_capital,
             signal_mode=self.signal_mode,
+            quality_gate_mode=self.quality_gate_mode,
             signal_entry_cost_multiplier=self.signal_entry_cost_multiplier,
             signal_volatility_multiplier=self.signal_volatility_multiplier,
             min_holding_bars=self.min_holding_bars,
@@ -275,6 +318,7 @@ class ForecastingPipeline:
             max_rmse_vs_benchmark=self.max_rmse_vs_benchmark,
             min_composite_score=self.min_composite_score,
             emergency_stop_overrides_min_hold=self.emergency_stop_overrides_min_hold,
+            ensemble_enabled=self.ensemble_enabled,
         )
 
         print("\n" + "=" * 60)

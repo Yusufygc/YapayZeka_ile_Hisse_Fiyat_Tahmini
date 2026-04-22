@@ -108,6 +108,16 @@ class ModelTrainer:
     def _arima_config(self) -> dict:
         return self.model_config.get("arima", {})
 
+    def _make_prophet(self) -> ProphetModel:
+        cfg = self.model_config.get("prophet", {})
+        return ProphetModel(
+            yearly_seasonality=True,
+            weekly_seasonality=True,
+            use_regressors=bool(cfg.get("use_regressors", False)),
+            regressor_names=cfg.get("regressor_names"),
+            feature_names=self.feature_names,
+        )
+
     def _make_arima(self) -> ARIMAModel:
         cfg = self._arima_config()
         return ARIMAModel(
@@ -224,7 +234,7 @@ class ModelTrainer:
         cls = self._model_class_for_name(model_name)
 
         if model_name == "Prophet":
-            model = cls(yearly_seasonality=True, weekly_seasonality=True)
+            model = self._make_prophet()
             model.train(tensors["X_train"], tensors["y_train"], dates_train=tensors["dates_train"])
         elif model_name in _TREE_MODELS:
             model = cls()
@@ -274,7 +284,7 @@ class ModelTrainer:
 
         if not self._skip("Prophet"):
             try:
-                prophet = ProphetModel(yearly_seasonality=True, weekly_seasonality=True)
+                prophet = self._make_prophet()
                 prophet.train(tensors["X_train"], tensors["y_train"], dates_train=tensors["dates_train"])
                 self.trained_models["Prophet"] = prophet
             except Exception as exc:
@@ -303,8 +313,8 @@ class ModelTrainer:
                 self.trained_models["TFT"] = tft
 
     def train_walk_forward(self, wf_splits: list, data_manager):
-        def preprocessor_baseline(train_df, test_df):
-            t = data_manager.prepare_tensors(train_df, test_df)
+        def preprocessor_baseline(train_df, test_df, context_df=None):
+            t = data_manager.prepare_tensors(train_df, test_df, context_df=context_df)
             return (
                 t["X_train"], t["y_train"],
                 t["X_test"], t["y_test"],
@@ -316,8 +326,8 @@ class ModelTrainer:
                 t["y_test"],
             )
 
-        def preprocessor_tree(train_df, test_df):
-            t = data_manager.prepare_tensors(train_df, test_df)
+        def preprocessor_tree(train_df, test_df, context_df=None):
+            t = data_manager.prepare_tensors(train_df, test_df, context_df=context_df)
             return (
                 t["X_train_s"], t["y_train_s"],
                 t["X_test_s"], t["y_test_s"],
@@ -329,8 +339,8 @@ class ModelTrainer:
                 t["y_test"],
             )
 
-        def preprocessor_seq(train_df, test_df):
-            t = data_manager.prepare_tensors(train_df, test_df)
+        def preprocessor_seq(train_df, test_df, context_df=None):
+            t = data_manager.prepare_tensors(train_df, test_df, context_df=context_df)
             return (
                 t["X_train_seq"], t["y_train_seq"],
                 t["X_test_seq"], t["y_test_seq"],
