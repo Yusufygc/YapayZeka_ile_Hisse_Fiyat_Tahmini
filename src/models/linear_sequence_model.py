@@ -1,0 +1,170 @@
+# -*- coding: utf-8 -*-
+"""
+linear_sequence_model.py - DLinear/NLinear style lightweight sequence baselines.
+
+These are intentionally low-parameter experimental baselines. They consume the
+same 3D sequence tensors as LSTM/TFT but fit fast linear regressors.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+
+try:
+    from sklearn.linear_model import Ridge
+except ImportError:  # pragma: no cover - minimal test runtimes
+    class Ridge:
+        def __init__(self, alpha: float = 1.0):
+            self.alpha = alpha
+            self.coef_ = None
+            self.intercept_ = 0.0
+
+        def fit(self, X, y):
+            X = np.asarray(X, dtype=float)
+            y = np.asarray(y, dtype=float).ravel()
+            X_aug = np.column_stack([np.ones(len(X)), X])
+            penalty = np.eye(X_aug.shape[1]) * float(self.alpha)
+            penalty[0, 0] = 0.0
+            params = np.linalg.pinv(X_aug.T @ X_aug + penalty) @ X_aug.T @ y
+            self.intercept_ = float(params[0])
+            self.coef_ = params[1:]
+            return self
+
+        def predict(self, X):
+            if self.coef_ is None:
+                raise RuntimeError("Ridge fallback henuz egitilmedi.")
+            X = np.asarray(X, dtype=float)
+            return X @ self.coef_ + self.intercept_
+
+try:
+    import joblib
+except ImportError:  # pragma: no cover - minimal test runtimes
+    import pickle
+
+    class _PickleJoblib:
+        @staticmethod
+        def dump(obj, path):
+            with open(path, "wb") as handle:
+                pickle.dump(obj, handle)
+
+        @staticmethod
+        def load(path):
+            with open(path, "rb") as handle:
+                return pickle.load(handle)
+
+    joblib = _PickleJoblib()
+
+from .base_model import BaseModel
+
+
+class _BaseLinearSequenceModel(BaseModel):
+    model_name = "LinearSequence"
+
+    def __init__(self, alpha: float = 1.0):
+        self.alpha = alpha
+        self.model = Ridge(alpha=alpha)
+        self.input_shape = None
+
+    def _transform(self, X: np.ndarray) -> np.ndarray:
+        if X.ndim != 3:
+            raise ValueError(f"{self.model_name} 3D sequence tensor bekler, alinan: {X.ndim}D")
+        return X.reshape(X.shape[0], -1)
+
+    def _extra_state(self) -> dict:
+        return {}
+
+    def _load_extra_state(self, state: dict) -> None:
+        return None
+
+    def train(self, X_train: np.ndarray, y_train: np.ndarray, **kwargs) -> None:
+        self.input_shape = tuple(X_train.shape[1:])
+        X_flat = self._transform(X_train)
+        self.model.fit(X_flat, np.asarray(y_train).ravel())
+        print(f"[OK] {self.model_name} sequence baseline egitildi.")
+
+    def predict(self, X_test: np.ndarray, **kwargs) -> np.ndarray:
+        return np.asarray(self.model.predict(self._transform(X_test)), dtype=float)
+
+    def save(self, path: str) -> None:
+        joblib.dump(
+            {
+                "alpha": self.alpha,
+                "model": self.model,
+                "input_shape": self.input_shape,
+                "model_name": self.model_name,
+                "extra_state": self._extra_state(),
+            },
+            path,
+        )
+        print(f"[OK] {self.model_name} sequence baseline kaydedildi -> {path}")
+
+    def load(self, path: str) -> None:
+        payload = joblib.load(path)
+        self.alpha = payload["alpha"]
+        self.model = payload["model"]
+        self.input_shape = payload.get("input_shape")
+        self._load_extra_state(payload.get("extra_state", {}))
+        print(f"[OK] {self.model_name} sequence baseline yuklendi <- {path}")
+
+
+class DLinearSequenceModel(_BaseLinearSequenceModel):
+    model_name = "DLinear"
+
+    def _transform(self, X: np.ndarray) -> np.ndarray:
+        if X.ndim != 3:
+            raise ValueError(f"{self.model_name} 3D sequence tensor bekler, alinan: {X.ndim}D")
+        trend = X.mean(axis=1, keepdims=True)
+        seasonal = X - trend
+        return np.concatenate(
+            [
+                seasonal.reshape(X.shape[0], -1),
+                trend.reshape(X.shape[0], -1),
+            ],
+            axis=1,
+        )
+
+
+class NLinearSequenceModel(_BaseLinearSequenceModel):
+    model_name = "NLinear"
+
+    def _transform(self, X: np.ndarray) -> np.ndarray:
+        if X.ndim != 3:
+            raise ValueError(f"{self.model_name} 3D sequence tensor bekler, alinan: {X.ndim}D")
+        anchor = X[:, -1:, :]
+        normalized = X - anchor
+        return np.concatenate(
+            [
+                normalized.reshape(X.shape[0], -1),
+                anchor.reshape(X.shape[0], -1),
+            ],
+            axis=1,
+        )
+
+
+class PatchTSTExperimentalModel(_BaseLinearSequenceModel):
+    model_name = "PatchTST Experimental"
+
+    def __init__(self, alpha: float = 1.0, patch_length: int = 16, stride: int = 8):
+        super().__init__(alpha=alpha)
+        self.patch_length = patch_length
+        self.stride = stride
+
+    def _extra_state(self) -> dict:
+        return {"patch_length": self.patch_length, "stride": self.stride}
+
+    def _load_extra_state(self, state: dict) -> None:
+        self.patch_length = int(state.get("patch_length", self.patch_length))
+        self.stride = int(state.get("stride", self.stride))
+
+    def _transform(self, X: np.ndarray) -> np.ndarray:
+        if X.ndim != 3:
+            raise ValueError(f"{self.model_name} 3D sequence tensor bekler, alinan: {X.ndim}D")
+        n_samples, time_steps, n_features = X.shape
+        patch_length = min(max(1, self.patch_length), time_steps)
+        stride = max(1, self.stride)
+        starts = list(range(0, max(1, time_steps - patch_length + 1), stride))
+        last_start = time_steps - patch_length
+        if starts[-1] != last_start:
+            starts.append(last_start)
+        patches = [X[:, start:start + patch_length, :].reshape(n_samples, -1) for start in starts]
+        return np.concatenate(patches, axis=1)
