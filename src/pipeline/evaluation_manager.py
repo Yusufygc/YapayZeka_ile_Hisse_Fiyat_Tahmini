@@ -4,17 +4,34 @@ evaluation_manager.py - Evaluation and reporting orchestration.
 """
 
 import os
+from dataclasses import asdict, replace
 from typing import Any, Dict, Optional
 
 import numpy as np
 import pandas as pd
 
-from src.backtesting import plot_equity_curves, run_backtest, save_backtest_report, save_trade_logs, summarize_backtest
+from src.backtesting import plot_equity_curves, run_backtest, save_backtest_report, save_fold_backtest_report, save_trade_logs, summarize_backtest
+from src.backtesting.signals import SignalConfig
 from src.database.stock_model_db import StockModelDB, compute_composite_score
+from src.evaluation.financial_metrics import compute_quantile_metrics
 from src.evaluator import compute_metrics, enrich_with_benchmark_metrics, plot_comparison, plot_prediction_interval, save_metrics_report
 from src.experiments.experiment_tracker import ExperimentTracker
 from src.model_registry.model_registry import ModelRegistry
-from src.preprocessor import reconstruct_prices_from_logret, reconstruct_prices_from_return
+try:
+    from src.preprocessor import reconstruct_prices_from_logret, reconstruct_prices_from_return
+except ImportError:  # pragma: no cover - keeps reporting/calibration importable in minimal runtimes
+    def reconstruct_prices_from_logret(log_returns: np.ndarray, prev_close: np.ndarray) -> np.ndarray:
+        return np.asarray(prev_close, dtype=float).ravel() * np.exp(np.asarray(log_returns, dtype=float).ravel())
+
+    def reconstruct_prices_from_return(returns: np.ndarray, prev_close: np.ndarray) -> np.ndarray:
+        return np.asarray(prev_close, dtype=float).ravel() * (1.0 + np.asarray(returns, dtype=float).ravel())
+from src.reporting_utils import route_output_path, write_csv_and_aligned_view
+try:
+    from src.xai import XAIExplainer, XAIReportWriter
+except ImportError as _xai_import_error:  # pragma: no cover - XAI is optional in minimal runtimes
+    XAIExplainer = None
+    XAIReportWriter = None
+    XAI_IMPORT_ERROR = _xai_import_error
 
 
 class EvaluationManager:
@@ -35,6 +52,17 @@ class EvaluationManager:
         commission_bps: float = 10.0,
         slippage_bps: float = 5.0,
         initial_capital: float = 100000.0,
+        signal_mode: str = "legacy",
+        signal_entry_cost_multiplier: float = 2.0,
+        signal_volatility_multiplier: float = 0.25,
+        min_holding_bars: int = 3,
+        max_holding_bars: int = 20,
+        take_profit_vol_multiplier: float = 1.5,
+        stop_loss_vol_multiplier: float = 1.0,
+        min_directional_accuracy: float = 52.0,
+        max_rmse_vs_benchmark: float = 1.05,
+        min_composite_score: float = 50.0,
+        emergency_stop_overrides_min_hold: bool = True,
     ):
         self.stock_symbol = stock_symbol
         self.outputs_dir = outputs_dir
@@ -51,12 +79,34 @@ class EvaluationManager:
         self.commission_bps = commission_bps
         self.slippage_bps = slippage_bps
         self.initial_capital = initial_capital
+        self.signal_mode = signal_mode
+        self.signal_config = SignalConfig(
+            entry_cost_multiplier=signal_entry_cost_multiplier,
+            volatility_multiplier=signal_volatility_multiplier,
+            min_holding_bars=min_holding_bars,
+            max_holding_bars=max_holding_bars,
+            take_profit_vol_multiplier=take_profit_vol_multiplier,
+            stop_loss_vol_multiplier=stop_loss_vol_multiplier,
+            min_directional_accuracy=min_directional_accuracy,
+            max_rmse_vs_benchmark=max_rmse_vs_benchmark,
+            min_composite_score=min_composite_score,
+            emergency_stop_overrides_min_hold=emergency_stop_overrides_min_hold,
+        )
+        self.default_signal_config = self.signal_config
+        self.signal_threshold_source = "default_config"
+        self.signal_threshold_calibration_summary = {}
+        self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
 
         self.predictions = {}
         self.prediction_targets = {}
         self.quantile_predictions = {}
         self.single_backtest_inputs = {}
         self.y_true_aligned = None
+        self.y_true_target_aligned = None
+        self.prev_close_aligned = None
+        self.xai_dir = os.path.join(self.outputs_dir, "xai")
+        self.latest_tensors = {}
+        self.latest_backtest_results = {}
 
     @staticmethod
     def _attach_composite_scores(metrics_dict: Dict[str, Dict[str, float]]) -> Dict[str, Dict[str, float]]:
@@ -64,6 +114,178 @@ class EvaluationManager:
         for _, model_metrics in enriched.items():
             model_metrics["Composite_Score"] = compute_composite_score(model_metrics)
         return enriched
+
+    def _attach_leakage_guard_metadata(self, metrics_dict: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        for model_metrics in metrics_dict.values():
+            model_metrics["Target_Semantics"] = self.dataset_metadata.get("target_semantics", "")
+            model_metrics["Execution_Lag"] = self.dataset_metadata.get("execution_lag", "")
+            model_metrics["Macro_Release_Lag"] = str(self.dataset_metadata.get("macro_release_lag", {}))
+            model_metrics["Transaction_Costs"] = f"commission_bps={self.commission_bps}; slippage_bps={self.slippage_bps}"
+            model_metrics["Validation_Protocol"] = str(self.dataset_metadata.get("validation_config", {}))
+            model_metrics["Selection_Set"] = str(self.dataset_metadata.get("selection_set", {}))
+            model_metrics["Evaluation_Set"] = str(self.dataset_metadata.get("evaluation_set", {}))
+            model_metrics["Final_Holdout_Used_For_Selection"] = False
+            model_metrics["Corporate_Action_Adjustment"] = str(self.dataset_metadata.get("corporate_action", {}))
+            model_metrics["Feature_Pruning"] = str(self.dataset_metadata.get("feature_pruning", {}))
+            model_metrics["Feature_Groups"] = str(self.dataset_metadata.get("feature_groups", {}))
+            model_metrics["Scaling_Clip_Report"] = str(self.dataset_metadata.get("scaling_reports", []))
+            model_metrics["Threshold_Config"] = str(self.dataset_metadata.get("signal_threshold_config", {}))
+        return metrics_dict
+
+    def _signal_threshold_metadata(self) -> Dict[str, Any]:
+        cfg = asdict(self.signal_config)
+        return {
+            "phase": "phase6_backtest_standard",
+            "source": self.signal_threshold_source,
+            "selection_scope": "walk_forward_calibration_folds" if self.signal_threshold_source != "default_config" else "configured_defaults",
+            "final_holdout_optimized": False,
+            "quality_thresholds": {
+                "min_directional_accuracy": self.signal_config.min_directional_accuracy,
+                "max_rmse_vs_benchmark": self.signal_config.max_rmse_vs_benchmark,
+                "min_composite_score": self.signal_config.min_composite_score,
+            },
+            "default_quality_thresholds": {
+                "min_directional_accuracy": self.default_signal_config.min_directional_accuracy,
+                "max_rmse_vs_benchmark": self.default_signal_config.max_rmse_vs_benchmark,
+                "min_composite_score": self.default_signal_config.min_composite_score,
+            },
+            "full_signal_config": cfg,
+            "execution_policy": "decision_applies_to_next_bar_return",
+            "cost_policy": {
+                "commission_bps": self.commission_bps,
+                "slippage_bps": self.slippage_bps,
+                "entry_exit_accounted_separately": True,
+            },
+            "calibration_summary": self.signal_threshold_calibration_summary,
+        }
+
+    def _enrich_wf_fold_metrics(self, wf_fold_metrics: Dict[str, list[Dict[str, Any]]]) -> Dict[str, list[Dict[str, Any]]]:
+        if not wf_fold_metrics:
+            return {}
+
+        by_fold: Dict[Any, Dict[str, Dict[str, Any]]] = {}
+        for model_name, rows in wf_fold_metrics.items():
+            for row in rows:
+                fold_id = row.get("Fold")
+                metrics = {key: value for key, value in row.items() if key not in {"Model", "Fold"}}
+                by_fold.setdefault(fold_id, {})[model_name] = metrics
+
+        enriched_by_model: Dict[str, list[Dict[str, Any]]] = {name: [] for name in wf_fold_metrics}
+        for fold_id, fold_metrics in by_fold.items():
+            enriched = self._attach_composite_scores(fold_metrics)
+            for model_name, metrics in enriched.items():
+                enriched_by_model.setdefault(model_name, []).append({
+                    "Model": model_name,
+                    "Fold": fold_id,
+                    **metrics,
+                })
+        return enriched_by_model
+
+    def _save_wf_fold_metric_report(self, wf_fold_metrics: Dict[str, list[Dict[str, Any]]]) -> None:
+        rows = [row for rows in wf_fold_metrics.values() for row in rows]
+        if not rows:
+            return
+
+        fold_df = pd.DataFrame(rows)
+        fold_df.sort_values(by=["Model", "Fold"], inplace=True)
+        fold_path = os.path.join(self.outputs_dir, "wf_fold_metrics_v6.csv")
+        write_csv_and_aligned_view(fold_df, fold_path)
+
+        worst_rows = []
+        for model_name, model_df in fold_df.groupby("Model", sort=False):
+            worst = model_df.sort_values(
+                by=["Composite_Score", "RMSE", "Dir_Acc"],
+                ascending=[True, False, True],
+            ).iloc[0].copy()
+            worst["Worst_Fold_Rule"] = "min_composite_then_max_rmse"
+            worst_rows.append(worst)
+        worst_df = pd.DataFrame(worst_rows)
+        worst_path = os.path.join(self.outputs_dir, "wf_worst_fold_v6.csv")
+        write_csv_and_aligned_view(worst_df, worst_path)
+
+        print(f"[OK] Walk-forward fold metrik dagilimi kaydedildi -> {route_output_path(fold_path)}")
+        print(f"[OK] Walk-forward worst-fold raporu kaydedildi -> {route_output_path(worst_path)}")
+
+    def _calibrate_signal_quality_thresholds(self, wf_fold_metrics: Dict[str, list[Dict[str, Any]]]) -> None:
+        rows = []
+        for model_name, model_rows in wf_fold_metrics.items():
+            if model_name in self.signal_config.benchmark_only_models:
+                continue
+            rows.extend(model_rows)
+
+        if len(rows) < 3:
+            self.signal_threshold_source = "default_config"
+            self.signal_threshold_calibration_summary = {
+                "status": "skipped_insufficient_calibration_folds",
+                "fold_metric_rows": len(rows),
+            }
+            self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
+            return
+
+        calibration_df = pd.DataFrame(rows)
+        dir_values = pd.to_numeric(calibration_df.get("Dir_Acc"), errors="coerce").dropna()
+        rmse_values = pd.to_numeric(calibration_df.get("RMSE_vs_benchmark"), errors="coerce").dropna()
+        composite_values = pd.to_numeric(calibration_df.get("Composite_Score"), errors="coerce").dropna()
+
+        min_directional_accuracy = self.default_signal_config.min_directional_accuracy
+        max_rmse_vs_benchmark = self.default_signal_config.max_rmse_vs_benchmark
+        min_composite_score = self.default_signal_config.min_composite_score
+
+        if not dir_values.empty:
+            min_directional_accuracy = max(min_directional_accuracy, float(dir_values.quantile(0.25)))
+        if not rmse_values.empty:
+            max_rmse_vs_benchmark = min(max_rmse_vs_benchmark, float(rmse_values.quantile(0.75)))
+        if not composite_values.empty:
+            min_composite_score = max(min_composite_score, float(composite_values.quantile(0.25)))
+
+        self.signal_config = replace(
+            self.signal_config,
+            min_directional_accuracy=round(min_directional_accuracy, 2),
+            max_rmse_vs_benchmark=round(max_rmse_vs_benchmark, 4),
+            min_composite_score=round(min_composite_score, 4),
+        )
+        self.signal_threshold_source = "walk_forward_calibration_folds"
+        self.signal_threshold_calibration_summary = {
+            "status": "applied",
+            "fold_metric_rows": int(len(rows)),
+            "dir_acc_q25": round(float(dir_values.quantile(0.25)), 4) if not dir_values.empty else None,
+            "rmse_vs_benchmark_q75": round(float(rmse_values.quantile(0.75)), 4) if not rmse_values.empty else None,
+            "composite_score_q25": round(float(composite_values.quantile(0.25)), 4) if not composite_values.empty else None,
+            "calibration_set": "walk_forward_folds_only",
+            "final_holdout_used": False,
+        }
+        self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
+
+    def _attach_model_family_metadata(self, metrics_dict: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        tft_label = (
+            self.dataset_metadata
+            .get("model_config", {})
+            .get("deep_learning", {})
+            .get("tft", {})
+            .get("model_label", "TFT-like Quantile Sequence Model")
+        )
+        for model_name, model_metrics in metrics_dict.items():
+            if model_name == "TFT":
+                model_metrics["Model_Family"] = tft_label
+            elif model_name in {"DLinear", "NLinear", "PatchTST Experimental"}:
+                model_metrics["Model_Family"] = "low_parameter_sequence_baseline"
+            elif model_name == "LightGBM Return":
+                model_metrics["Model_Family"] = "gradient_boosting_return_baseline"
+            else:
+                model_metrics.setdefault("Model_Family", model_name)
+        return metrics_dict
+
+    @staticmethod
+    def _select_best_model(metrics_dict: Dict[str, Dict[str, Any]]) -> Optional[str]:
+        if not metrics_dict:
+            return None
+        return max(
+            metrics_dict,
+            key=lambda name: (
+                float(metrics_dict[name].get("Composite_Score", float("-inf"))),
+                -float(metrics_dict[name].get("RMSE", float("inf"))),
+            ),
+        )
 
     def _target_to_price(self, preds_target: np.ndarray, prev_close: np.ndarray) -> np.ndarray:
         target_mode = self.dataset_metadata.get("target_mode", "log_return")
@@ -85,9 +307,14 @@ class EvaluationManager:
         if not selected_predictions:
             return
         plot_comparison(y_true, selected_predictions, save_path=save_path, title=title)
-        print(f"[OK] Secilen modeller grafigi kaydedildi -> {save_path}")
+        print(f"[OK] Secilen modeller grafigi kaydedildi -> {route_output_path(save_path)}")
 
-    def _run_backtests(self, backtest_inputs: Dict[str, Dict[str, Any]], suffix: str) -> None:
+    def _run_backtests(
+        self,
+        backtest_inputs: Dict[str, Dict[str, Any]],
+        suffix: str,
+        model_metrics_by_model: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> None:
         if not self.backtest_enabled or not backtest_inputs:
             return
 
@@ -101,21 +328,34 @@ class EvaluationManager:
             try:
                 result = run_backtest(
                     dates=payload.get("dates"),
+                    prediction_dates=payload.get("prediction_dates"),
                     y_true_price=payload["y_true_price"],
                     pred_price=payload["pred_price"],
                     prev_close=payload["prev_close"],
+                    fold_ids=payload.get("fold_ids"),
                     pred_target=payload.get("pred_target"),
                     model_name=model_name,
                     validation_mode=suffix,
                     target_mode=target_mode,
                     commission_bps=self.commission_bps,
                     slippage_bps=self.slippage_bps,
+                    signal_mode=self.signal_mode,
+                    signal_config=self.signal_config,
+                    model_metrics=(model_metrics_by_model or {}).get(model_name, {}),
                 )
                 results[model_name] = result
                 metrics_by_model[model_name] = summarize_backtest(
                     result,
                     initial_capital=self.initial_capital,
                 )
+                metrics_by_model[model_name].update({
+                    "Target_Semantics": self.dataset_metadata.get("target_semantics", ""),
+                    "Execution_Lag": self.dataset_metadata.get("execution_lag", ""),
+                    "Macro_Release_Lag": str(self.dataset_metadata.get("macro_release_lag", {})),
+                    "Transaction_Costs": f"commission_bps={self.commission_bps}; slippage_bps={self.slippage_bps}",
+                    "Validation_Protocol": str(self.dataset_metadata.get("validation_config", {})),
+                    "Threshold_Config": str(self.dataset_metadata.get("signal_threshold_config", {})),
+                })
                 trades_by_model[model_name] = result["trades"]
                 equity_curves[model_name] = result["equity_curve"]
             except Exception as exc:
@@ -124,12 +364,17 @@ class EvaluationManager:
         if not metrics_by_model:
             return
 
+        self.latest_backtest_results[suffix] = results
+
         report_path = os.path.join(self.outputs_dir, f"backtest_report_v1_{suffix}.csv")
         trades_path = os.path.join(self.outputs_dir, f"backtest_trades_v1_{suffix}.csv")
         equity_path = os.path.join(self.outputs_dir, f"backtest_equity_curve_v1_{suffix}.png")
 
         save_backtest_report(metrics_by_model, report_path)
         save_trade_logs(trades_by_model, trades_path)
+        if suffix == "wf":
+            fold_report_path = os.path.join(self.outputs_dir, "backtest_fold_report_v6_wf.csv")
+            save_fold_backtest_report(results, fold_report_path, initial_capital=self.initial_capital)
         plot_equity_curves(
             equity_curves,
             save_path=equity_path,
@@ -145,21 +390,73 @@ class EvaluationManager:
                 selected_models=self.selected_models,
             )
 
+    def _run_xai_single_split(self, trained_models: dict, tensors: dict) -> None:
+        if not self.predictions:
+            return
+        try:
+            if XAIExplainer is None or XAIReportWriter is None:
+                raise ImportError(f"XAI dependency unavailable: {XAI_IMPORT_ERROR}")
+            explainer = XAIExplainer(
+                self.stock_symbol,
+                self.feature_names,
+                self.dataset_metadata,
+            )
+            payload = explainer.explain_single_split(
+                trained_models=trained_models,
+                tensors=tensors,
+                predictions=self.predictions,
+                prediction_targets=self.prediction_targets,
+                y_true_aligned=self.y_true_aligned,
+                quantile_predictions=self.quantile_predictions,
+            )
+            XAIReportWriter(self.xai_dir).write(payload, suffix="latest")
+        except Exception as exc:
+            print(f"  [WARN] XAI raporu olusturulamadi, atlaniyor: {exc}")
+
+    def _run_xai_walk_forward(
+        self,
+        wf_predictions: dict,
+        wf_y_true: Any,
+        wf_backtest_inputs: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> None:
+        if not wf_predictions:
+            return
+        try:
+            if XAIExplainer is None or XAIReportWriter is None:
+                raise ImportError(f"XAI dependency unavailable: {XAI_IMPORT_ERROR}")
+            explainer = XAIExplainer(
+                self.stock_symbol,
+                self.feature_names,
+                self.dataset_metadata,
+            )
+            payload = explainer.explain_walk_forward(
+                wf_predictions=wf_predictions,
+                wf_y_true=np.asarray(wf_y_true) if wf_y_true is not None else np.asarray([]),
+                wf_backtest_inputs=wf_backtest_inputs or {},
+                backtest_results=self.latest_backtest_results.get("wf", {}),
+            )
+            XAIReportWriter(self.xai_dir).write(payload, suffix="wf")
+        except Exception as exc:
+            print(f"  [WARN] Walk-forward XAI raporu olusturulamadi, atlaniyor: {exc}")
+
     def generate_predictions(self, trained_models: dict, tensors: dict):
         print("\n" + "=" * 60)
         print("  ADIM 5 | Tahmin Uretimi ve Inverse Transform (EvaluationManager)")
         print("=" * 60)
 
-        seq_models = {"LSTM", "TFT", "AttentionLSTM"}
-        tree_models = {"XGBoost", "Random Forest"}
+        seq_models = {"LSTM", "TFT", "AttentionLSTM", "DLinear", "NLinear", "PatchTST Experimental"}
+        tree_models = {"XGBoost", "Random Forest", "Ridge Return", "ElasticNet Return", "LightGBM Return"}
 
         prev_close_test = np.asarray(tensors["prev_close_test"]).ravel()
         dates_test = np.asarray(tensors["dates_test"])
+        prediction_dates_test = np.asarray(tensors.get("dates_prediction", tensors["dates_test"]))
         y_test_price = np.asarray(tensors["original_y_test_aligned"]).ravel()
+        y_test_target = np.asarray(tensors["y_test"]).ravel()
 
         raw_preds = {}
         raw_pred_targets = {}
         raw_quantiles = {}
+        self.latest_tensors = tensors
 
         for name, model in trained_models.items():
             try:
@@ -188,11 +485,20 @@ class EvaluationManager:
                     preds_target = tensors["scaler_y"].inverse_transform(np.asarray(preds_scaled).reshape(-1, 1)).ravel()
 
                 preds_target = np.asarray(preds_target).ravel()
-                k = min(len(preds_target), len(prev_close_test), len(y_test_price), len(dates_test))
+                k = min(
+                    len(preds_target),
+                    len(prev_close_test),
+                    len(y_test_price),
+                    len(y_test_target),
+                    len(dates_test),
+                    len(prediction_dates_test),
+                )
                 preds_target = preds_target[-k:]
                 prev_close_aligned = prev_close_test[-k:]
                 y_true_price_aligned = y_test_price[-k:]
+                y_true_target_aligned = y_test_target[-k:]
                 dates_aligned = dates_test[-k:]
+                prediction_dates_aligned = prediction_dates_test[-k:]
 
                 raw_pred_targets[name] = preds_target
                 raw_preds[name] = self._target_to_price(preds_target, prev_close_aligned)
@@ -206,10 +512,12 @@ class EvaluationManager:
 
                 self.single_backtest_inputs[name] = {
                     "dates": dates_aligned,
+                    "prediction_dates": prediction_dates_aligned,
                     "y_true_price": y_true_price_aligned,
                     "pred_price": raw_preds[name],
                     "prev_close": prev_close_aligned,
                     "pred_target": preds_target,
+                    "y_true_target": y_true_target_aligned,
                 }
                 print(f"  [OK] {name} tahmini uretildi - {len(raw_preds[name])} adim")
             except Exception as exc:
@@ -223,14 +531,233 @@ class EvaluationManager:
         self.prediction_targets = {name: preds[-min_len:] for name, preds in raw_pred_targets.items()}
         self.quantile_predictions = {name: preds[-min_len:] for name, preds in raw_quantiles.items()}
         self.y_true_aligned = y_test_price[-min_len:]
+        self.y_true_target_aligned = y_test_target[-min_len:]
+        self.prev_close_aligned = prev_close_test[-min_len:]
+
+    def _predict_single_model(
+        self,
+        model_name: str,
+        model: Any,
+        tensors: dict,
+    ) -> tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        Optional[np.ndarray],
+    ]:
+        seq_models = {"LSTM", "TFT", "AttentionLSTM", "DLinear", "NLinear", "PatchTST Experimental"}
+        tree_models = {"XGBoost", "Random Forest", "Ridge Return", "ElasticNet Return", "LightGBM Return"}
+        quantile_target = None
+
+        prev_close_test = np.asarray(tensors["prev_close_test"]).ravel()
+        dates_test = np.asarray(tensors["dates_test"])
+        prediction_dates_test = np.asarray(tensors.get("dates_prediction", tensors["dates_test"]))
+        y_test_price = np.asarray(tensors["original_y_test_aligned"]).ravel()
+        y_test_target = np.asarray(tensors["y_test"]).ravel()
+
+        if model_name == "Prophet":
+            preds_target = model.predict(tensors["X_test"], dates_test=tensors["dates_test"])
+        elif model_name in tree_models:
+            preds_scaled = model.predict(tensors["X_test_s"])
+            preds_target = tensors["scaler_y"].inverse_transform(np.asarray(preds_scaled).reshape(-1, 1)).ravel()
+        elif model_name in seq_models:
+            if hasattr(model, "predict_quantiles"):
+                quantile_scaled = np.asarray(model.predict_quantiles(tensors["X_test_seq"]))
+                quantile_target = np.column_stack([
+                    tensors["scaler_y"].inverse_transform(quantile_scaled[:, idx].reshape(-1, 1)).ravel()
+                    for idx in range(quantile_scaled.shape[1])
+                ])
+                preds_target = quantile_target[:, quantile_scaled.shape[1] // 2]
+            else:
+                preds_scaled = model.predict(tensors["X_test_seq"])
+                preds_target = tensors["scaler_y"].inverse_transform(np.asarray(preds_scaled).reshape(-1, 1)).ravel()
+        else:
+            preds_target = model.predict(tensors["X_test"])
+
+        preds_target = np.asarray(preds_target).ravel()
+        k = min(
+            len(preds_target),
+            len(prev_close_test),
+            len(y_test_price),
+            len(y_test_target),
+            len(dates_test),
+            len(prediction_dates_test),
+        )
+        preds_target = preds_target[-k:]
+        prev_close_aligned = prev_close_test[-k:]
+        pred_price = self._target_to_price(preds_target, prev_close_aligned)
+        quantile_price = None
+        if quantile_target is not None:
+            quantile_target = quantile_target[-k:]
+            quantile_price = np.column_stack([
+                self._target_to_price(quantile_target[:, idx], prev_close_aligned)
+                for idx in range(quantile_target.shape[1])
+            ])
+        return (
+            pred_price,
+            preds_target,
+            y_test_price[-k:],
+            y_test_target[-k:],
+            prev_close_aligned,
+            dates_test[-k:],
+            prediction_dates_test[-k:],
+            quantile_price,
+        )
+
+    def evaluate_final_holdout(self, model_name: str, model: Any, tensors: dict) -> Dict[str, Dict[str, Any]]:
+        print("\n" + "=" * 60)
+        print("  ADIM 8 | Final Untouched Holdout Degerlendirmesi")
+        print("=" * 60)
+
+        (
+            pred_price,
+            pred_target,
+            y_true_price,
+            y_true_target,
+            prev_close,
+            dates,
+            prediction_dates,
+            quantile_price,
+        ) = self._predict_single_model(model_name, model, tensors)
+
+        metrics = {
+            model_name: compute_metrics(
+                y_true_price,
+                pred_price,
+                y_true_target=y_true_target,
+                y_pred_target=pred_target,
+                prev_close=prev_close,
+                target_mode=self.dataset_metadata.get("target_mode", "log_return"),
+            )
+        }
+        if quantile_price is not None:
+            q_metrics = compute_quantile_metrics(y_true_price, quantile_price)
+            metrics[model_name].update({key: round(value, 6) for key, value in q_metrics.items()})
+        metrics = self._attach_composite_scores(metrics)
+        metrics = self._attach_leakage_guard_metadata(metrics)
+        metrics = self._attach_model_family_metadata(metrics)
+        metrics[model_name]["Selection_Source"] = "walk_forward_composite_score"
+        metrics[model_name]["Evaluation_Set_Name"] = "untouched_final_holdout"
+
+        final_metadata = dict(self.dataset_metadata)
+        final_metadata["validation_mode"] = "final_holdout"
+        final_metadata["protocol_stage"] = "final_holdout_evaluation"
+        final_metadata["selected_by"] = "walk_forward_composite_score"
+
+        self.tracker.log_run(
+            model_name,
+            {"validation": "final_holdout", "selected_by": "walk_forward"},
+            metrics[model_name],
+            self.feature_names,
+            self.dataset_hash,
+            final_metadata,
+        )
+
+        model_ext = ".pt" if model_name == "TFT" else ".keras" if model_name == "LSTM" else ".pkl"
+        model_filename = f"{model_name.replace(' ', '_').lower()}_final_holdout_model{model_ext}"
+        model_path = os.path.join(self.models_dir, model_filename)
+        model.save(model_path)
+
+        self.registry.register(
+            model_name,
+            f"{self.registry_version}_final_holdout",
+            self.feature_names,
+            metrics[model_name],
+            model_path,
+            self.dataset_hash,
+            final_metadata,
+        )
+
+        if self.stock_db is not None:
+            self.stock_db.log_experiment(
+                stock_symbol=self.stock_symbol,
+                model_name=model_name,
+                metrics=metrics[model_name],
+                model_path=model_path,
+                features=self.feature_names,
+                dataset_hash=self.dataset_hash,
+                validation_mode="final_holdout",
+                dataset_metadata=final_metadata,
+            )
+
+        report_path = os.path.join(self.outputs_dir, "metrics_report_v4_final_holdout.csv")
+        save_metrics_report(metrics, report_path)
+
+        plot_path = os.path.join(self.outputs_dir, "benchmark_comparison_v4_final_holdout.png")
+        plot_comparison(
+            y_true_price,
+            {model_name: pred_price},
+            save_path=plot_path,
+            title=f"{self.stock_symbol} - Final Holdout ({model_name})",
+        )
+        if quantile_price is not None:
+            quantile_labels = [f"Q{idx + 1}" for idx in range(quantile_price.shape[1])]
+            if quantile_price.shape[1] == 3:
+                quantile_labels = ["P10", "P50", "P90"]
+            quantile_df = pd.DataFrame(quantile_price, columns=quantile_labels)
+            quantile_df.insert(0, "Actual", y_true_price[-len(quantile_df):])
+            quantile_csv = os.path.join(self.outputs_dir, f"{model_name.replace(' ', '_').lower()}_quantiles_v5_final_holdout.csv")
+            quantile_paths = write_csv_and_aligned_view(quantile_df, quantile_csv)
+            print(f"[OK] Final holdout quantile raporu kaydedildi -> {quantile_paths['csv']}")
+            if quantile_price.shape[1] >= 3:
+                interval_plot = os.path.join(
+                    self.outputs_dir,
+                    f"{model_name.replace(' ', '_').lower()}_prediction_interval_v5_final_holdout.png",
+                )
+                plot_prediction_interval(
+                    y_true_price[-len(quantile_price):],
+                    quantile_price[:, 1],
+                    quantile_price[:, 0],
+                    quantile_price[:, 2],
+                    save_path=interval_plot,
+                    title=f"{self.stock_symbol} - Final Holdout Tahmin Araligi ({model_name})",
+                )
+
+        self._run_backtests(
+            {
+                model_name: {
+                    "dates": dates,
+                    "prediction_dates": prediction_dates,
+                    "y_true_price": y_true_price,
+                    "pred_price": pred_price,
+                    "prev_close": prev_close,
+                    "pred_target": pred_target,
+                    "y_true_target": y_true_target,
+                }
+            },
+            suffix="final_holdout",
+            model_metrics_by_model=metrics,
+        )
+
+        return metrics
 
     def evaluate_single_split(self, trained_models: dict):
         print("\n" + "=" * 60)
         print("  ADIM 7 | Degerlendirme ve Registry (EvaluationManager)")
         print("=" * 60)
 
-        metrics = {name: compute_metrics(self.y_true_aligned, preds) for name, preds in self.predictions.items()}
+        metrics = {
+            name: compute_metrics(
+                self.y_true_aligned,
+                preds,
+                y_true_target=self.y_true_target_aligned,
+                y_pred_target=self.prediction_targets.get(name),
+                prev_close=self.prev_close_aligned,
+                target_mode=self.dataset_metadata.get("target_mode", "log_return"),
+            )
+            for name, preds in self.predictions.items()
+        }
+        for name, q_preds in self.quantile_predictions.items():
+            if name in metrics:
+                q_metrics = compute_quantile_metrics(self.y_true_aligned, q_preds)
+                metrics[name].update({key: round(value, 6) for key, value in q_metrics.items()})
         metrics = self._attach_composite_scores(metrics)
+        metrics = self._attach_leakage_guard_metadata(metrics)
+        metrics = self._attach_model_family_metadata(metrics)
 
         for name, model_metrics in metrics.items():
             self.tracker.log_run(name, {"validation": "single"}, model_metrics, self.feature_names, self.dataset_hash, self.dataset_metadata)
@@ -271,7 +798,8 @@ class EvaluationManager:
         selected_title_str = f"{self.stock_symbol} - Secilen Modeller (Gercek vs Tahmin)"
         self._save_selected_models_plot(self.y_true_aligned, self.predictions, save_path=selected_plot_latest, title=selected_title_str)
 
-        self._run_backtests(self.single_backtest_inputs, suffix="latest")
+        self._run_backtests(self.single_backtest_inputs, suffix="latest", model_metrics_by_model=metrics)
+        self._run_xai_single_split(trained_models, tensors=self.latest_tensors)
 
         if "TFT" in self.quantile_predictions:
             tft_quantiles = self.quantile_predictions["TFT"]
@@ -281,8 +809,8 @@ class EvaluationManager:
             quantile_df = pd.DataFrame(tft_quantiles, columns=quantile_labels)
             quantile_df.insert(0, "Actual", self.y_true_aligned[-len(quantile_df):])
             quantile_csv = os.path.join(self.outputs_dir, "tft_quantiles_v5_latest.csv")
-            quantile_df.to_csv(quantile_csv, sep=";", index=False)
-            print(f"[OK] TFT quantile raporu kaydedildi -> {quantile_csv}")
+            quantile_paths = write_csv_and_aligned_view(quantile_df, quantile_csv)
+            print(f"[OK] TFT quantile raporu kaydedildi -> {quantile_paths['csv']}")
             if tft_quantiles.shape[1] >= 3:
                 interval_plot = os.path.join(self.outputs_dir, "tft_prediction_interval_v5_latest.png")
                 plot_prediction_interval(
@@ -300,12 +828,31 @@ class EvaluationManager:
         wf_predictions: dict,
         wf_y_true: Any,
         wf_backtest_inputs: Optional[Dict[str, Dict[str, Any]]] = None,
+        wf_fold_metrics: Optional[Dict[str, list[Dict[str, Any]]]] = None,
     ):
         print("\n" + "=" * 60)
         print("  ADIM 7 | Degerlendirme Gosterimi (Walk-Forward)")
         print("=" * 60)
 
         wf_results = self._attach_composite_scores(wf_results)
+        enriched_fold_metrics = self._enrich_wf_fold_metrics(wf_fold_metrics or {})
+        self._save_wf_fold_metric_report(enriched_fold_metrics)
+        self._calibrate_signal_quality_thresholds(enriched_fold_metrics)
+        wf_results = self._attach_leakage_guard_metadata(wf_results)
+        wf_results = self._attach_model_family_metadata(wf_results)
+        for model_name, model_metrics in wf_results.items():
+            self.registry.register(
+                model_name,
+                f"{self.registry_version}_wf_phase6_backtest",
+                self.feature_names,
+                model_metrics,
+                "none",
+                self.dataset_hash,
+                self.dataset_metadata,
+            )
+        best_model_name = self._select_best_model(wf_results)
+        if best_model_name:
+            print(f"\n  [INFO] Walk-forward secim modeli: {best_model_name}")
         df_wf = pd.DataFrame(wf_results).T
         if "Composite_Score" in df_wf.columns:
             df_wf = df_wf.sort_values(by=["Composite_Score", "RMSE"], ascending=[False, True])
@@ -335,10 +882,12 @@ class EvaluationManager:
         plot_latest = os.path.join(self.outputs_dir, "benchmark_comparison_v4_wf.png")
         title_str = f"{self.stock_symbol} - Model Kiyaslama (Gercek vs Tahmin) [Walk-Forward]"
         plot_comparison(wf_y_true, wf_predictions, save_path=plot_latest, title=title_str)
-        print(f"[OK] Walk-Forward karsilastirma grafigi kaydedildi -> {plot_latest}")
+        print(f"[OK] Walk-Forward karsilastirma grafigi kaydedildi -> {route_output_path(plot_latest)}")
 
         selected_plot_latest = os.path.join(self.outputs_dir, "benchmark_comparison_v4_wf_selected.png")
         selected_title_str = f"{self.stock_symbol} - Secilen Modeller (Gercek vs Tahmin) [Walk-Forward]"
         self._save_selected_models_plot(wf_y_true, wf_predictions, save_path=selected_plot_latest, title=selected_title_str)
 
-        self._run_backtests(wf_backtest_inputs or {}, suffix="wf")
+        self._run_backtests(wf_backtest_inputs or {}, suffix="wf", model_metrics_by_model=wf_results)
+        self._run_xai_walk_forward(wf_predictions, wf_y_true, wf_backtest_inputs or {})
+        return best_model_name
