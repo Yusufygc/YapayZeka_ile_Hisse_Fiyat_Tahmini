@@ -46,6 +46,7 @@ class FeaturePipeline:
         feature_mode: str = "stationary_features",
         prune_correlated_features: bool = False,
         correlation_threshold: float = 0.98,
+        lag_feature_count: int = 5,
     ):
         self.close_col  = close_col
         self.open_col   = open_col
@@ -56,6 +57,7 @@ class FeaturePipeline:
         self.feature_names: list = []
         self.prune_correlated_features = prune_correlated_features
         self.correlation_threshold = correlation_threshold
+        self.lag_feature_count = max(0, int(lag_feature_count))
         self.feature_groups: dict[str, str] = {}
         self.pruning_report: dict = {
             "enabled": prune_correlated_features,
@@ -88,12 +90,17 @@ class FeaturePipeline:
 
         # 2. Hareketli Ortalamalar
         df = self._add_moving_averages(df)
+        df = self._add_market_regime(df)
 
         # 3. Volatilite & Bollinger
         df = self._add_volatility(df)
 
         # 4. Momentum
         df = self._add_momentum_indicators(df)
+
+        # 5. Volume and stationary lag features
+        df = self._add_volume_features(df)
+        df = self._add_lag_features(df)
 
         # 5. Makro bağlam (opsiyonel)
         if macro_df is not None and not macro_df.empty:
@@ -116,15 +123,53 @@ class FeaturePipeline:
             return df, feature_names
 
         corr = df[numeric_features].corr().abs()
-        upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
+        feature_order = {name: idx for idx, name in enumerate(feature_names)}
+        adjacency = {name: set() for name in numeric_features}
+        for idx, left in enumerate(numeric_features):
+            for right in numeric_features[idx + 1:]:
+                value = corr.loc[left, right]
+                if pd.notna(value) and value > self.correlation_threshold:
+                    adjacency[left].add(right)
+                    adjacency[right].add(left)
+
         dropped = []
-        for col in upper.columns:
-            high_corr = upper[col][upper[col] > self.correlation_threshold]
-            if not high_corr.empty:
+        visited = set()
+        for feature in numeric_features:
+            if feature in visited:
+                continue
+            stack = [feature]
+            component = []
+            visited.add(feature)
+            while stack:
+                current = stack.pop()
+                component.append(current)
+                for neighbor in adjacency[current]:
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        stack.append(neighbor)
+
+            if len(component) < 2:
+                continue
+
+            component = sorted(component, key=lambda name: feature_order.get(name, 10**9))
+            mean_corr = {
+                name: float(corr.loc[name, [other for other in component if other != name]].mean())
+                for name in component
+            }
+            kept = min(component, key=lambda name: (mean_corr[name], feature_order.get(name, 10**9)))
+            for name in component:
+                if name == kept:
+                    continue
+                peers = [other for other in component if other != name]
+                correlated_with = max(peers, key=lambda other: float(corr.loc[name, other]))
                 dropped.append({
-                    "feature": col,
-                    "correlated_with": str(high_corr.idxmax()),
-                    "abs_corr": float(high_corr.max()),
+                    "feature": name,
+                    "kept_feature": kept,
+                    "correlated_with": str(correlated_with),
+                    "abs_corr": float(corr.loc[name, correlated_with]),
+                    "mean_abs_corr": mean_corr[name],
+                    "kept_mean_abs_corr": mean_corr[kept],
+                    "method": "mean_abs_correlation_cluster",
                 })
 
         drop_names = [item["feature"] for item in dropped]
@@ -138,6 +183,7 @@ class FeaturePipeline:
         self.pruning_report = {
             "enabled": True,
             "threshold": self.correlation_threshold,
+            "method": "mean_abs_correlation_cluster",
             "dropped_features": dropped,
         }
         return df, feature_names
@@ -168,6 +214,14 @@ class FeaturePipeline:
             if self.feature_mode in {"legacy_price_features", "hybrid"}:
                 df[f"SMA_{w}"] = sma
                 df[f"EMA_{w}"] = ema
+        return df
+
+    def _add_market_regime(self, df: pd.DataFrame) -> pd.DataFrame:
+        close = df[self.close_col]
+        sma_200 = close.rolling(window=200, min_periods=200).mean()
+        regime = np.where(close > sma_200, 1, -1)
+        regime = np.where(sma_200.isna(), 0, regime)
+        df["Market_Regime_SMA200"] = regime.astype(int)
         return df
 
     def _add_volatility(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -211,6 +265,32 @@ class FeaturePipeline:
         return df
 
     # ── Makro Birleştirme ─────────────────────────────────────────────────────
+    def _add_volume_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        close = df[self.close_col]
+        high = df[self.high_col]
+        low = df[self.low_col]
+        volume = df[self.volume_col].astype(float)
+        volume_sum_20 = volume.rolling(20).sum().replace(0, np.nan)
+
+        direction = np.sign(close.diff()).fillna(0.0)
+        obv_flow = direction * volume
+        df["OBV_Norm_20"] = obv_flow.rolling(20).sum() / volume_sum_20
+
+        typical_price = (high + low + close) / 3.0
+        vwap_20 = (typical_price * volume).rolling(20).sum() / volume_sum_20
+        df["VWAP_20_rel"] = close / vwap_20.replace(0, np.nan) - 1.0
+        return df
+
+    def _add_lag_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        if self.lag_feature_count <= 0:
+            return df
+        log_ret = df["Log_Return"] if "Log_Return" in df.columns else np.log(
+            df[self.close_col] / df[self.close_col].shift(1)
+        )
+        for i in range(1, self.lag_feature_count + 1):
+            df[f"LogRet_Lag_{i}"] = log_ret.shift(i)
+        return df
+
     def _merge_macro(
         self,
         df:       pd.DataFrame,

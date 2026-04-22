@@ -54,6 +54,16 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+try:
+    import requests
+except ImportError:  # pragma: no cover - minimal validation runtimes
+    class _MissingRequests:
+        @staticmethod
+        def get(*args, **kwargs):
+            raise ImportError("requests yüklü değil -> pip install requests")
+
+    requests = _MissingRequests()
+
 warnings.filterwarnings("ignore")
 
 
@@ -67,9 +77,12 @@ _YFINANCE_TICKERS = {
     "BIST100": "XU100.IS",
 }
 
+_EVDS_BASE_URL = "https://evds2.tcmb.gov.tr/service/evds/"
+_DEFAULT_EVDS_RATE_SERIES = "TP.PPK.H01"
+_MONTHLY_SERIES_KEYS = ("INTEREST_RATE", "CPI")
+
 # FRED'den çekilen aylık seriler
 _FRED_SERIES = {
-    "INTEREST_RATE": "INTDSRTRM193N",    # IMF iskonto faizi (aylık, % yıllık)
     "CPI":           "TURCPIALLMINMEI",  # Türkiye TÜFE endeksi (aylık)
 }
 
@@ -199,12 +212,86 @@ class MacroPipeline:
             print(f"  [MACRO] FRED {series_id}: {exc}")
             return None
 
+    def _fetch_evds_series(
+        self,
+        series_id: str,
+        start: str,
+        end: str,
+        value_name: str,
+    ) -> Optional[pd.DataFrame]:
+        """
+        TCMB EVDS web servisinden tek seri ceker.
+
+        API anahtari TCMB_EVDS_API_KEY ortam degiskeninden okunur. Faiz seri
+        kodu TCMB_EVDS_RATE_SERIES ile override edilebilir.
+        """
+        api_key = os.getenv("TCMB_EVDS_API_KEY", "").strip()
+        if not api_key:
+            print("  [MACRO] TCMB_EVDS_API_KEY yok; EVDS faiz guncellemesi atlandi.")
+            return None
+
+        params = {
+            "series": series_id,
+            "startDate": pd.to_datetime(start).strftime("%d-%m-%Y"),
+            "endDate": pd.to_datetime(end).strftime("%d-%m-%Y"),
+            "type": "json",
+            "aggregationTypes": "avg",
+            "formulas": "0",
+            "frequency": "5",
+        }
+        try:
+            response = requests.get(
+                _EVDS_BASE_URL,
+                params=params,
+                headers={"key": api_key},
+                timeout=30,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:
+            print(f"  [MACRO] EVDS {series_id}: {exc}")
+            return None
+
+        if isinstance(payload, dict):
+            items = payload.get("items", [])
+        elif isinstance(payload, list):
+            items = payload
+        else:
+            items = []
+        if not items:
+            return None
+
+        rows = []
+        ignored_cols = {"Tarih", "Date", "UNIXTIME", "YEARWEEK"}
+        for item in items:
+            date_value = item.get("Tarih", item.get("Date"))
+            value_key = next((k for k in item.keys() if k not in ignored_cols), None)
+            if date_value is None or value_key is None:
+                continue
+            value = item.get(value_key)
+            if value in (None, "", "-"):
+                continue
+            try:
+                numeric_value = float(str(value).replace(",", "."))
+            except ValueError:
+                continue
+            rows.append({
+                "Date": pd.to_datetime(date_value, dayfirst=True, errors="coerce"),
+                value_name: numeric_value,
+            })
+
+        df = pd.DataFrame(rows).dropna()
+        if df.empty:
+            return None
+        df["Date"] = pd.to_datetime(df["Date"]).dt.normalize()
+        df.sort_values("Date", inplace=True)
+        return df[["Date", value_name]]
+
     def _update_monthly_cache(self, key: str, start: str) -> None:
         """
         Aylık FRED verisini günceller.
         Başarısız olursa manual CSV olup olmadığını kontrol eder.
         """
-        series_id = _FRED_SERIES[key]
         path      = self._cache_path(key)
         existing  = self._load_cache(key)
 
@@ -216,9 +303,14 @@ class MacroPipeline:
             fetch_start = start
 
         fetch_end = (datetime.today() + timedelta(days=1)).strftime("%Y-%m-%d")
-        print(f"  [MACRO] {key} (FRED:{series_id}) güncelleniyor ...")
-
-        new_data = self._fetch_fred(series_id, fetch_start, fetch_end)
+        if key == "INTEREST_RATE":
+            series_id = os.getenv("TCMB_EVDS_RATE_SERIES", _DEFAULT_EVDS_RATE_SERIES).strip()
+            print(f"  [MACRO] {key} (EVDS:{series_id}) guncelleniyor ...")
+            new_data = self._fetch_evds_series(series_id, fetch_start, fetch_end, key)
+        else:
+            series_id = _FRED_SERIES[key]
+            print(f"  [MACRO] {key} (FRED:{series_id}) güncelleniyor ...")
+            new_data = self._fetch_fred(series_id, fetch_start, fetch_end)
 
         if new_data is not None and not new_data.empty:
             # Sütun adını normalize et: series_id → key (INTEREST_RATE veya CPI)
@@ -302,8 +394,8 @@ class MacroPipeline:
             print("  [MACRO] Döviz/endeks verisi yüklenemedi, makro özellikler atlanacak.")
             return pd.DataFrame()
 
-        # ── Aylık veriler (FRED) ──────────────────────────────────────────────
-        for key in _FRED_SERIES:
+        # ── Aylık veriler (EVDS/FRED) ─────────────────────────────────────────
+        for key in _MONTHLY_SERIES_KEYS:
             if self._is_stale(key, _STALE_DAYS_MONTHLY):
                 self._update_monthly_cache(key, buf_monthly)
 
@@ -412,9 +504,10 @@ class MacroPipeline:
         Çıkış  : Date + Rate_Level + Rate_Change
         """
         df = df.copy().sort_values("Date").reset_index(drop=True)
-        df["Rate_Level"]  = df["INTEREST_RATE"]
-        df["Rate_Change"] = df["INTEREST_RATE"].diff()   # gerçek aylık fark (ör. 42 → 45 → +3)
-        df.drop(columns=["INTEREST_RATE"], inplace=True)
+        rate_col = "INTEREST_RATE" if "INTEREST_RATE" in df.columns else "Rate"
+        df["Rate_Level"]  = df[rate_col]
+        df["Rate_Change"] = df[rate_col].diff()   # gerçek aylık fark (ör. 42 → 45 → +3)
+        df.drop(columns=[rate_col], inplace=True)
         return df[["Date", "Rate_Level", "Rate_Change"]]
 
     @staticmethod
