@@ -1,13 +1,31 @@
-# Kullanıcının Ekledikleri
+# ── Kullanıcının Ekledikleri ────────────────────────────────────────────
 /outputs
 /models
-/docs/İleri Yönlü Plan.md
-/docs/yapilmasiPlanlananlar.txt
-/docs/technical_audit_report.md
 /docs/
 
-
 /stock_models.db
+/data/stock_models.db
+# SQLite WAL/SHM journal dosyaları (tüm .db türleri)
+*.db-wal
+*.db-shm
+*.github
+# Optuna warm-start SQLite dosyaları (makineye özgü, otomatik yeniden oluşturulur)
+optuna_studies*.db
+optuna_studies_*.db
+
+# Feature cache (ham veriden otomatik yeniden oluşturulur)
+data/feature_cache/
+
+# İndirilen makro veri CSV'leri (yfinance/FRED'den yeniden çekilir)
+data/macro/*.csv
+
+# Batch çalışma raporları (çalışmaya özgü, arşiv değeri yok)
+batch_summary_*.csv
+batch_summary_*.json
+
+# AI asistan talimat dosyaları (proje dökümantasyonu değil)
+CLAUDE.md
+AGENTS.md
 
 # Python
 __pycache__/
@@ -71,3 +89,7 @@ cover/
 # Veri seti (Gerekiyorsa, bu klasörü git'e atmamak mantıklı olabilir, ancak kullanıcı verileri data/ içinde tutuyor).
 # Büyük boyutlu CSV'leri takip etmemek için:
 # /data/*.csv
+
+.pre-commit-config.yaml
+.flake8
+pyproject.toml

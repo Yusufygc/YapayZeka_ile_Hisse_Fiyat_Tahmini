@@ -11,7 +11,7 @@ from src.backtesting.engine import run_backtest
 from src.backtesting.metrics import summarize_backtest
 from src.backtesting.reporting import save_backtest_report, save_fold_backtest_report
 from src.backtesting.signals import SignalConfig
-from src.reporting_utils import with_output_extension
+from src.utils.reporting_utils import with_output_extension
 
 try:
     from src.pipeline.evaluation_manager import EvaluationManager

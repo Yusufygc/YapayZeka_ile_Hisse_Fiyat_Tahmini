@@ -13,7 +13,7 @@ from src.backtesting.engine import run_backtest
 from src.backtesting.metrics import summarize_backtest
 from src.backtesting.reporting import save_backtest_report
 from src.evaluation.financial_metrics import compute_financial_metrics
-from src.evaluator import save_metrics_report
+from src.evaluation.evaluator import save_metrics_report
 from src.model_registry.model_registry import ModelRegistry
 from src.utils.data_splitter import TimeSeriesSplitter
 
@@ -92,7 +92,7 @@ class Phase7AcceptanceTests(unittest.TestCase):
 
     def test_scaler_fit_uses_train_only_statistics(self):
         try:
-            from src.preprocessor import scale_data
+            from src.data.preprocessor import scale_data
         except ImportError as exc:
             self.skipTest(f"preprocessor dependency missing: {exc}")
 
@@ -209,7 +209,7 @@ class Phase7AcceptanceTests(unittest.TestCase):
 
     def test_regression_zero_return_reconstructs_prev_close_and_metrics_are_stable(self):
         try:
-            from src.preprocessor import reconstruct_prices_from_logret
+            from src.data.preprocessor import reconstruct_prices_from_logret
         except ImportError as exc:
             self.skipTest(f"preprocessor dependency missing: {exc}")
 

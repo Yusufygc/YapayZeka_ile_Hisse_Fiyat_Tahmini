@@ -72,7 +72,7 @@ class Phase5DataQualityTests(unittest.TestCase):
 
     def test_load_and_clean_records_adj_close_report_when_available(self):
         try:
-            from src.data_loader import load_and_clean
+            from src.data.data_loader import load_and_clean
         except ImportError as exc:
             self.skipTest(f"data_loader dependency missing: {exc}")
 
@@ -98,7 +98,42 @@ class Phase5DataQualityTests(unittest.TestCase):
         report = df.attrs["corporate_action_report"]
         self.assertTrue(report["adj_close_available"])
         self.assertEqual(report["price_source"], "Adj_Close")
+        self.assertTrue(report["adjusted_price_trusted"])
+        self.assertFalse(report["corporate_action_anomaly"])
         np.testing.assert_allclose(df["Close"].to_numpy(), np.array([10.0, 10.0, 15.0]))
+
+    def test_load_and_clean_rejects_anomalous_adj_close_and_keeps_raw_close(self):
+        try:
+            from src.data.data_loader import load_and_clean
+        except ImportError as exc:
+            self.skipTest(f"data_loader dependency missing: {exc}")
+
+        tmp = os.path.abspath(os.path.join("outputs", "_test_phase5_adj_anomaly"))
+        if os.path.exists(tmp):
+            shutil.rmtree(tmp)
+        os.makedirs(tmp, exist_ok=True)
+        path = os.path.join(tmp, "adj_anomaly.csv")
+        try:
+            pd.DataFrame({
+                "Date": pd.date_range("2024-01-01", periods=3),
+                "Open": [10.0, 11.0, 12.0],
+                "High": [11.0, 12.0, 13.0],
+                "Low": [9.0, 10.0, 11.0],
+                "Close": [10.0, 20.0, 30.0],
+                "Adj_Close": [10.0, 500000.0, 15.0],
+                "Volume": [100, 100, 100],
+            }).to_csv(path, index=False)
+            df = load_and_clean(path)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+        report = df.attrs["corporate_action_report"]
+        self.assertTrue(report["adj_close_available"])
+        self.assertEqual(report["price_source"], "Close")
+        self.assertFalse(report["adjusted_price_trusted"])
+        self.assertTrue(report["corporate_action_anomaly"])
+        self.assertGreater(report["max_abs_adj_close_diff_pct"], report["anomaly_threshold_pct"])
+        np.testing.assert_allclose(df["Close"].to_numpy(), np.array([10.0, 20.0, 30.0]))
 
     def test_scaling_report_warns_on_high_test_clip(self):
         try:

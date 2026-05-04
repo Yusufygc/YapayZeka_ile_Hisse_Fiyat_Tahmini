@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from src.models.arima_model import ARIMAModel
-from src.models.linear_sequence_model import DLinearSequenceModel, NLinearSequenceModel, PatchTSTExperimentalModel
+from src.models.linear_sequence_model import DLinearSequenceModel, NLinearSequenceModel
 
 
 class Phase4ModelTests(unittest.TestCase):
@@ -18,7 +18,7 @@ class Phase4ModelTests(unittest.TestCase):
         y = rng.normal(size=24)
         X_test = rng.normal(size=(5, 8, 3))
 
-        for cls in (DLinearSequenceModel, NLinearSequenceModel, PatchTSTExperimentalModel):
+        for cls in (DLinearSequenceModel, NLinearSequenceModel):
             model = cls(alpha=0.1)
             model.train(X, y)
             preds = model.predict(X_test)

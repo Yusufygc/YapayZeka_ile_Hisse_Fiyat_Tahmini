@@ -10,7 +10,7 @@ import pandas as pd
 from src.backtesting.metrics import summarize_backtest
 from src.database.stock_model_db import compute_composite_score
 from src.evaluation.financial_metrics import compute_financial_metrics, compute_quantile_metrics
-from src.evaluator import enrich_with_benchmark_metrics, save_metrics_report
+from src.evaluation.evaluator import enrich_with_benchmark_metrics, save_metrics_report
 from src.pipeline.evaluation_manager import EvaluationManager
 
 
