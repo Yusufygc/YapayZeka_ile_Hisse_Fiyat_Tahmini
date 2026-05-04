@@ -6,20 +6,29 @@ model_trainer.py - Model Egitim Orkestratoru
 import numpy as np
 
 from src.experiments.experiment_tracker import ExperimentTracker
-from src.model_registry.model_registry import ModelRegistry
 from src.models.arima_model import ARIMAModel
 from src.models.gradient_boosting_model import LightGBMReturnModel
 from src.models.linear_model import ElasticNetReturnModel, RidgeReturnModel
-from src.models.linear_sequence_model import DLinearSequenceModel, NLinearSequenceModel, PatchTSTExperimentalModel
+from src.models.linear_sequence_model import DLinearSequenceModel, NLinearSequenceModel
 from src.models.lstm_model import AttentionLSTMModel
 from src.models.naive_model import NaiveDriftModel, NaiveLastValueModel, NaiveZeroReturnModel
-from src.models.prophet_model import ProphetModel
 from src.models.random_forest_model import RandomForestModel
-from src.models.tft_model import TFTModel
+from src.models.tft_v2 import TFTModel   # v2: A4 quantile crossing fix
 from src.models.xgboost_model import XGBoostModel
 from src.validation.walk_forward import WalkForwardValidator
 
-_ALL_MODELS = ["Prophet", "XGBoost", "Random Forest", "LightGBM Return", "LSTM", "TFT", "DLinear", "NLinear", "PatchTST Experimental"]
+# Aktif üretim modelleri — pipeline menüsünde gösterilir
+_ALL_MODELS = ["XGBoost", "LSTM", "TFT", "DLinear", "NLinear"]
+
+# Kabul görmüş literatüre göre isteğe bağlı; yüksek hesaplama maliyeti veya
+# sınırlı ek değer sunar; yalnızca karşılaştırma amacıyla kullanılır
+_OPTIONAL_MODELS = ["Random Forest", "LightGBM Return"]
+
+# Üretim kullanımı önerilmez (literatür temelli):
+#   ARIMA  — X_train'i yok sayar, yalnızca y_train kullanır (Fama 1970/1991)
+#   Prophet — walk-forward desteği yok; yalnızca single-split (Taylor & Letham 2018)
+_LEGACY_MODELS = ["ARIMA", "Prophet"]
+
 _BASELINE_MODELS = [
     "Naive Last Value",
     "Naive Zero Return",
@@ -30,10 +39,9 @@ _BASELINE_MODELS = [
     "LightGBM Return",
     "DLinear",
     "NLinear",
-    "PatchTST Experimental",
 ]
 _TREE_MODELS = {"XGBoost", "Random Forest", "Ridge Return", "ElasticNet Return", "LightGBM Return"}
-_SEQ_MODELS = {"LSTM", "TFT", "DLinear", "NLinear", "PatchTST Experimental"}
+_SEQ_MODELS = {"LSTM", "TFT", "DLinear", "NLinear"}
 
 
 class ModelTrainer:
@@ -41,22 +49,18 @@ class ModelTrainer:
         self,
         stock_symbol: str,
         tracker: ExperimentTracker,
-        registry: ModelRegistry,
         feature_names: list,
         selected_models: list = None,
         dataset_hash: str = "N/A",
         dataset_metadata: dict | None = None,
-        registry_version: str = "v5",
         model_config: dict | None = None,
     ):
         self.stock_symbol = stock_symbol
         self.tracker = tracker
-        self.registry = registry
         self.feature_names = feature_names
         self.selected_models = set(selected_models) if selected_models else set(_ALL_MODELS)
         self.dataset_hash = dataset_hash
         self.dataset_metadata = dataset_metadata or {}
-        self.registry_version = registry_version
         self.model_config = model_config or self.dataset_metadata.get("model_config", {})
         self.deep_config = self._build_deep_config(self.model_config.get("deep_learning", {}))
 
@@ -95,7 +99,6 @@ class ModelTrainer:
                 "dropout": 0.3,
                 "batch_size": 32,
             },
-            "patchtst": {"patch_length": 16, "stride": 8, "alpha": 1.0},
         }
         merged = dict(default)
         merged.update({key: value for key, value in config.items() if key not in {"lstm", "tft"}})
@@ -108,7 +111,8 @@ class ModelTrainer:
     def _arima_config(self) -> dict:
         return self.model_config.get("arima", {})
 
-    def _make_prophet(self) -> ProphetModel:
+    def _make_prophet(self):
+        from src.models.prophet_model import ProphetModel  # geç import — isteğe bağlı bağımlılık
         cfg = self.model_config.get("prophet", {})
         return ProphetModel(
             yearly_seasonality=True,
@@ -159,7 +163,8 @@ class ModelTrainer:
 
     def _wf_has_min_sequences(self, wf_splits: list, data_manager, model_name: str) -> bool:
         min_seq = int(self.deep_config.get("min_sequence_samples", 64))
-        min_fold_seq = min(max(0, len(split["train"]) - data_manager.time_steps) for split in wf_splits) if wf_splits else 0
+        time_steps = getattr(data_manager, "time_steps", None) or data_manager.data_cfg.time_steps
+        min_fold_seq = min(max(0, len(split["train"]) - time_steps) for split in wf_splits) if wf_splits else 0
         if min_fold_seq < min_seq:
             print(f"  [WARN] {model_name} walk-forward atlandi: en kucuk fold sequence sayisi {min_fold_seq} < {min_seq}.")
             return False
@@ -172,6 +177,35 @@ class ModelTrainer:
             print(f"  [--] {name} atlandi (secilmedi).")
             return True
         return False
+
+    def _wf_run(
+        self,
+        name: str,
+        factory,
+        preprocessor,
+        wf_splits: list,
+        validators: dict,
+        *,
+        skip_import_err: bool = False,
+    ) -> None:
+        """Walk-forward dogrulamasi icin yardimci metot (DRY).
+
+        WalkForwardValidator olusturur, calistirir ve validators sozlugune kaydeder.
+        skip_import_err=True ile opsiyonel bagimlilik hatalarini sessizce atar.
+        """
+        try:
+            validator = WalkForwardValidator(
+                factory,
+                preprocessor,
+                target_mode=self.dataset_metadata.get("target_mode", "log_return"),
+            )
+            validator.run(wf_splits)
+            validators[name] = validator
+        except ImportError as exc:
+            if skip_import_err:
+                print(f"  [WARN] {name} walk-forward atlandi: {exc}")
+            else:
+                raise
 
     def _baseline_specs(self):
         target_mode = self.dataset_metadata.get("target_mode", "log_return")
@@ -194,18 +228,9 @@ class ModelTrainer:
         return [("LightGBM Return", LightGBMReturnModel)]
 
     def _sequence_baseline_specs(self):
-        patch_cfg = self.model_config.get("experimental_sequence_baselines", {}).get("patchtst_config", {})
         return [
             ("DLinear", DLinearSequenceModel),
             ("NLinear", NLinearSequenceModel),
-            (
-                "PatchTST Experimental",
-                lambda: PatchTSTExperimentalModel(
-                    alpha=float(patch_cfg.get("alpha", 1.0)),
-                    patch_length=int(patch_cfg.get("patch_length", 16)),
-                    stride=int(patch_cfg.get("stride", 8)),
-                ),
-            ),
         ]
 
     def _model_class_for_name(self, model_name: str):
@@ -214,12 +239,17 @@ class ModelTrainer:
         mapping.update({name: cls for name, cls in self._boosting_baseline_specs()})
         mapping.update({name: cls for name, cls in self._sequence_baseline_specs()})
         mapping.update({
-            "Prophet": ProphetModel,
             "XGBoost": XGBoostModel,
             "Random Forest": RandomForestModel,
             "LSTM": AttentionLSTMModel,
             "TFT": TFTModel,
         })
+        # Legacy modeller (doğrudan model_class_for_name üzerinden erişilemez)
+        try:
+            from src.models.prophet_model import ProphetModel  # isteğe bağlı
+            mapping["Prophet"] = ProphetModel
+        except ImportError:
+            pass
         if model_name not in mapping:
             raise KeyError(f"Bilinmeyen model adi: {model_name}")
         return mapping[model_name]
@@ -282,7 +312,8 @@ class ModelTrainer:
                 model.train(tensors["X_train_seq"], tensors["y_train_seq"])
                 self.trained_models[name] = model
 
-        if not self._skip("Prophet"):
+        if not self._skip("Prophet") and "Prophet" in self.selected_models:
+            # Prophet yalnızca _LEGACY_MODELS içindedir; kullanıcı açıkça seçmişse çalıştır
             try:
                 prophet = self._make_prophet()
                 prophet.train(tensors["X_train"], tensors["y_train"], dates_train=tensors["dates_train"])
@@ -292,12 +323,23 @@ class ModelTrainer:
 
         if not self._skip("XGBoost"):
             xgb = XGBoostModel()
-            xgb.tune_and_train(tensors["X_train_s"], tensors["y_train_s"], n_trials=5, n_splits=3)
+            _optuna_storage = f"sqlite:///optuna_studies_{self.stock_symbol}.db"
+            xgb.tune_and_train(
+                tensors["X_train_s"], tensors["y_train_s"],
+                n_trials=5, n_splits=3,
+                study_storage=_optuna_storage,
+                study_name=f"xgb_{self.stock_symbol}",
+            )
             self.trained_models["XGBoost"] = xgb
 
         if not self._skip("Random Forest"):
             rf = RandomForestModel()
-            rf.tune_and_train(tensors["X_train_s"], tensors["y_train_s"], n_trials=5, n_splits=3)
+            rf.tune_and_train(
+                tensors["X_train_s"], tensors["y_train_s"],
+                n_trials=5, n_splits=3,
+                study_storage=_optuna_storage,
+                study_name=f"rf_{self.stock_symbol}",
+            )
             self.trained_models["Random Forest"] = rf
 
         if not self._skip("LSTM"):
@@ -324,6 +366,7 @@ class ModelTrainer:
                 t["dates_test"],
                 t["dates_prediction"],
                 t["y_test"],
+                t.get("market_regime_test", []),
             )
 
         def preprocessor_tree(train_df, test_df, context_df=None):
@@ -337,6 +380,7 @@ class ModelTrainer:
                 t["dates_test"],
                 t["dates_prediction"],
                 t["y_test"],
+                t.get("market_regime_test", []),
             )
 
         def preprocessor_seq(train_df, test_df, context_df=None):
@@ -350,6 +394,7 @@ class ModelTrainer:
                 t["dates_test"],
                 t["dates_prediction"],
                 t["y_test"],
+                t.get("market_regime_test", []),
             )
 
         if "Prophet" in self.selected_models:
@@ -358,82 +403,31 @@ class ModelTrainer:
         validators = {}
 
         for name, cls in self._baseline_specs():
-            validator = WalkForwardValidator(
-                cls,
-                preprocessor_baseline,
-                target_mode=self.dataset_metadata.get("target_mode", "log_return"),
-            )
-            validator.run(wf_splits)
-            validators[name] = validator
+            self._wf_run(name, cls, preprocessor_baseline, wf_splits, validators)
 
         for name, cls in self._linear_baseline_specs():
-            validator = WalkForwardValidator(
-                cls,
-                preprocessor_tree,
-                target_mode=self.dataset_metadata.get("target_mode", "log_return"),
-            )
-            validator.run(wf_splits)
-            validators[name] = validator
+            self._wf_run(name, cls, preprocessor_tree, wf_splits, validators)
 
         for name, cls in self._boosting_baseline_specs():
-            try:
-                validator = WalkForwardValidator(
-                    cls,
-                    preprocessor_tree,
-                    target_mode=self.dataset_metadata.get("target_mode", "log_return"),
-                )
-                validator.run(wf_splits)
-                validators[name] = validator
-            except ImportError as exc:
-                print(f"  [WARN] {name} walk-forward atlandi: {exc}")
+            self._wf_run(name, cls, preprocessor_tree, wf_splits, validators, skip_import_err=True)
 
         for name, cls in self._sequence_baseline_specs():
             if self._wf_has_min_sequences(wf_splits, data_manager, name):
-                validator = WalkForwardValidator(
-                    cls,
-                    preprocessor_seq,
-                    target_mode=self.dataset_metadata.get("target_mode", "log_return"),
-                )
-                validator.run(wf_splits)
-                validators[name] = validator
+                self._wf_run(name, cls, preprocessor_seq, wf_splits, validators)
 
         if not self._skip("XGBoost"):
-            validator = WalkForwardValidator(
-                XGBoostModel,
-                preprocessor_tree,
-                target_mode=self.dataset_metadata.get("target_mode", "log_return"),
-            )
-            validator.run(wf_splits)
-            validators["XGBoost"] = validator
+            self._wf_run("XGBoost", XGBoostModel, preprocessor_tree, wf_splits, validators)
 
         if not self._skip("Random Forest"):
-            validator = WalkForwardValidator(
-                RandomForestModel,
-                preprocessor_tree,
-                target_mode=self.dataset_metadata.get("target_mode", "log_return"),
-            )
-            validator.run(wf_splits)
-            validators["Random Forest"] = validator
+            self._wf_run("Random Forest", RandomForestModel, preprocessor_tree, wf_splits, validators)
 
         if not self._skip("LSTM"):
             if self._wf_has_min_sequences(wf_splits, data_manager, "LSTM"):
-                validator = WalkForwardValidator(
-                    lambda: self._make_lstm("wf"),
-                    preprocessor_seq,
-                    target_mode=self.dataset_metadata.get("target_mode", "log_return"),
-                )
-                validator.run(wf_splits)
-                validators["LSTM"] = validator
+                self._wf_run("LSTM", lambda: self._make_lstm("wf"), preprocessor_seq, wf_splits, validators)
 
         if not self._skip("TFT"):
             if self._wf_has_min_sequences(wf_splits, data_manager, "TFT"):
-                validator = WalkForwardValidator(
-                    lambda: self._make_tft("wf"),
-                    preprocessor_seq,
-                    target_mode=self.dataset_metadata.get("target_mode", "log_return"),
-                )
-                validator.run(wf_splits)
-                validators["TFT"] = validator
+                self._wf_run("TFT", lambda: self._make_tft("wf"), preprocessor_seq, wf_splits, validators)
 
         for name, validator in validators.items():
             self.wf_results[name] = validator.aggregated_metrics
@@ -481,12 +475,4 @@ class ModelTrainer:
                 self.dataset_hash,
                 self.dataset_metadata,
             )
-            self.registry.register(
-                model_name,
-                f"{self.registry_version}_wf",
-                self.feature_names,
-                metrics,
-                "none",
-                self.dataset_hash,
-                self.dataset_metadata,
-            )
+            # registry.register kaldırıldı (Faz 1.3)

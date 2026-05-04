@@ -1,0 +1,106 @@
+# -*- coding: utf-8 -*-
+"""
+config.py - Pipeline Configuration Objects
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Grup parametrelerini mantiksal nesnelerde toplayarak
+parameter explosion ve over-engineering hantalligi giderir.
+"""
+
+from dataclasses import dataclass, field
+from typing import List, Optional, Dict, Any
+from src.backtesting.signals import SignalConfig
+
+@dataclass
+class DataConfig:
+    """Veri yukleme, ozellik muhendisligi ve kalite kontrolleri ayarlari."""
+    data_file: str
+    test_ratio: float = 0.20
+    time_steps: int = 30
+    target_mode: str = "log_return"
+    feature_mode: str = "stationary_features"
+    scaling_mode: str = "robust_x_standard_y_clip"
+    use_macro: bool = True
+    macro_rate_lag_days: int = 1
+    macro_cpi_lag_days: int = 15
+    prune_correlated_features: bool = False
+    correlation_threshold: float = 0.98
+    lag_feature_count: int = 5
+    universe_file: str = "data/bist_universe.csv"
+    clip_shift_warning_threshold_pct: float = 1.0
+    training_window_years: Optional[int] = 5
+    window_candidates: List[Optional[int]] = field(default_factory=lambda: [3, 5, 7, 10, None])
+    min_history_days: int = 504
+    new_listing_min_days: int = 252
+
+@dataclass
+class ValidationConfig:
+    """Validasyon protokolu (Single Split, Walk-Forward) ayarlari."""
+    validation_mode: str = "single_split"  # "single_split" veya "walk_forward"
+    wf_n_splits: int = 12
+    wf_min_train_size: int = 504
+    wf_test_size: int = 21
+    wf_max_train_size: Optional[int] = 756
+    wf_window_type: str = "sliding"
+    wf_embargo_size: Optional[int] = None
+    final_holdout_size: int = 60
+
+@dataclass
+class ModelConfig:
+    """Model secimi, hiperparametreler ve ensemble ayarlari."""
+    selected_models: Optional[List[str]] = None
+    registry_version: str = "v5"
+    ensemble_enabled: bool = True
+    model_settings: Dict[str, Any] = field(default_factory=lambda: {
+        "arima": {"auto_order": False, "order": (1, 0, 0)},
+        "deep_learning": {
+            "min_sequence_samples": 64,
+            "validation_ratio": 0.1,
+            "min_validation_samples": 32,
+            "lstm": {
+                "epochs_single": 80,
+                "epochs_wf": 50,
+                "epochs_final": 50,
+                "patience": 15,
+                "lr_patience": 5,
+                "dropout": 0.2,
+                "batch_size": 32,
+            },
+            "tft": {
+                "model_label": "TFT-like Quantile Sequence Model",
+                "epochs_single": 80,
+                "epochs_wf": 50,
+                "epochs_final": 50,
+                "patience_single": 15,
+                "patience_wf": 12,
+                "patience_final": 12,
+                "lr_patience": 5,
+                "dropout": 0.3,
+                "batch_size": 32,
+            },
+        },
+        "experimental_sequence_baselines": {},
+        "gradient_boosting": {"lightgbm_optional": True},
+        "prophet": {"use_regressors": True},
+    })
+
+@dataclass
+class ExecutionConfig:
+    """Backtest, maliyetler ve sinyal uretim ayarlari."""
+    backtest_enabled: bool = True
+    initial_capital: float = 100000.0
+    commission_bps: float = 10.0
+    slippage_bps: float = 5.0
+    signal_mode: str = "professional"  # "legacy" veya "professional"
+    signal_config: SignalConfig = field(default_factory=SignalConfig)
+    # Leakage korumasi (Faz 2.5):
+    # "wf_train" → kalibrasyon yalnizca WF fold verisi kullanir; final holdout ASLA.
+    # Baska bir deger atanirsa _assert_wf_train_scope() RuntimeError firlatir.
+    calibration_scope: str = "wf_train"
+
+@dataclass
+class PipelineConfig:
+    """Tum pipeline'i kapsayan kok konfigurasyon nesnesi."""
+    data: DataConfig
+    validation: ValidationConfig = field(default_factory=ValidationConfig)
+    models: ModelConfig = field(default_factory=ModelConfig)
+    execution: ExecutionConfig = field(default_factory=ExecutionConfig)

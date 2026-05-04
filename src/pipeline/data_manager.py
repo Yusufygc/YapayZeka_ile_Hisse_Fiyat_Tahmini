@@ -12,62 +12,37 @@ import hashlib
 import numpy as np
 import pandas as pd
 
-from src.data_updater import DataUpdater
-from src.data_loader import load_data
-from src.preprocessor import scale_data, create_sequences
+from src.data.data_updater import DataUpdater
+from src.data.data_loader import load_data
+from src.data.preprocessor import scale_data, create_sequences
 from src.utils.data_splitter import TimeSeriesSplitter
 from src.features.feature_pipeline import FeaturePipeline
+from src.features.feature_cache import FeatureCache
 from src.features.macro_pipeline import MacroPipeline
+from src.pipeline.config import DataConfig, ValidationConfig
 
 
 class DataManager:
     """
     Args:
-        data_file      : Hisse senedi CSV dosyasının tam yolu.
-        test_ratio     : Test seti oranı (0-1).
-        time_steps     : Sequence uzunluğu (LSTM/TFT için).
+        data_cfg       : Veri yükleme ve özellik mühendisliği konfigürasyonu.
+        val_cfg        : Validasyon protokolü konfigürasyonu.
         models_dir     : Scaler objelerinin kaydedileceği dizin.
-        use_macro      : True ise USD/TRY + BIST100 makro özellikler eklenir.
         macro_cache_dir: Makro CSV cache dizini.
     """
 
     def __init__(
         self,
-        data_file:       str,
-        test_ratio:      float,
-        time_steps:      int,
+        data_cfg:        DataConfig,
+        val_cfg:         ValidationConfig,
         models_dir:      str,
-        use_macro:       bool = True,
         macro_cache_dir: str  = None,
-        target_mode:     str  = "log_return",
-        feature_mode:    str  = "stationary_features",
-        scaling_mode:    str  = "robust_x_standard_y_clip",
-        macro_rate_lag_days: int = 1,
-        macro_cpi_lag_days: int = 15,
-        wf_n_splits: int = 12,
-        wf_min_train_size: int = 504,
-        wf_test_size: int = 21,
-        wf_max_train_size: int | None = 756,
-        wf_window_type: str = "sliding",
-        wf_embargo_size: int | None = None,
-        final_holdout_size: int = 60,
-        prune_correlated_features: bool = False,
-        correlation_threshold: float = 0.98,
-        lag_feature_count: int = 5,
-        universe_file: str = "data/bist_universe.csv",
-        clip_shift_warning_threshold_pct: float = 1.0,
-        training_window_years: int | None = 5,
-        window_candidates: list[int | None] | None = None,
-        min_history_days: int = 504,
-        new_listing_min_days: int = 252,
     ):
-        self.data_file  = data_file
-        self.test_ratio = test_ratio
-        self.time_steps = time_steps
+        self.data_cfg   = data_cfg
+        self.val_cfg    = val_cfg
         self.models_dir = models_dir
-        self.use_macro  = use_macro
 
-        self.stock_symbol = os.path.splitext(os.path.basename(self.data_file))[0]
+        self.stock_symbol = os.path.splitext(os.path.basename(self.data_cfg.data_file))[0]
 
         # Makro cache dizini: varsayılan olarak proje kökü altında data/macro/
         if macro_cache_dir is None:
@@ -84,37 +59,28 @@ class DataManager:
         self.wf_splits:     list         = []
         self.selection_df: pd.DataFrame | None = None
         self.final_holdout_df: pd.DataFrame | None = None
-        self.target_mode:   str          = target_mode
-        self.feature_mode:  str          = feature_mode
-        self.scaling_mode:  str          = scaling_mode
-        self.macro_rate_lag_days = macro_rate_lag_days
-        self.macro_cpi_lag_days = macro_cpi_lag_days
-        self.prune_correlated_features = prune_correlated_features
-        self.correlation_threshold = correlation_threshold
-        self.lag_feature_count = max(0, int(lag_feature_count))
+
         self.project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        self.universe_file = universe_file
+        self.universe_file = self.data_cfg.universe_file
         if self.universe_file and not os.path.isabs(self.universe_file):
             self.universe_file = os.path.join(self.project_root, self.universe_file)
-        self.clip_shift_warning_threshold_pct = clip_shift_warning_threshold_pct
-        self.training_window_years = training_window_years
-        self.window_candidates = window_candidates or [3, 5, 7, 10, None]
-        self.min_history_days = int(min_history_days)
-        self.new_listing_min_days = int(new_listing_min_days)
-        effective_wf_embargo_size = self.time_steps if wf_embargo_size is None else max(0, int(wf_embargo_size))
-        if wf_window_type not in {"sliding", "expanding"}:
+
+        effective_wf_embargo_size = self.data_cfg.time_steps if self.val_cfg.wf_embargo_size is None else max(0, int(self.val_cfg.wf_embargo_size))
+        
+        wf_max_train_size = self.val_cfg.wf_max_train_size
+        if self.val_cfg.wf_window_type not in {"sliding", "expanding"}:
             raise ValueError("wf_window_type 'sliding' veya 'expanding' olmalidir.")
-        if wf_window_type == "expanding":
+        if self.val_cfg.wf_window_type == "expanding":
             wf_max_train_size = None
 
         self.validation_config = {
-            "wf_n_splits": wf_n_splits,
-            "wf_min_train_size": wf_min_train_size,
-            "wf_test_size": wf_test_size,
+            "wf_n_splits": self.val_cfg.wf_n_splits,
+            "wf_min_train_size": self.val_cfg.wf_min_train_size,
+            "wf_test_size": self.val_cfg.wf_test_size,
             "wf_max_train_size": wf_max_train_size,
-            "wf_window_type": wf_window_type,
+            "wf_window_type": self.val_cfg.wf_window_type,
             "wf_embargo_size": effective_wf_embargo_size,
-            "final_holdout_size": final_holdout_size,
+            "final_holdout_size": self.val_cfg.final_holdout_size,
         }
         self.dataset_metadata: dict      = {}
         self.dataset_hash:  str          = "N/A"
@@ -125,6 +91,10 @@ class DataManager:
         self.training_window_report: dict = {}
         self.scaling_reports: list[dict] = []
         self._prepare_tensors_call_idx = 0
+        # Walk-forward modunda True: fold başına scaler diske yazılmaz.
+        # Aynı path'e tekrar tekrar yazılması (overwrite) inference için
+        # hangi fold'un scaler'ının geçerli olduğunu belirsizleştirir.
+        self._wf_mode: bool = False
 
     # ── Veri Yükleme & Özellik Mühendisliği ──────────────────────────────────
     def ingest_and_engineer(self) -> None:
@@ -133,38 +103,56 @@ class DataManager:
         print("=" * 60)
 
         # Ham hisse verisi
-        DataUpdater.check_and_update(self.data_file, self.stock_symbol)
-        raw_df = load_data(self.data_file)
+        DataUpdater.check_and_update(self.data_cfg.data_file, self.stock_symbol)
+        raw_df = load_data(self.data_cfg.data_file)
         self.corporate_action_report = dict(raw_df.attrs.get("corporate_action_report", {}))
         raw_df = self._apply_training_window(raw_df)
 
         # Makro veri (isteğe bağlı)
         macro_df = None
-        if self.use_macro:
+        if self.data_cfg.use_macro:
             macro_df = self._fetch_macro(raw_df)
 
-        # Teknik + makro özellikler
-        feature_pipeline  = FeaturePipeline(
-            feature_mode=self.feature_mode,
-            prune_correlated_features=self.prune_correlated_features,
-            correlation_threshold=self.correlation_threshold,
-            lag_feature_count=self.lag_feature_count,
-        )
-        self.df           = feature_pipeline.engineer_features(raw_df, macro_df=macro_df)
-        self.feature_names = feature_pipeline.feature_names
-        self.feature_groups = feature_pipeline.feature_groups
-        self.feature_pruning_report = feature_pipeline.pruning_report
+        # Teknik + makro özellikler (cache destekli)
+        feature_cache_dir = os.path.join(self.project_root, "data", "feature_cache")
+        _cache = FeatureCache(cache_dir=feature_cache_dir, ttl_hours=24.0)
+        _cache_key = _cache.make_key(self.data_cfg.data_file, self.data_cfg)
+        _cache_hit = _cache.get(_cache_key)
+
+        if _cache_hit is not None:
+            self.df, _meta = _cache_hit
+            self.feature_names = _meta["feature_names"]
+            self.feature_groups = _meta.get("feature_groups", {})
+            self.feature_pruning_report = _meta.get("feature_pruning_report", {})
+            print("  [CACHE] Ozellik muhendisligi cache\'den yuklendi.")
+        else:
+            feature_pipeline = FeaturePipeline(
+                feature_mode=self.data_cfg.feature_mode,
+                prune_correlated_features=self.data_cfg.prune_correlated_features,
+                correlation_threshold=self.data_cfg.correlation_threshold,
+                lag_feature_count=self.data_cfg.lag_feature_count,
+            )
+            self.df = feature_pipeline.engineer_features(raw_df, macro_df=macro_df)
+            self.feature_names = feature_pipeline.feature_names
+            self.feature_groups = feature_pipeline.feature_groups
+            self.feature_pruning_report = feature_pipeline.pruning_report
+            _cache.put(_cache_key, self.df, {
+                "feature_names": self.feature_names,
+                "feature_groups": self.feature_groups,
+                "feature_pruning_report": self.feature_pruning_report,
+            })
+
         self.survivorship_bias_report = self._check_survivorship_bias()
 
         # Özet
         has_rel_str  = "Relative_Strength" in self.feature_names
         macro_base   = len(MacroPipeline.macro_feature_names(include_rates=True))
         macro_count  = macro_base + (1 if has_rel_str else 0)
-        tech_count   = len(self.feature_names) - (macro_count if self.use_macro and macro_df is not None and not macro_df.empty else 0)
+        tech_count   = len(self.feature_names) - (macro_count if self.data_cfg.use_macro and macro_df is not None and not macro_df.empty else 0)
 
         print(f"  Veri boyutu      : {self.df.shape[0]} satır × {self.df.shape[1]} sütun")
         print(f"  Teknik özellikler: {tech_count}")
-        if self.use_macro and macro_df is not None and not macro_df.empty:
+        if self.data_cfg.use_macro and macro_df is not None and not macro_df.empty:
             print(f"  Makro özellikler : {macro_count}  "
                   f"(USDTRY_Return, USDTRY_MA7, USDTRY_Volatility7, "
                   f"BIST100_Norm, BIST100_Return, BIST100_MA7, "
@@ -198,10 +186,10 @@ class DataManager:
         if raw_df is None or raw_df.empty:
             self.training_window_report = {
                 "status": "empty_dataset",
-                "requested_training_window_years": self.training_window_years,
+                "requested_training_window_years": self.data_cfg.training_window_years,
                 "window_candidates": self._format_window_candidates(),
-                "min_history_days": self.min_history_days,
-                "new_listing_min_days": self.new_listing_min_days,
+                "min_history_days": self.data_cfg.min_history_days,
+                "new_listing_min_days": self.data_cfg.new_listing_min_days,
             }
             return raw_df
 
@@ -214,26 +202,26 @@ class DataManager:
         raw_start = pd.to_datetime(df["Date"].iloc[0]).normalize()
         raw_end = pd.to_datetime(df["Date"].iloc[-1]).normalize()
         raw_history_days = int(len(df))
-        new_listing_mode = raw_history_days < self.new_listing_min_days
-        insufficient_history = raw_history_days < self.min_history_days
+        new_listing_mode = raw_history_days < self.data_cfg.new_listing_min_days
+        insufficient_history = raw_history_days < self.data_cfg.min_history_days
 
         effective_df = df
-        effective_years = self.training_window_years
+        effective_years = self.data_cfg.training_window_years
         effective_label = "all"
         cutoff_date = None
         status = "all_data_used"
 
-        if self.training_window_years is not None:
-            window_years = int(self.training_window_years)
+        if self.data_cfg.training_window_years is not None:
+            window_years = int(self.data_cfg.training_window_years)
             cutoff_date = raw_end - pd.DateOffset(years=window_years)
             candidate_df = df[df["Date"] >= cutoff_date].copy()
-            if len(candidate_df) >= self.min_history_days and len(candidate_df) < len(df):
+            if len(candidate_df) >= self.data_cfg.min_history_days and len(candidate_df) < len(df):
                 effective_df = candidate_df
                 effective_df.reset_index(drop=True, inplace=True)
                 effective_df.attrs.update(raw_df.attrs)
                 effective_label = f"{window_years}y"
                 status = "window_applied"
-            elif len(candidate_df) < self.min_history_days:
+            elif len(candidate_df) < self.data_cfg.min_history_days:
                 effective_years = None
                 status = "window_skipped_min_history"
             else:
@@ -250,14 +238,14 @@ class DataManager:
             "raw_date_start": raw_start.strftime("%Y-%m-%d"),
             "raw_date_end": raw_end.strftime("%Y-%m-%d"),
             "raw_history_days": raw_history_days,
-            "requested_training_window_years": self.training_window_years,
+            "requested_training_window_years": self.data_cfg.training_window_years,
             "effective_training_window_years": effective_years,
             "effective_training_window_years_label": effective_label,
             "effective_date_start": effective_start.strftime("%Y-%m-%d"),
             "effective_date_end": effective_end.strftime("%Y-%m-%d"),
             "history_days": int(len(effective_df)),
-            "min_history_days": self.min_history_days,
-            "new_listing_min_days": self.new_listing_min_days,
+            "min_history_days": self.data_cfg.min_history_days,
+            "new_listing_min_days": self.data_cfg.new_listing_min_days,
             "new_listing_mode": bool(new_listing_mode),
             "insufficient_history_warning": bool(insufficient_history),
             "window_candidates": self._format_window_candidates(),
@@ -267,7 +255,7 @@ class DataManager:
         return effective_df
 
     def _format_window_candidates(self) -> list[str]:
-        return ["all" if years is None else f"{int(years)}y" for years in self.window_candidates]
+        return ["all" if years is None else f"{int(years)}y" for years in self.data_cfg.window_candidates]
 
     def _check_survivorship_bias(self) -> dict:
         if self.df is None or self.df.empty:
@@ -355,8 +343,8 @@ class DataManager:
 
             mp = MacroPipeline(
                 cache_dir=self.macro_cache_dir,
-                rate_release_lag_days=self.macro_rate_lag_days,
-                cpi_release_lag_days=self.macro_cpi_lag_days,
+                rate_release_lag_days=self.data_cfg.macro_rate_lag_days,
+                cpi_release_lag_days=self.data_cfg.macro_cpi_lag_days,
             )
             macro_df = mp.get_macro_features(start_date=start, end_date=end)
 
@@ -378,14 +366,14 @@ class DataManager:
         date_end = pd.to_datetime(self.df["Date"].iloc[-1]).strftime("%Y-%m-%d")
         self.dataset_metadata = {
             "stock_symbol": self.stock_symbol,
-            "target_mode": self.target_mode,
-            "feature_mode": self.feature_mode,
-            "scaling_mode": self.scaling_mode,
+            "target_mode": self.data_cfg.target_mode,
+            "feature_mode": self.data_cfg.feature_mode,
+            "scaling_mode": self.data_cfg.scaling_mode,
             "target_semantics": "X[t] uses information known after close t; y[t] is t+1 return/price.",
             "execution_lag": "Signals generated after close t are evaluated on the next realized bar.",
             "macro_release_lag": {
-                "rate_days": self.macro_rate_lag_days,
-                "cpi_days": self.macro_cpi_lag_days,
+                "rate_days": self.data_cfg.macro_rate_lag_days,
+                "cpi_days": self.data_cfg.macro_cpi_lag_days,
             },
             "validation_config": self.validation_config,
             "date_range": f"{date_start}:{date_end}",
@@ -444,14 +432,14 @@ class DataManager:
         self,
         close_values: np.ndarray,
     ) -> np.ndarray:
-        if self.target_mode == "log_return":
+        if self.data_cfg.target_mode == "log_return":
             return np.log(close_values[1:] / close_values[:-1])
-        if self.target_mode == "return":
+        if self.data_cfg.target_mode == "return":
             return (close_values[1:] / close_values[:-1]) - 1.0
-        if self.target_mode == "price":
+        if self.data_cfg.target_mode == "price":
             return close_values[1:]
         raise ValueError(
-            f"Desteklenmeyen target_mode: {self.target_mode}. "
+            f"Desteklenmeyen target_mode: {self.data_cfg.target_mode}. "
             "Beklenen: price, return, log_return"
         )
 
@@ -492,20 +480,25 @@ class DataManager:
 
         y_train = train_target.reshape(-1, 1)
         y_test = test_target.reshape(-1, 1)
+        if "Market_Regime_SMA200" in test_df.columns:
+            market_regime_test = test_df["Market_Regime_SMA200"].iloc[:-1].to_numpy(dtype=float)
+        else:
+            market_regime_test = np.zeros(len(y_test), dtype=float)
 
         X_train_s, X_test_s, y_train_s, y_test_s, scaler_X, scaler_y = scale_data(
             X_train, X_test, y_train, y_test,
             save_dir=self.models_dir,
-            scaling_mode=self.scaling_mode,
+            scaling_mode=self.data_cfg.scaling_mode,
+            save_scaler=not self._wf_mode,  # WF fold'larında diske yazma
         )
         self._record_scaling_report(train_df, test_df, scaler_X)
 
         X_train_seq, y_train_seq = create_sequences(
-            X_train_s, y_train_s, time_steps=self.time_steps
+            X_train_s, y_train_s, time_steps=self.data_cfg.time_steps
         )
 
         # İlk test örneği için son time_steps-1 train günü + ilk test günü kullanılır.
-        prefix_len = max(0, self.time_steps - 1)
+        prefix_len = max(0, self.data_cfg.time_steps - 1)
         if context_df is not None and prefix_len > 0:
             prefix_source = pd.concat([train_df.tail(prefix_len), context_df], ignore_index=True)
             X_prefix_raw = prefix_source[features].tail(prefix_len).values
@@ -521,7 +514,7 @@ class DataManager:
         X_test_input = np.vstack((X_prefix_s, X_test_s))
         y_test_input = np.vstack((y_prefix_s, y_test_s))
         X_test_seq, y_test_seq = create_sequences(
-            X_test_input, y_test_input, time_steps=self.time_steps
+            X_test_input, y_test_input, time_steps=self.data_cfg.time_steps
         )
 
         return {
@@ -543,8 +536,9 @@ class DataManager:
             "context_rows": 0 if context_df is None else len(context_df),
             "original_y_test_aligned": test_close[1:],
             "prev_close_test": test_prev_close,
+            "market_regime_test": market_regime_test,
             "train_close_last": float(train_close[-1]),
-            "target_mode": self.target_mode,
+            "target_mode": self.data_cfg.target_mode,
             "dates_train": train_df["Date"].iloc[1:] if "Date" in train_df.columns else None,
             "dates_prediction": test_df["Date"].iloc[:-1] if "Date" in test_df.columns else None,
             "dates_test": test_df["Date"].iloc[1:] if "Date" in test_df.columns else None,
@@ -564,7 +558,7 @@ class DataManager:
         train_clip = float(clip_report.get("train_clip_rate_pct", 0.0) or 0.0)
         test_clip = float(clip_report.get("test_clip_rate_pct", 0.0) or 0.0)
         warning = ""
-        if test_clip >= self.clip_shift_warning_threshold_pct and test_clip > train_clip:
+        if test_clip >= self.data_cfg.clip_shift_warning_threshold_pct and test_clip > train_clip:
             warning = (
                 "distribution_shift_warning: test clip rate is high relative to train "
                 f"({test_clip:.3f}% vs {train_clip:.3f}%)."
@@ -592,14 +586,16 @@ class DataManager:
         print("=" * 60)
 
         if validation_mode == "single_split":
+            self._wf_mode = False  # single split: scaler diske yazılır
             train_df, test_df, _, _ = TimeSeriesSplitter.single_split(
-                self.df, test_ratio=self.test_ratio
+                self.df, test_ratio=self.data_cfg.test_ratio
             )
             self.selection_df = train_df.copy()
             self.final_holdout_df = test_df.copy()
             self.tensors = self.prepare_tensors(train_df, test_df)
 
         elif validation_mode == "walk_forward":
+            self._wf_mode = True   # WF fold'larında scaler diske yazılmaz
             wf_source_df = self.df
             holdout_size = int(self.validation_config.get("final_holdout_size", 0) or 0)
             min_required = (
@@ -640,9 +636,7 @@ class DataManager:
                 f"max_train={self.validation_config['wf_max_train_size']})."
             )
 
-    def save_validation_protocol_report(self, outputs_dir: str) -> str:
-        os.makedirs(outputs_dir, exist_ok=True)
-        report_path = os.path.join(outputs_dir, "validation_protocol_v1.csv")
+    def get_validation_protocol_data(self) -> pd.DataFrame:
         rows = []
         for split in self.wf_splits:
             train_df = split["train"]
@@ -691,64 +685,31 @@ class DataManager:
                 "Final_Holdout_Used_For_Selection": False,
             })
 
-        pd.DataFrame(rows).to_csv(report_path, sep=";", index=False, encoding="utf-8-sig")
-        print(f"  [INFO] Validation protocol raporu kaydedildi -> {report_path}")
-        return report_path
+        return pd.DataFrame(rows)
 
-    def save_data_quality_reports(self, outputs_dir: str) -> dict:
-        os.makedirs(outputs_dir, exist_ok=True)
-        paths = {}
+    def get_data_quality_reports(self) -> dict:
+        reports = {}
 
-        corporate_path = os.path.join(outputs_dir, "data_quality_corporate_actions_v1.csv")
-        pd.DataFrame([self.corporate_action_report or {}]).to_csv(
-            corporate_path,
-            sep=";",
-            index=False,
-            encoding="utf-8-sig",
-        )
-        paths["corporate_actions"] = corporate_path
+        reports["corporate_actions"] = [self.corporate_action_report or {}]
 
         feature_rows = [
             {"Feature": feature, "Feature_Group": group}
             for feature, group in sorted(self.feature_groups.items())
         ]
-        feature_path = os.path.join(outputs_dir, "feature_groups_v1.csv")
-        pd.DataFrame(feature_rows).to_csv(feature_path, sep=";", index=False, encoding="utf-8-sig")
-        paths["feature_groups"] = feature_path
+        reports["feature_groups"] = feature_rows
 
-        pruning_path = os.path.join(outputs_dir, "feature_pruning_v1.csv")
         dropped = self.feature_pruning_report.get("dropped_features", []) if self.feature_pruning_report else []
         pruning_rows = dropped or [{
             "feature": "",
             "correlated_with": "",
             "abs_corr": "",
             "enabled": bool(self.feature_pruning_report.get("enabled", False)) if self.feature_pruning_report else False,
-            "threshold": self.correlation_threshold,
+            "threshold": self.data_cfg.correlation_threshold,
         }]
-        pd.DataFrame(pruning_rows).to_csv(pruning_path, sep=";", index=False, encoding="utf-8-sig")
-        paths["feature_pruning"] = pruning_path
+        reports["feature_pruning"] = pruning_rows
 
-        scaling_path = os.path.join(outputs_dir, "scaling_clip_report_v1.csv")
-        pd.DataFrame(self.scaling_reports).to_csv(scaling_path, sep=";", index=False, encoding="utf-8-sig")
-        paths["scaling_clip"] = scaling_path
+        reports["scaling_clip"] = self.scaling_reports
+        reports["survivorship"] = [self.survivorship_bias_report or {}]
+        reports["training_window"] = [self.training_window_report or {}]
 
-        survivorship_path = os.path.join(outputs_dir, "data_quality_survivorship_v1.csv")
-        pd.DataFrame([self.survivorship_bias_report or {}]).to_csv(
-            survivorship_path,
-            sep=";",
-            index=False,
-            encoding="utf-8-sig",
-        )
-        paths["survivorship"] = survivorship_path
-
-        training_window_path = os.path.join(outputs_dir, "data_training_window_v1.csv")
-        pd.DataFrame([self.training_window_report or {}]).to_csv(
-            training_window_path,
-            sep=";",
-            index=False,
-            encoding="utf-8-sig",
-        )
-        paths["training_window"] = training_window_path
-
-        print(f"  [INFO] Data quality raporlari kaydedildi -> {outputs_dir}")
-        return paths
+        return reports
