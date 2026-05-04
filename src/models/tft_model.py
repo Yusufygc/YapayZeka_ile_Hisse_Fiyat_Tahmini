@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
 """
+tft_model.py — [DEPRECATED] TFT v1 — Yeni kod için src/models/tft_v2/ kullanın
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Bu dosya geriye dönük uyumluluk için korunmaktadır.
+Yeni import: from src.models.tft_v2 import TFTModel
+
 tft_model.py — Temporal Fusion Transformer (Pure PyTorch Implementation)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Phase 4 naming: this implementation is documented as a

@@ -66,6 +66,8 @@ class XGBoostModel(BaseModel):
         n_trials: int = 50,
         n_splits: int = 5,
         random_state: int = 42,
+        study_storage: str | None = None,
+        study_name: str | None = None,
     ) -> dict:
         """
         Optuna ile hiperparametre optimizasyonu yapar ve en iyi model ile eğitir.
@@ -125,7 +127,23 @@ class XGBoostModel(BaseModel):
 
         # ── Optuna çalıştır ──────────────────────────────────────────────────
         print(f"  [Optuna] {n_trials} deneme başlatılıyor ({n_splits}-fold TSCV)...")
-        study = optuna.create_study(direction="minimize", sampler=optuna.samplers.TPESampler(seed=random_state))
+        # Warm-start: SQLite backend varsa onceki denemeleri yukle
+        _storage = study_storage or "sqlite:///optuna_studies.db"
+        _study_name = study_name or f"xgb_{self.__class__.__name__}"
+        try:
+            study = optuna.create_study(
+                direction="minimize",
+                sampler=optuna.samplers.TPESampler(seed=random_state),
+                storage=_storage,
+                study_name=_study_name,
+                load_if_exists=True,
+            )
+        except Exception:
+            # Storage hatasi durumunda hafiza ici fallback
+            study = optuna.create_study(
+                direction="minimize",
+                sampler=optuna.samplers.TPESampler(seed=random_state),
+            )
         study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
 
         self.best_params = study.best_params

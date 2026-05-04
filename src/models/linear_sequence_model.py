@@ -1,9 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-linear_sequence_model.py - DLinear/NLinear style lightweight sequence baselines.
+linear_sequence_model.py — DLinear / NLinear hafif sequence baseline'ları.
 
-These are intentionally low-parameter experimental baselines. They consume the
-same 3D sequence tensors as LSTM/TFT but fit fast linear regressors.
+Kasıtlı olarak düşük parametreli sanity-check baseline'larıdır. LSTM/TFT ile
+aynı 3D sequence tensörlerini tüketir; hızlı lineer regresörler çalıştırır.
+
+Referans: Zeng et al. (2022) "Are Transformers Effective for Time Series
+Forecasting?" — DLinear/NLinear'ın Transformer modellerini aşabildiğini gösterir.
+
+Not: PatchTSTExperimentalModel Faz 6 Optimizasyon kapsamında kaldırıldı.
+Gerçek PatchTST bir Transformer mimarisidir (Nie et al., ICLR 2023); Ridge
+regresyon tabanlı bir taklit değildir. İsim yanıltıcıydı.
 """
 
 from __future__ import annotations
@@ -141,30 +148,6 @@ class NLinearSequenceModel(_BaseLinearSequenceModel):
         )
 
 
-class PatchTSTExperimentalModel(_BaseLinearSequenceModel):
-    model_name = "PatchTST Experimental"
-
-    def __init__(self, alpha: float = 1.0, patch_length: int = 16, stride: int = 8):
-        super().__init__(alpha=alpha)
-        self.patch_length = patch_length
-        self.stride = stride
-
-    def _extra_state(self) -> dict:
-        return {"patch_length": self.patch_length, "stride": self.stride}
-
-    def _load_extra_state(self, state: dict) -> None:
-        self.patch_length = int(state.get("patch_length", self.patch_length))
-        self.stride = int(state.get("stride", self.stride))
-
-    def _transform(self, X: np.ndarray) -> np.ndarray:
-        if X.ndim != 3:
-            raise ValueError(f"{self.model_name} 3D sequence tensor bekler, alinan: {X.ndim}D")
-        n_samples, time_steps, n_features = X.shape
-        patch_length = min(max(1, self.patch_length), time_steps)
-        stride = max(1, self.stride)
-        starts = list(range(0, max(1, time_steps - patch_length + 1), stride))
-        last_start = time_steps - patch_length
-        if starts[-1] != last_start:
-            starts.append(last_start)
-        patches = [X[:, start:start + patch_length, :].reshape(n_samples, -1) for start in starts]
-        return np.concatenate(patches, axis=1)
+# PatchTSTExperimentalModel kaldırıldı (Faz 6 Optimizasyon).
+# Gerçek PatchTST implementasyonu Faz 6 Eksen A kapsamında TFT ile birlikte
+# ele alınacaktır (Nie et al., ICLR 2023 — Transformer tabanlı mimari).

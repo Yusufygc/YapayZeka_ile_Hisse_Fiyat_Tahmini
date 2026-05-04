@@ -5,12 +5,11 @@ ensemble.py — Topluluk (Ensemble) Modeli + Ağırlık Optimizasyonu
 Birden fazla modelin tahminlerini ağırlıklı ortalama ile birleştirir.
 Ağırlık belirleme stratejileri:
   • Manuel ağırlıklar
-  • Inverse RMSE ağırlıklandırma
-  • Grid Search (en düşük RMSE'yi veren ağırlık kombinasyonu)
+  • Inverse RMSE ağırlıklandırma  ← production-ready, önerilen
+  • Grid Search                   ← DEVRE DIŞI (exponential complexity)
 """
 
 import numpy as np
-from itertools import product
 from typing import Dict, List, Tuple
 
 try:
@@ -119,64 +118,25 @@ class EnsembleModel:
         step: float = 0.05,
     ) -> Tuple[Dict[str, float], float]:
         """
-        Grid Search ile en düşük RMSE'yi veren ağırlık kombinasyonunu bulur.
-        Σw = 1 kısıtı ile 0.0–1.0 aralığında aranır.
+        [DEVRE DIŞI] Grid Search ağırlık optimizasyonu.
 
-        Parameters
-        ----------
-        y_true : np.ndarray       Gerçek değerler (orijinal ölçekte).
-        predictions : dict        Model adı -> tahmin dizisi.
-        step : float              Grid arama adımı (varsayılan: 0.05).
+        Bu metod kasıtlı olarak devre dışı bırakılmıştır.
 
-        Returns
-        -------
-        (dict, float)  (En iyi ağırlıklar, en düşük RMSE).
+        Neden: step=0.05 ve N model için arama uzayı (1/step)^N büyüklüğünde.
+        N=10 model → 20^10 ≈ 10 trilyon kombinasyon → asla bitmez.
+
+        Alternatifler:
+          - optimize_inverse_rmse()  : O(N), production-ready, genellikle yeterli.
+          - scipy.optimize.minimize() ile Dirichlet kısıtlı L-BFGS-B (Faz 3'te eklenecek).
+
+        Raises
+        ------
+        NotImplementedError
+            Her zaman fırlatılır.
         """
-        names = list(predictions.keys())
-        n_models = len(names)
-
-        # Tüm dizileri hizala
-        arrays = [predictions[n].ravel() for n in names]
-        y_true = y_true.ravel()
-        min_len = min(len(y_true), *[len(a) for a in arrays])
-        arrays = [a[-min_len:] for a in arrays]
-        y_true = y_true[-min_len:]
-
-        stacked = np.stack(arrays, axis=0)  # (n_models, min_len)
-
-        # Ağırlık adayları
-        candidates = np.arange(0.0, 1.0 + step / 2, step)
-
-        best_rmse = float("inf")
-        best_weights = None
-
-        # Grid search — tüm kombinasyonları dene (Σw ≈ 1.0)
-        for combo in product(candidates, repeat=n_models):
-            total = sum(combo)
-            if abs(total - 1.0) > 1e-6:
-                continue
-
-            w = np.array(combo)
-            preds_ensemble = np.average(stacked, axis=0, weights=w)
-            rmse = float(np.sqrt(mean_squared_error(y_true, preds_ensemble)))
-
-            if rmse < best_rmse:
-                best_rmse = rmse
-                best_weights = combo
-
-        if best_weights is None:
-            # Eşit ağırlık döndür
-            equal_w = 1.0 / n_models
-            best_weights = tuple([equal_w] * n_models)
-            best_rmse = float(np.sqrt(mean_squared_error(
-                y_true, np.average(stacked, axis=0, weights=np.array(best_weights))
-            )))
-
-        result = {names[i]: round(best_weights[i], 4) for i in range(n_models)}
-
-        print(f"  [Grid Search] En iyi RMSE: {best_rmse:.4f}")
-        print(f"  [Grid Search] En iyi ağırlıklar:")
-        for name, w in result.items():
-            print(f"    • {name}: {w:.4f}")
-
-        return result, best_rmse
+        n_models = len(predictions)
+        raise NotImplementedError(
+            f"optimize_grid_search() {n_models} model için güvenli değil "
+            f"(arama uzayı: {int(round((1.0 / step) + 1)) ** n_models:,} kombinasyon). "
+            "Bunun yerine optimize_inverse_rmse() kullanın."
+        )

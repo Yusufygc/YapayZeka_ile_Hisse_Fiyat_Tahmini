@@ -10,7 +10,6 @@ or baseline-only workflows during package import.
 _EXPORTS = {
     "ProphetModel": ("prophet_model", "ProphetModel"),
     "XGBoostModel": ("xgboost_model", "XGBoostModel"),
-    "LSTMModel": ("lstm_model", "LSTMModel"),
     "AttentionLSTMModel": ("lstm_model", "AttentionLSTMModel"),
     "RandomForestModel": ("random_forest_model", "RandomForestModel"),
     "NaiveLastValueModel": ("naive_model", "NaiveLastValueModel"),
@@ -22,7 +21,6 @@ _EXPORTS = {
     "LightGBMReturnModel": ("gradient_boosting_model", "LightGBMReturnModel"),
     "DLinearSequenceModel": ("linear_sequence_model", "DLinearSequenceModel"),
     "NLinearSequenceModel": ("linear_sequence_model", "NLinearSequenceModel"),
-    "PatchTSTExperimentalModel": ("linear_sequence_model", "PatchTSTExperimentalModel"),
 }
 
 __all__ = list(_EXPORTS)

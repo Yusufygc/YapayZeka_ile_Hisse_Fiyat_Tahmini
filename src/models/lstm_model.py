@@ -1,121 +1,26 @@
 # -*- coding: utf-8 -*-
 """
-lstm_model.py — LSTM Modelleri (Klasik + Bidirectional Attention)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-İki model sınıfı sunar:
-  • LSTMModel          — Orijinal 2×LSTM + Dropout + Dense(1)
-  • AttentionLSTMModel — Bidirectional LSTM + Custom Attention + Dense
+lstm_model.py — Bidirectional LSTM + Attention Modeli
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Tek model sınıfı sunar:
+  • AttentionLSTMModel — Bidirectional LSTM + Bahdanau Attention + Dense
 
-Her iki model de BaseModel arayüzünü uygular ve .keras formatında kaydedilir.
+BaseModel arayüzünü uygular ve .keras formatında kaydedilir.
+
+Not: Vanilla LSTMModel (2×LSTM + Dropout) Faz 6 Optimizasyon kapsamında
+kaldırıldı — pipeline tarafından hiçbir zaman örneklenmiyordu (ölü kod).
 """
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.models import Sequential, load_model, Model  # type: ignore
+from tensorflow.keras.models import load_model, Model  # type: ignore
 from tensorflow.keras.layers import (  # type: ignore
     LSTM, Dense, Dropout, Bidirectional,
-    Input, Permute, Multiply, Flatten,
-    RepeatVector, Lambda, Layer,
+    Input, Layer,
 )
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau  # type: ignore
 
 from .base_model import BaseModel
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Orijinal LSTM Model (korundu — geriye uyumluluk)
-# ═════════════════════════════════════════════════════════════════════════════
-
-class LSTMModel(BaseModel):
-    """Keras LSTM sarmalayıcısı (orijinal mimari)."""
-
-    def __init__(
-        self,
-        units_1: int = 128,
-        units_2: int = 64,
-        dropout_rate: float = 0.2,
-        epochs: int = 50,
-        batch_size: int = 32,
-        learning_rate: float = 0.001,
-        patience: int = 10,
-        lr_patience: int = 5,
-        validation_ratio: float = 0.1,
-        min_val_samples: int = 32,
-    ):
-        self.units_1 = units_1
-        self.units_2 = units_2
-        self.dropout_rate = dropout_rate
-        self.epochs = epochs
-        self.batch_size = batch_size
-        self.learning_rate = learning_rate
-        self.patience = patience
-        self.lr_patience = lr_patience
-        self.validation_ratio = validation_ratio
-        self.min_val_samples = min_val_samples
-        self.model: Sequential | None = None
-
-    def _chronological_validation_split(
-        self,
-        X: np.ndarray,
-        y: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        n_samples = len(X)
-        if n_samples < 4:
-            raise ValueError("LSTM eğitimi için yeterli sequence yok.")
-
-        n_val = max(1, int(n_samples * self.validation_ratio))
-        n_val = min(max(self.min_val_samples, n_val), max(1, n_samples - 1))
-        n_train = n_samples - n_val
-        if n_train <= 0:
-            raise ValueError("Chronological validation split sonrası train örneği kalmadı.")
-
-        return X[:n_train], y[:n_train], X[n_train:], y[n_train:]
-
-    def _build_model(self, input_shape: tuple) -> Sequential:
-        model = Sequential([
-            LSTM(self.units_1, return_sequences=True, input_shape=input_shape),
-            Dropout(self.dropout_rate),
-            LSTM(self.units_2, return_sequences=False),
-            Dropout(self.dropout_rate),
-            Dense(32, activation="relu"),
-            Dense(1),
-        ])
-        optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
-        model.compile(optimizer=optimizer, loss="mse", metrics=["mae"])
-        return model
-
-    def train(self, X_train: np.ndarray, y_train: np.ndarray, **kwargs) -> None:
-        if X_train.ndim != 3:
-            raise ValueError(f"LSTM girdi tensörü 3-boyutlu olmalıdır, alınan: {X_train.ndim}D")
-        self.model = self._build_model(input_shape=(X_train.shape[1], X_train.shape[2]))
-        X_tr, y_tr, X_val, y_val = self._chronological_validation_split(X_train, y_train)
-        early_stop = EarlyStopping(monitor="val_loss", patience=self.patience, restore_best_weights=True, verbose=1)
-        self.model.fit(
-            X_tr,
-            y_tr,
-            epochs=self.epochs,
-            batch_size=self.batch_size,
-            validation_data=(X_val, y_val),
-            callbacks=[early_stop],
-            verbose=1,
-            shuffle=False,
-        )
-        print("[OK] LSTM modeli eğitildi.")
-
-    def predict(self, X_test: np.ndarray, **kwargs) -> np.ndarray:
-        if self.model is None:
-            raise RuntimeError("Model henüz eğitilmedi.")
-        return self.model.predict(X_test, verbose=0).ravel()
-
-    def save(self, path: str) -> None:
-        if self.model is None:
-            raise RuntimeError("Kaydedilecek model yok.")
-        self.model.save(path)
-        print(f"[OK] LSTM modeli kaydedildi -> {path}")
-
-    def load(self, path: str) -> None:
-        self.model = load_model(path)
-        print(f"[OK] LSTM modeli yüklendi <- {path}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -247,7 +152,7 @@ class AttentionLSTMModel(BaseModel):
         outputs = Dense(1)(x)
 
         model = Model(inputs=inputs, outputs=outputs)
-        optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
+        optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate, clipnorm=1.0)
         model.compile(optimizer=optimizer, loss="mse", metrics=["mae"])
         return model
 
