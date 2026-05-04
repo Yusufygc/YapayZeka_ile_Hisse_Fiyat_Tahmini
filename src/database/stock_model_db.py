@@ -143,6 +143,8 @@ class StockModelDB:
 
     def __init__(self, db_path: str):
         self.db_path = db_path
+        import os as _os
+        _os.makedirs(_os.path.dirname(db_path) or ".", exist_ok=True)
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:

@@ -23,6 +23,9 @@ _COLUMN_MAP = {
     "Hacim": "Volume",
 }
 
+_ADJ_CLOSE_ANOMALY_THRESHOLD_PCT = 1000.0
+_ADJ_CLOSE_TRUST_FULL_DIFF_PCT = _ADJ_CLOSE_ANOMALY_THRESHOLD_PCT
+
 
 def load_and_clean(csv_path: str, drop_zero_volume: bool = True) -> pd.DataFrame:
     """
@@ -59,6 +62,10 @@ def load_and_clean(csv_path: str, drop_zero_volume: bool = True) -> pd.DataFrame
         "max_abs_adj_close_diff_pct": None,
         "mean_abs_adj_close_diff_pct": None,
         "rows_with_adj_close": 0,
+        "adjusted_price_trusted": False,
+        "adjusted_price_trust_score": 0.0,
+        "corporate_action_anomaly": False,
+        "anomaly_threshold_pct": _ADJ_CLOSE_ANOMALY_THRESHOLD_PCT,
     }
 
     if "Adj_Close" in df.columns and df["Adj_Close"].notna().any():
@@ -69,20 +76,59 @@ def load_and_clean(csv_path: str, drop_zero_volume: bool = True) -> pd.DataFrame
             diff_ratio = (adj_close[valid] / raw_close[valid]) - 1.0
             max_abs_diff = float(diff_ratio.abs().max())
             mean_abs_diff = float(diff_ratio.abs().mean())
+            max_abs_diff_pct = max_abs_diff * 100.0
+            mean_abs_diff_pct = mean_abs_diff * 100.0
+            invalid_adj_values = bool((adj_close[valid] <= 0).any())
+            corporate_action_anomaly = (
+                invalid_adj_values
+                or max_abs_diff_pct > _ADJ_CLOSE_ANOMALY_THRESHOLD_PCT
+            )
+            trust_score = max(
+                0.0,
+                1.0 - min(mean_abs_diff_pct, _ADJ_CLOSE_TRUST_FULL_DIFF_PCT)
+                / _ADJ_CLOSE_TRUST_FULL_DIFF_PCT,
+            )
+
             corporate_action_report = {
                 "adj_close_available": True,
-                "price_source": "Adj_Close",
+                "price_source": "Close" if corporate_action_anomaly else "Adj_Close",
                 "warning": "",
-                "max_abs_adj_close_diff_pct": max_abs_diff * 100.0,
-                "mean_abs_adj_close_diff_pct": mean_abs_diff * 100.0,
+                "max_abs_adj_close_diff_pct": max_abs_diff_pct,
+                "mean_abs_adj_close_diff_pct": mean_abs_diff_pct,
                 "rows_with_adj_close": int(valid.sum()),
+                "adjusted_price_trusted": not corporate_action_anomaly,
+                "adjusted_price_trust_score": 0.0 if corporate_action_anomaly else round(trust_score, 6),
+                "corporate_action_anomaly": corporate_action_anomaly,
+                "anomaly_threshold_pct": _ADJ_CLOSE_ANOMALY_THRESHOLD_PCT,
+                "invalid_adj_close_values": invalid_adj_values,
             }
-            if max_abs_diff > 1e-6:
-                print(
-                    "  [DATA] Adj_Close bulundu; hedef ve teknik feature hesaplari "
-                    f"duzeltilmis kapanis uzerinden yapilacak (max fark={max_abs_diff:.4%})."
+            if corporate_action_anomaly:
+                corporate_action_report["warning"] = (
+                    "Adj_Close anomalisi tespit edildi; model hedefi ve teknik feature "
+                    "hesaplari ham Close uzerinden yapilacak."
                 )
-            df["Close"] = adj_close.combine_first(raw_close)
+                print(
+                    "  [DATA] Adj_Close anomalisi tespit edildi; "
+                    f"ham Close kullanilacak (max fark={max_abs_diff:.4%})."
+                )
+            else:
+                if max_abs_diff > 1e-6:
+                    print(
+                        "  [DATA] Adj_Close bulundu; hedef ve teknik feature hesaplari "
+                        f"duzeltilmis kapanis uzerinden yapilacak (max fark={max_abs_diff:.4%})."
+                    )
+                df["Close"] = adj_close.combine_first(raw_close)
+        else:
+            corporate_action_report.update({
+                "adj_close_available": True,
+                "warning": "Adj_Close bulundu ancak gecerli sayisal deger yok; ham Close kullanilacak.",
+                "corporate_action_anomaly": True,
+                "invalid_adj_close_values": True,
+            })
+            print(
+                "  [DATA] Adj_Close bulundu ancak gecerli sayisal deger yok; "
+                "ham Close kullanilacak."
+            )
         df.drop(columns=["Adj_Close"], inplace=True)
     else:
         print("  [DATA] Adj_Close bulunamadi; corporate action duzeltmesi dogrulanamadi.")

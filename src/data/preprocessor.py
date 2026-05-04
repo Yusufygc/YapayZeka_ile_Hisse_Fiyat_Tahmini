@@ -31,47 +31,6 @@ _CLIP_LOW:  float = -5.0
 _CLIP_HIGH: float =  5.0
 
 
-def split_data(
-    df: pd.DataFrame,
-    target_col: str = "Close",
-    feature_cols: list | None = None,
-    test_ratio: float = 0.20,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, pd.DatetimeIndex, pd.DatetimeIndex]:
-    """
-    Zaman serisi verisini kronolojik sırayla Train/Test olarak böler.
-    **shuffle=False** — veri sızıntısı önlenir.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Özellik mühendisliği uygulanmış DataFrame.
-    target_col : str
-        Hedef değişken sütun adı (varsayılan: 'Close').
-    feature_cols : list | None
-        Kullanılacak özellik sütunları. None ise sayısal sütunlardan
-        Date ve hedef sütun otomatik çıkarılır.
-    test_ratio : float
-        Test kümesi oranı (varsayılan: %20).
-
-    Returns
-    -------
-    X_train, X_test, y_train, y_test, dates_train, dates_test
-    """
-    if feature_cols is None:
-        exclude = {"Date", target_col}
-        feature_cols = [c for c in df.select_dtypes(include=[np.number]).columns if c not in exclude]
-
-    split_idx = int(len(df) * (1 - test_ratio))
-
-    X_train = df[feature_cols].iloc[:split_idx].values
-    X_test = df[feature_cols].iloc[split_idx:].values
-    y_train = df[target_col].iloc[:split_idx].values.reshape(-1, 1)
-    y_test = df[target_col].iloc[split_idx:].values.reshape(-1, 1)
-
-    dates_train = df["Date"].iloc[:split_idx]
-    dates_test = df["Date"].iloc[split_idx:]
-
-    return X_train, X_test, y_train, y_test, dates_train, dates_test
 
 
 def scale_data(
@@ -81,6 +40,7 @@ def scale_data(
     y_test:  np.ndarray,
     save_dir: str,
     scaling_mode: str = "robust_x_standard_y_clip",
+    save_scaler: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, object, object]:
     """
     Özellikler ve hedef değişkeni ölçeklendirir.
@@ -103,6 +63,13 @@ def scale_data(
     X_train, X_test : np.ndarray  Özellik matrisleri.
     y_train, y_test : np.ndarray  Hedef vektörleri (log-getiri, 2D).
     save_dir        : str         Scaler'ların kaydedileceği klasör.
+
+    save_scaler     : bool        Scaler'ları diske yazar (varsayılan True).
+                                  Walk-forward fold'larında False geçin:
+                                  her fold aynı dosyayı ezerek tutarsızlık
+                                  yaratır ve inference için doğru scaler
+                                  kaybolur. False durumunda fit+transform
+                                  yapılır, disk yazımı atlanır.
 
     Returns
     -------
@@ -154,9 +121,13 @@ def scale_data(
         )
 
     # Scaler'ları kaydet (reproducibility + inference)
-    joblib.dump(scaler_X, os.path.join(save_dir, "scaler_X.pkl"))
-    joblib.dump(scaler_y, os.path.join(save_dir, "scaler_y.pkl"))
-    print(f"[OK] Scaler objeleri kaydedildi -> {save_dir}")
+    # Walk-forward fold'larında save_scaler=False geçilir; her fold aynı
+    # dosyayı ezdiğinden WF sırasında disk yazımı atlanır.
+    if save_scaler:
+        os.makedirs(save_dir, exist_ok=True)
+        joblib.dump(scaler_X, os.path.join(save_dir, "scaler_X.pkl"))
+        joblib.dump(scaler_y, os.path.join(save_dir, "scaler_y.pkl"))
+        print(f"[OK] Scaler objeleri kaydedildi -> {save_dir}")
 
     return X_train_s, X_test_s, y_train_s, y_test_s, scaler_X, scaler_y
 
