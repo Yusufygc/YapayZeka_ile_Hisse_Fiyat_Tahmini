@@ -9,9 +9,10 @@ import os
 from typing import Dict
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
-from src.reporting_utils import route_output_path, with_output_extension, write_csv_and_aligned_view
+from src.utils.reporting_utils import route_output_path, with_output_extension, write_csv_and_aligned_view
 
 
 class XAIReportWriter:
@@ -62,6 +63,20 @@ class XAIReportWriter:
                 trade_explanations,
                 os.path.join(self.output_dir, f"xai_trade_explanations_{suffix}.csv"),
             )
+
+        # ── [A5] TFT attention heatmap ────────────────────────────────────────
+        tft_attention_data = payload.get("tft_attention_data")
+        if isinstance(tft_attention_data, dict):
+            for model_tag, attn_arr in tft_attention_data.items():
+                safe_tag = str(model_tag).replace(" ", "_")
+                self._plot_tft_attention_heatmap(
+                    attn_arr,
+                    model_tag,
+                    os.path.join(
+                        self.output_dir,
+                        f"xai_tft_attention_{safe_tag}_{suffix}.png",
+                    ),
+                )
 
         summary_path = with_output_extension(os.path.join(self.output_dir, f"xai_summary_{suffix}.md"), ".md")
         os.makedirs(os.path.dirname(summary_path), exist_ok=True)
@@ -173,3 +188,47 @@ class XAIReportWriter:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         plt.savefig(save_path, dpi=160, bbox_inches="tight")
         plt.close()
+
+    def _plot_tft_attention_heatmap(
+        self,
+        attn_arr,
+        model_tag: str,
+        save_path: str,
+    ) -> None:
+        """
+        [A5] TFT capraz dikkat isi haritasini PNG olarak kaydeder.
+
+        attn_arr : (N, H, T) dikkat agirliklari numpy dizisi.
+        N ornekler uzerinde ortalaması alınarak (H, T) matris imshow ile gorsellestirilir.
+
+        matplotlib.image.imsave kullanilir — Figure/Axes/backend olusturmaz,
+        dogrudan PIL uzerinden PNG yazar. Bu yaklasim Windows'ta
+        FigureCanvasAgg + tight_layout kombinasyonunun tetikledigi
+        "maximum recursion depth exceeded" hatasini onler.
+        """
+        save_path = route_output_path(save_path)
+        try:
+            import matplotlib.cm as _cm
+            import matplotlib.image as _mplimg
+
+            arr = np.asarray(attn_arr, dtype=float)
+            if arr.ndim != 3 or arr.size == 0:
+                return
+            mean_map = arr.mean(axis=0)   # (H, T)
+
+            # [0, 1] normalizasyonu — Blues colormap icin
+            lo, hi = float(mean_map.min()), float(mean_map.max())
+            norm_map = (mean_map - lo) / (hi - lo + 1e-8)
+
+            # Blues colormap → RGBA float32 (H, T, 4)
+            rgba = _cm.Blues(norm_map)
+
+            save_dir = os.path.dirname(save_path)
+            if save_dir:
+                os.makedirs(save_dir, exist_ok=True)
+
+            # mplimg.imsave PIL'e devreder — renderer/backend gerekmez
+            _mplimg.imsave(save_path, rgba)
+            print("[OK] TFT dikkat isi haritasi kaydedildi -> " + save_path)
+        except Exception as exc:
+            print("[WARN] TFT dikkat isi haritasi olusturulamadi: " + str(exc))

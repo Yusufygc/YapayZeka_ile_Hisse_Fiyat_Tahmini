@@ -40,6 +40,14 @@ class SignalConfig:
     soft_entry_threshold_multiplier_low: float = 1.75
     soft_rmse_penalty_full: float = 1.10
     soft_composite_low: float = 45.0
+    regime_bull_entry_multiplier: float = 0.85
+    regime_neutral_entry_multiplier: float = 1.0
+    regime_bear_entry_multiplier: float = 1.25
+    volatility_low_entry_multiplier: float = 0.85
+    volatility_normal_entry_multiplier: float = 1.0
+    volatility_high_entry_multiplier: float = 1.25
+    volatility_low_quantile: float = 0.33
+    volatility_high_quantile: float = 0.67
     emergency_stop_overrides_min_hold: bool = True
 
 
@@ -75,6 +83,7 @@ def generate_professional_signals(
     target_mode: str,
     observed_returns: np.ndarray | None = None,
     realized_price: np.ndarray | None = None,
+    market_regime: np.ndarray | None = None,
     commission_bps: float = 10.0,
     slippage_bps: float = 5.0,
     config: SignalConfig | None = None,
@@ -106,6 +115,10 @@ def generate_professional_signals(
         observed_arr = observed_arr[-n:]
     else:
         observed_arr = _expected_return_to_simple_return(expected_return, target_mode)
+    if market_regime is not None:
+        market_regime_arr = np.asarray(market_regime, dtype=float).ravel()[-n:]
+    else:
+        market_regime_arr = np.zeros(n, dtype=float)
 
     rolling_vol = _rolling_volatility(observed_arr, cfg.volatility_window)
 
@@ -116,7 +129,14 @@ def generate_professional_signals(
     )
     entry_threshold = np.maximum(entry_threshold, cfg.min_entry_threshold)
     base_entry_threshold = entry_threshold.copy()
-    entry_threshold = entry_threshold * cfg.entry_threshold_multiplier
+    regime_multiplier = _regime_entry_multiplier(market_regime_arr, cfg)
+    volatility_regime, volatility_multiplier = _volatility_entry_multiplier(rolling_vol, cfg)
+    combined_threshold_multiplier = (
+        cfg.entry_threshold_multiplier
+        * regime_multiplier
+        * volatility_multiplier
+    )
+    entry_threshold = entry_threshold * combined_threshold_multiplier
     exit_threshold = np.maximum(
         total_cost * cfg.exit_cost_multiplier,
         rolling_vol * cfg.exit_volatility_multiplier,
@@ -231,6 +251,11 @@ def generate_professional_signals(
         "Signal_Strength": signal_strength,
         "Quality_Gate_Mode": [cfg.quality_gate_mode] * n,
         "Quality_Threshold_Multiplier": np.full(n, cfg.entry_threshold_multiplier, dtype=float),
+        "Market_Regime_SMA200": market_regime_arr,
+        "Regime_Threshold_Multiplier": regime_multiplier,
+        "Volatility_Regime": volatility_regime,
+        "Volatility_Threshold_Multiplier": volatility_multiplier,
+        "Final_Threshold_Multiplier": combined_threshold_multiplier,
         "Rolling_Volatility": rolling_vol,
         "Holding_Bars": holding_bars_values,
         "Trade_Return": trade_return_values,
@@ -281,6 +306,22 @@ def _validate_config(config: SignalConfig) -> None:
         raise ValueError("soft_rmse_penalty_full pozitif olmalidir.")
     if config.soft_composite_low < 0:
         raise ValueError("soft_composite_low negatif olamaz.")
+    for name in [
+        "regime_bull_entry_multiplier",
+        "regime_neutral_entry_multiplier",
+        "regime_bear_entry_multiplier",
+        "volatility_low_entry_multiplier",
+        "volatility_normal_entry_multiplier",
+        "volatility_high_entry_multiplier",
+    ]:
+        if getattr(config, name) <= 0:
+            raise ValueError(f"{name} pozitif olmalidir.")
+    if not 0 <= config.volatility_low_quantile <= 1:
+        raise ValueError("volatility_low_quantile 0-1 arasinda olmalidir.")
+    if not 0 <= config.volatility_high_quantile <= 1:
+        raise ValueError("volatility_high_quantile 0-1 arasinda olmalidir.")
+    if config.volatility_low_quantile >= config.volatility_high_quantile:
+        raise ValueError("volatility_low_quantile high quantile degerinden kucuk olmalidir.")
 
 
 def _expected_return(
@@ -317,3 +358,31 @@ def _rolling_volatility(returns: np.ndarray, window: int) -> np.ndarray:
     fallback = 1e-6
     vol = vol.fillna(fallback).replace(0.0, fallback)
     return vol.to_numpy(dtype=float)
+
+
+def _regime_entry_multiplier(market_regime: np.ndarray, config: SignalConfig) -> np.ndarray:
+    regime = np.asarray(market_regime, dtype=float).ravel()
+    multiplier = np.full(len(regime), config.regime_neutral_entry_multiplier, dtype=float)
+    multiplier[regime > 0] = config.regime_bull_entry_multiplier
+    multiplier[regime < 0] = config.regime_bear_entry_multiplier
+    return multiplier
+
+
+def _volatility_entry_multiplier(rolling_vol: np.ndarray, config: SignalConfig) -> tuple[np.ndarray, np.ndarray]:
+    vol = np.asarray(rolling_vol, dtype=float).ravel()
+    regimes = np.full(len(vol), "normal_vol", dtype=object)
+    multipliers = np.full(len(vol), config.volatility_normal_entry_multiplier, dtype=float)
+    for idx in range(len(vol)):
+        history = vol[: idx + 1]
+        history = history[np.isfinite(history)]
+        if history.size < max(5, config.volatility_window // 2):
+            continue
+        low = float(np.quantile(history, config.volatility_low_quantile))
+        high = float(np.quantile(history, config.volatility_high_quantile))
+        if vol[idx] <= low:
+            regimes[idx] = "low_vol"
+            multipliers[idx] = config.volatility_low_entry_multiplier
+        elif vol[idx] >= high:
+            regimes[idx] = "high_vol"
+            multipliers[idx] = config.volatility_high_entry_multiplier
+    return regimes, multipliers

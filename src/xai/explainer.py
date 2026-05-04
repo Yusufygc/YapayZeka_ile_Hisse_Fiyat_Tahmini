@@ -15,7 +15,7 @@ from src.xai.narrative import contribution_sentence, model_summary_sentence, unc
 
 
 TREE_MODELS = {"XGBoost", "Random Forest"}
-SEQ_MODELS = {"LSTM", "TFT", "AttentionLSTM", "DLinear", "NLinear", "PatchTST Experimental"}
+SEQ_MODELS = {"LSTM", "TFT", "AttentionLSTM", "DLinear", "NLinear"}
 BASELINE_MODELS = {"Naive Last Value", "Naive Zero Return", "Naive Drift", "ARIMA", "Prophet", "LightGBM Return"}
 
 
@@ -49,6 +49,8 @@ class XAIExplainer:
 
         quantile_predictions = quantile_predictions or {}
 
+        tft_attention_data: Dict[str, Any] = {}
+
         for model_name, model in trained_models.items():
             if model_name not in predictions:
                 continue
@@ -58,9 +60,11 @@ class XAIExplainer:
                         model_name, model, tensors, predictions, prediction_targets, y_true_aligned
                     )
                 elif model_name == "TFT":
-                    model_top, model_daily = self._explain_tft_model(
+                    model_top, model_daily, tft_attn = self._explain_tft_model(
                         model_name, model, tensors, predictions, prediction_targets, y_true_aligned, quantile_predictions.get(model_name)
                     )
+                    if tft_attn is not None:
+                        tft_attention_data[model_name] = tft_attn
                 elif model_name in {"LSTM", "AttentionLSTM"}:
                     model_top, model_daily = self._explain_sequence_permutation(
                         model_name, model, tensors, predictions, prediction_targets, y_true_aligned
@@ -76,11 +80,14 @@ class XAIExplainer:
             except Exception as exc:
                 summary_blocks.append(f"## {model_name}\n\nXAI açıklaması üretilemedi: {exc}\n")
 
-        return {
-            "top_reasons": pd.DataFrame(top_rows),
+        payload: Dict[str, Any] = {
+            "top_reasons":  pd.DataFrame(top_rows),
             "daily_reasons": pd.DataFrame(daily_rows),
-            "summary_md": "\n\n".join(summary_blocks),
+            "summary_md":   "\n\n".join(summary_blocks),
         }
+        if tft_attention_data:
+            payload["tft_attention_data"] = tft_attention_data
+        return payload
 
     def explain_walk_forward(
         self,
@@ -339,7 +346,16 @@ class XAIExplainer:
         prediction_targets: Dict[str, np.ndarray],
         y_true_aligned: np.ndarray,
         quantiles: np.ndarray | None,
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Any]:
+        """
+        TFT modelini açıklar.
+
+        Döndürür:
+            rows       : üst-önem satırları
+            daily      : günlük satırlar
+            attn_data  : (N, H, T) dikkat ısı haritası numpy dizisi | None
+                         [A5] XAIReportWriter'ın heatmap PNG üretmesi için
+        """
         X_seq = self._align_rows(np.asarray(tensors["X_test_seq"], dtype=float), len(predictions[model_name]))
         sample_count = min(len(X_seq), self.max_rows)
         selected = X_seq[-sample_count:]
@@ -369,7 +385,18 @@ class XAIExplainer:
                 note = uncertainty_sentence(float(q[0]), float(q[1]), float(q[2]))
                 if note:
                     rows.append(self._row(model_name, "TFT_Uncertainty", 1.0, None, note, "tft_quantiles", False))
-        return rows, daily
+
+        # ── [A5] Dikkat ısı haritası ─────────────────────────────────────────
+        attn_data = None
+        try:
+            if hasattr(model, "get_attention_heatmap"):
+                attn_data = model.get_attention_heatmap(selected)   # (N, H, T)
+                T = selected.shape[1] if selected.ndim >= 2 else 1
+                rows.extend(self._tft_attention_temporal_rows(model_name, attn_data, T))
+        except Exception:
+            pass    # dikkat çıkarma başarısız olursa sessizce devam et
+
+        return rows, daily, attn_data
 
     def _tft_time_window_rows(self, model_name: str, weights: np.ndarray) -> List[Dict[str, Any]]:
         if weights.size == 0:
@@ -386,6 +413,58 @@ class XAIExplainer:
             feature = self.feature_names[top_idx]
             reason = f"TFT {label} içinde en çok {describe_feature(feature)} sinyaline odaklandı."
             rows.append(self._row(model_name, feature, float(mean_by_feature[top_idx]), None, reason, f"tft_{label}", False))
+        return rows
+
+    def _tft_attention_temporal_rows(
+        self,
+        model_name: str,
+        attn_heatmap: np.ndarray,
+        time_steps: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        [A5] (N, H, T) dikkat ısı haritasını XAI satırlarına dönüştürür.
+
+        Her zaman adımının ortalama dikkat ağırlığı hesaplanır;
+        en yüksek ağırlık alan ilk 3 zaman adımı raporlanır.
+
+        Args:
+            model_name   : model adı ("TFT")
+            attn_heatmap : (N, H, T) dikkat ağırlıkları
+            time_steps   : toplam T adım (sequence uzunluğu)
+
+        Returns:
+            XAI satır listesi (tft_attention metodu)
+        """
+        if attn_heatmap is None or np.asarray(attn_heatmap).size == 0:
+            return []
+
+        arr = np.asarray(attn_heatmap, dtype=float)   # (N, H, T)
+        if arr.ndim != 3:
+            return []
+
+        mean_attn = arr.mean(axis=(0, 1))              # (T,)
+        top_k     = min(3, len(mean_attn))
+        top_steps = np.argsort(mean_attn)[::-1][:top_k]
+
+        rows = []
+        for step in top_steps:
+            steps_back = time_steps - int(step) - 1
+            label      = f"T-{steps_back}" if steps_back > 0 else "T (son gün)"
+            reason     = (
+                f"TFT modeli {label} adım önceki veriye en çok dikkat etti "
+                f"(ortalama ağırlık={float(mean_attn[step]):.4f})."
+            )
+            rows.append(
+                self._row(
+                    model_name,
+                    f"AttnStep_{int(step)}",
+                    float(mean_attn[step]),
+                    None,
+                    reason,
+                    "tft_attention",
+                    False,
+                )
+            )
         return rows
 
     def _explain_sequence_permutation(

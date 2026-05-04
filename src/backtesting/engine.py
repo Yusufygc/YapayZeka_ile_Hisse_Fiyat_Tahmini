@@ -19,6 +19,7 @@ def run_backtest(
     pred_price,
     prev_close,
     fold_ids=None,
+    market_regime=None,
     model_name: str,
     validation_mode: str,
     target_mode: str,
@@ -34,6 +35,7 @@ def run_backtest(
     prev_close = np.asarray(prev_close, dtype=float).ravel()
     pred_target_arr = None if pred_target is None else np.asarray(pred_target, dtype=float).ravel()
     fold_id_arr = None if fold_ids is None else np.asarray(fold_ids).ravel()
+    market_regime_arr = None if market_regime is None else np.asarray(market_regime, dtype=float).ravel()
 
     if dates is None:
         dates = pd.RangeIndex(start=0, stop=len(prices), step=1)
@@ -47,6 +49,8 @@ def run_backtest(
         lengths.append(len(pred_target_arr))
     if fold_id_arr is not None:
         lengths.append(len(fold_id_arr))
+    if market_regime_arr is not None:
+        lengths.append(len(market_regime_arr))
     n = min(lengths) if lengths else 0
     if n == 0:
         return {
@@ -68,6 +72,10 @@ def run_backtest(
         fold_id_arr = fold_id_arr[-n:]
     else:
         fold_id_arr = np.full(n, "all", dtype=object)
+    if market_regime_arr is not None:
+        market_regime_arr = market_regime_arr[-n:]
+    else:
+        market_regime_arr = np.zeros(n, dtype=float)
 
     realized_returns = (prices / np.maximum(prev_close, 1e-12)) - 1.0
     observed_returns = np.concatenate(([0.0], realized_returns[:-1]))
@@ -96,6 +104,7 @@ def run_backtest(
                 prev_close=prev_close,
                 target_mode=target_mode,
                 observed_returns=observed_returns,
+                market_regime=market_regime_arr,
                 commission_bps=commission_bps,
                 slippage_bps=slippage_bps,
                 config=cfg,
@@ -222,6 +231,11 @@ def run_backtest(
         "Quality_Gate_Mode",
         "Quality_Threshold_Multiplier",
         "Quality_Gate_Reason",
+        "Market_Regime_SMA200",
+        "Regime_Threshold_Multiplier",
+        "Volatility_Regime",
+        "Volatility_Threshold_Multiplier",
+        "Final_Threshold_Multiplier",
         "Rolling_Volatility",
         "Holding_Bars",
         "Trade_Return",
@@ -285,6 +299,11 @@ def _blocked_signal_frame(n: int, reason: str, risk_state: str) -> pd.DataFrame:
         "Quality_Gate_Mode": [risk_state] * n,
         "Quality_Threshold_Multiplier": np.full(n, np.nan, dtype=float),
         "Quality_Gate_Reason": [reason] * n,
+        "Market_Regime_SMA200": np.zeros(n, dtype=float),
+        "Regime_Threshold_Multiplier": np.full(n, np.nan, dtype=float),
+        "Volatility_Regime": ["blocked"] * n,
+        "Volatility_Threshold_Multiplier": np.full(n, np.nan, dtype=float),
+        "Final_Threshold_Multiplier": np.full(n, np.nan, dtype=float),
         "Rolling_Volatility": np.full(n, np.nan, dtype=float),
         "Holding_Bars": np.zeros(n, dtype=int),
         "Trade_Return": np.zeros(n, dtype=float),

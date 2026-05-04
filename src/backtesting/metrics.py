@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+try:
+    from src.utils.risk_free_rate import get_current_risk_free_rate as _get_rf
+except ImportError:
+    _get_rf = None
+
 from typing import Any, Dict
 
 import math
@@ -84,9 +89,11 @@ def _deflated_sharpe(
 def summarize_backtest(
     backtest_result: Dict[str, Any],
     initial_capital: float = 100000.0,
-    risk_free_annual: float = 0.40,
+    risk_free_annual: float | None = None,
     trial_count: int = 1,
 ) -> Dict[str, float | str | bool]:
+    if risk_free_annual is None:
+        risk_free_annual = _get_rf() if _get_rf is not None else 0.40
     equity_curve: pd.DataFrame = backtest_result["equity_curve"]
     trades: pd.DataFrame = backtest_result["trades"]
     model_name = backtest_result["model_name"]
@@ -135,6 +142,10 @@ def summarize_backtest(
             "BuyHold_Profit_TL": 0.0,
             "BuyHold_Sharpe": 0.0,
             "Beats_BuyHold_NetReturn": False,
+            "Omega_Ratio": 0.0,
+            "Recovery_Factor": 0.0,
+            "Max_Consecutive_Loss": 0,
+            "Information_Ratio": 0.0,
         }
 
     strategy_returns = equity_curve["Net_Return"].to_numpy(dtype=float)
@@ -160,6 +171,11 @@ def summarize_backtest(
     )
     max_drawdown = _max_drawdown(equity)
     calmar = float(annualized_return / abs(max_drawdown)) if max_drawdown < 0 else float("inf")
+    daily_rf = _daily_risk_free_rate(risk_free_annual)
+    omega = _omega_ratio(strategy_returns, threshold=daily_rf)
+    recovery_factor = _recovery_factor(net_return, max_drawdown)
+    max_consec_loss = _max_consecutive_loss(trades)
+    information_ratio = _information_ratio(strategy_returns, buy_hold_returns)
     exposure = float(np.mean(equity_curve["Position"].to_numpy(dtype=float)) * 100.0)
     active_bars = int(np.sum(equity_curve["Position"].to_numpy(dtype=float) > 0))
     signal_count = int(np.sum(equity_curve["Signal"].to_numpy(dtype=float) > 0))
@@ -228,7 +244,68 @@ def summarize_backtest(
         "BuyHold_Profit_TL": round(buy_hold_profit_tl, 2),
         "BuyHold_Sharpe": round(buy_hold_sharpe, 6),
         "Beats_BuyHold_NetReturn": net_return > buy_hold_return,
+        "Omega_Ratio": round(omega, 6) if np.isfinite(omega) else float("inf"),
+        "Recovery_Factor": round(recovery_factor, 6) if np.isfinite(recovery_factor) else float("inf"),
+        "Max_Consecutive_Loss": max_consec_loss,
+        "Information_Ratio": round(information_ratio, 6),
     }
+
+
+def _omega_ratio(returns: np.ndarray, threshold: float = 0.0) -> float:
+    """
+    Omega Ratio: kazanc dagiliminin kayip dagilimina orani (threshold uzerinde/altinda).
+    threshold: gunluk risk-free orani olarak kullanilir.
+    """
+    excess = returns - threshold
+    gains = np.sum(excess[excess > 0])
+    losses = np.sum(np.abs(excess[excess < 0]))
+    if losses == 0:
+        return float("inf") if gains > 0 else 1.0
+    return float(gains / losses)
+
+
+def _recovery_factor(net_return: float, max_drawdown: float) -> float:
+    """
+    Recovery Factor: Net getiri / Maksimum drawdown (mutlak deger).
+    Yuksek deger = drawdown hizla geri kazanildi.
+    """
+    if max_drawdown == 0:
+        return float("inf") if net_return > 0 else 0.0
+    return float(net_return / abs(max_drawdown))
+
+
+def _max_consecutive_loss(trades: pd.DataFrame) -> int:
+    """
+    Maksimum ardisik kaybeden islem sayisi.
+    """
+    if trades.empty or "Net_Return" not in trades.columns:
+        return 0
+    returns = trades["Net_Return"].to_numpy(dtype=float)
+    max_consec = 0
+    current = 0
+    for r in returns:
+        if r < 0:
+            current += 1
+            max_consec = max(max_consec, current)
+        else:
+            current = 0
+    return int(max_consec)
+
+
+def _information_ratio(
+    strategy_returns: np.ndarray,
+    benchmark_returns: np.ndarray,
+) -> float:
+    """
+    Information Ratio: aktif getiri / tracking error (yillandirilmis).
+    IR > 0.5 iyi, > 1.0 mukemmel kabul edilir.
+    """
+    active = strategy_returns - benchmark_returns
+    tracking_error = float(np.std(active) * np.sqrt(252))
+    if tracking_error == 0:
+        return 0.0
+    active_return = float(np.mean(active) * 252)
+    return float(active_return / tracking_error)
 
 
 def _trade_quality_metrics(trades: pd.DataFrame) -> tuple[float, float, float, float]:

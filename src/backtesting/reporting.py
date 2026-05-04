@@ -13,7 +13,7 @@ except ImportError:  # pragma: no cover - plotting is skipped in minimal runtime
     plt = None
 
 from src.backtesting.metrics import summarize_backtest
-from src.reporting_utils import (
+from src.utils.reporting_utils import (
     bullet_list,
     prepare_csv_dataframe,
     route_output_path,
