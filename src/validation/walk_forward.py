@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 import numpy as np
 
 from src.evaluation.financial_metrics import compute_financial_metrics
-from src.preprocessor import reconstruct_prices_from_logret, reconstruct_prices_from_return
+from src.data.preprocessor import reconstruct_prices_from_logret, reconstruct_prices_from_return
 
 
 class WalkForwardValidator:
@@ -61,6 +61,7 @@ class WalkForwardValidator:
                 dates_test,
                 prediction_dates_test,
                 y_test_target,
+                market_regime_test,
             ) = self.preprocessor(train_df, test_df, context_df=context_df)
 
             model = self.model_initializer()
@@ -82,6 +83,7 @@ class WalkForwardValidator:
                 len(dates_test),
                 len(prediction_dates_test),
                 len(y_test_target),
+                len(market_regime_test),
             )
             preds_target_aligned = preds_target[-min_len:]
             prev_close_aligned = np.asarray(prev_close_test).ravel()[-min_len:]
@@ -89,6 +91,7 @@ class WalkForwardValidator:
             y_true_target_aligned = np.asarray(y_test_target).ravel()[-min_len:]
             dates_aligned = np.asarray(dates_test)[-min_len:]
             prediction_dates_aligned = np.asarray(prediction_dates_test)[-min_len:]
+            market_regime_aligned = np.asarray(market_regime_test).ravel()[-min_len:]
             preds_final = self._target_to_price(preds_target_aligned, prev_close_aligned)
 
             metrics = compute_financial_metrics(
@@ -105,6 +108,7 @@ class WalkForwardValidator:
                 "split_idx": split["split_idx"],
                 "dates": dates_aligned.tolist(),
                 "prediction_dates": prediction_dates_aligned.tolist(),
+                "market_regime": market_regime_aligned.tolist(),
                 "prev_close": prev_close_aligned.tolist(),
                 "y_true_price": y_true_final.tolist(),
                 "y_true_target": y_true_target_aligned.tolist(),

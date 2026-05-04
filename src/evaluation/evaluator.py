@@ -14,7 +14,7 @@ try:
 except ImportError:  # pragma: no cover - plotting is skipped in minimal runtimes
     plt = None
 
-from src.reporting_utils import (
+from src.utils.reporting_utils import (
     bullet_list,
     prepare_csv_dataframe,
     route_output_path,
@@ -30,7 +30,6 @@ _BASELINE_CANDIDATES = (
     "LightGBM Return",
     "DLinear",
     "NLinear",
-    "PatchTST Experimental",
     "Naive Zero Return",
     "Naive Drift",
     "Naive Last Value",

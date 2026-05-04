@@ -9,6 +9,11 @@ are provided by the pipeline.
 
 from typing import Dict
 
+try:
+    from src.utils.risk_free_rate import get_current_risk_free_rate as _get_rf
+except ImportError:
+    _get_rf = None
+
 import numpy as np
 try:
     from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error, mean_squared_error
@@ -84,11 +89,16 @@ def _price_to_target_returns(
 def compute_buy_hold_sharpe(
     y_true: np.ndarray,
     prev_close: np.ndarray | None = None,
-    risk_free_annual: float = 0.40,
+    risk_free_annual: float | None = None,
 ) -> float:
     """
     Compute buy-and-hold Sharpe from daily simple returns, not price differences.
+
+    risk_free_annual: yillik risksiz faiz orani. None ise macro cache'ten dinamik
+    olarak okunur; cache yoksa 0.40 (%40) fallback kullanilir.
     """
+    if risk_free_annual is None:
+        risk_free_annual = _get_rf() if _get_rf is not None else 0.40
     return _annualized_sharpe(_price_to_simple_returns(y_true, prev_close), risk_free_annual)
 
 
@@ -100,11 +110,16 @@ def compute_financial_metrics(
     y_pred_target: np.ndarray | None = None,
     prev_close: np.ndarray | None = None,
     target_mode: str = "price",
-    risk_free_annual: float = 0.40,
+    risk_free_annual: float | None = None,
 ) -> Dict[str, float]:
     """
     Compute price-space forecast errors and return-space financial metrics.
+
+    risk_free_annual: yillik risksiz faiz orani (ondalik). None ise macro
+    cache'ten dinamik olarak okunur; yoksa 0.40 (%40) kullanilir.
     """
+    if risk_free_annual is None:
+        risk_free_annual = _get_rf() if _get_rf is not None else 0.40
     y_true = np.asarray(y_true, dtype=float).ravel()
     y_pred = np.asarray(y_pred, dtype=float).ravel()
     k_price = min(len(y_true), len(y_pred))

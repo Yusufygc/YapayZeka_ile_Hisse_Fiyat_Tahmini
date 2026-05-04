@@ -73,8 +73,15 @@ warnings.filterwarnings("ignore")
 
 # yfinance ile çekilen günlük seriler
 _YFINANCE_TICKERS = {
-    "USDTRY": "USDTRY=X",
+    "USDTRY":  "USDTRY=X",
     "BIST100": "XU100.IS",
+    # Tier 1 — Kola eklenen yüksek etkili global göstergeler (Faz 4.1)
+    "EURTRY":  "EURTRY=X",   # EUR/TRY kuru — BIST ile güçlü korelasyon
+    "VIX":     "^VIX",        # CBOE Volatility Index — küresel risk iştahı
+    "GOLD_USD": "GC=F",       # Altın vadeli (USD/oz) — TL varlıklarıyla ters korelasyon
+    "OIL_USD":  "BZ=F",       # Brent petrol (USD/bbl) — enerji hisseleri için kritik
+    "DXY":     "DX-Y.NYB",   # Dolar endeksi — küresel EM etkisi
+    "US10Y":   "^TNX",        # ABD 10-yıllık faiz — carry trade sinyali
 }
 
 _EVDS_BASE_URL = "https://evds2.tcmb.gov.tr/service/evds/"
@@ -92,6 +99,13 @@ _CACHE_FILES = {
     "BIST100":       "BIST100.csv",
     "INTEREST_RATE": "INTEREST_RATE.csv",
     "CPI":           "CPI.csv",
+    # Faz 4.1 eklentileri
+    "EURTRY":        "EURTRY.csv",
+    "VIX":           "VIX.csv",
+    "GOLD_USD":      "GOLD_USD.csv",
+    "OIL_USD":       "OIL_USD.csv",
+    "DXY":           "DXY.csv",
+    "US10Y":         "US10Y.csv",
 }
 
 _STALE_DAYS_DAILY   = 1   # Günlük veri için yenileme eşiği
@@ -394,14 +408,6 @@ class MacroPipeline:
             print("  [MACRO] Döviz/endeks verisi yüklenemedi, makro özellikler atlanacak.")
             return pd.DataFrame()
 
-        # ── Aylık veriler (EVDS/FRED) ─────────────────────────────────────────
-        for key in _MONTHLY_SERIES_KEYS:
-            if self._is_stale(key, _STALE_DAYS_MONTHLY):
-                self._update_monthly_cache(key, buf_monthly)
-
-        interest_df = self._load_cache("INTEREST_RATE")
-        cpi_df      = self._load_cache("CPI")
-
         # ── Tarih filtreleri ───────────────────────────────────────────────────
         s   = pd.to_datetime(start_date)
         e   = pd.to_datetime(end_date)
@@ -421,6 +427,27 @@ class MacroPipeline:
 
         usdtry_df  = _filter_daily(usdtry_df)
         bist100_df = _filter_daily(bist100_df)
+
+        # Faz 4.1: Genişletilmiş global göstergeler (try/except — her biri opsiyonel)
+        _global_keys = ["EURTRY", "VIX", "GOLD_USD", "OIL_USD", "DXY", "US10Y"]
+        _global_dfs = {}
+        for _gkey in _global_keys:
+            try:
+                if self._is_stale(_gkey, _STALE_DAYS_DAILY):
+                    self._update_daily_cache(_gkey, buf_daily)
+                _gdf = self._load_cache(_gkey)
+                if _gdf is not None and not _gdf.empty:
+                    _global_dfs[_gkey] = _filter_daily(_gdf)
+            except Exception as _exc:
+                print(f"  [MACRO] {_gkey} atlanıyor: {_exc}")
+
+        # ── Aylık veriler (EVDS/FRED) ─────────────────────────────────────────
+        for key in _MONTHLY_SERIES_KEYS:
+            if self._is_stale(key, _STALE_DAYS_MONTHLY):
+                self._update_monthly_cache(key, buf_monthly)
+
+        interest_df = self._load_cache("INTEREST_RATE")
+        cpi_df      = self._load_cache("CPI")
         interest_df = _filter_monthly(interest_df) if interest_df is not None else None
         cpi_df      = _filter_monthly(cpi_df)      if cpi_df      is not None else None
 
@@ -451,6 +478,17 @@ class MacroPipeline:
         macro = pd.merge(usdtry_df, bist100_df, on="Date", how="outer")
         macro.sort_values("Date", inplace=True)
         macro.ffill(inplace=True)
+
+        # Faz 4.1: Global göstergeleri left-merge ile ekle (yoksa sütun oluşmaz)
+        for _gkey, _gdf in _global_dfs.items():
+            try:
+                macro = pd.merge(macro, _gdf, on="Date", how="left")
+                # Boşlukları önceki gün değeriyle doldur (tatil vb.)
+                close_col = _gdf.columns[-1]
+                if close_col in macro.columns:
+                    macro[close_col] = macro[close_col].ffill()
+            except Exception as _exc:
+                print(f"  [MACRO] {_gkey} merge atlandı: {_exc}")
 
         # ══════════════════════════════════════════════════════════════════════
         # ADIM 3: Aylık feature dataframe'lerini günlük takvime ffill ile taşı
@@ -564,6 +602,45 @@ class MacroPipeline:
             df["BIST100_MA7"]    = df["BIST100_Norm"].rolling(7).mean()
             df.drop(columns=["BIST100"], inplace=True)
 
+        # ── EUR/TRY ───────────────────────────────────────────────────────────
+        if "EURTRY" in df.columns:
+            df["EURTRY_Return"]      = df["EURTRY"].pct_change()
+            df["EURTRY_Volatility7"] = df["EURTRY_Return"].rolling(7).std()
+            df.drop(columns=["EURTRY"], inplace=True)
+
+        # ── VIX (küresel risk iştahı) ─────────────────────────────────────────
+        if "VIX" in df.columns:
+            df["VIX_Level"]   = df["VIX"]
+            df["VIX_Change"]  = df["VIX"].diff()
+            df.drop(columns=["VIX"], inplace=True)
+
+        # ── Altın (TRY getirisi için USDTRY ile çarp) ────────────────────────
+        if "GOLD_USD" in df.columns:
+            df["Gold_USD_Return"] = df["GOLD_USD"].pct_change()
+            # Altın/TRY = Altın/USD * USD/TRY
+            if "USDTRY_Return" in df.columns:
+                df["Gold_TRY_Return"] = (
+                    (1 + df["Gold_USD_Return"]) * (1 + df["USDTRY_Return"]) - 1
+                )
+            df.drop(columns=["GOLD_USD"], inplace=True)
+
+        # ── Brent Petrol ──────────────────────────────────────────────────────
+        if "OIL_USD" in df.columns:
+            df["Oil_USD_Return"] = df["OIL_USD"].pct_change()
+            df.drop(columns=["OIL_USD"], inplace=True)
+
+        # ── DXY (Dolar Endeksi) ───────────────────────────────────────────────
+        if "DXY" in df.columns:
+            df["DXY_Return"]      = df["DXY"].pct_change()
+            df["DXY_Volatility7"] = df["DXY_Return"].rolling(7).std()
+            df.drop(columns=["DXY"], inplace=True)
+
+        # ── ABD 10Y Faizi ─────────────────────────────────────────────────────
+        if "US10Y" in df.columns:
+            df["US10Y_Level"]  = df["US10Y"]
+            df["US10Y_Change"] = df["US10Y"].diff()
+            df.drop(columns=["US10Y"], inplace=True)
+
         df.dropna(inplace=True)
         df.reset_index(drop=True, inplace=True)
         return df
@@ -585,6 +662,18 @@ class MacroPipeline:
             "BIST100_Norm",
             "BIST100_Return",
             "BIST100_MA7",
+            # Faz 4.1 — Global göstergeler (opsiyonel; yoksa feature pipeline atlar)
+            "EURTRY_Return",
+            "EURTRY_Volatility7",
+            "VIX_Level",
+            "VIX_Change",
+            "Gold_USD_Return",
+            "Gold_TRY_Return",
+            "Oil_USD_Return",
+            "DXY_Return",
+            "DXY_Volatility7",
+            "US10Y_Level",
+            "US10Y_Change",
         ]
         rate_inflation = [
             "Rate_Level",
