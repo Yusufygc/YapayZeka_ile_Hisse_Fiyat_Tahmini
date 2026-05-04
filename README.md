@@ -43,6 +43,8 @@ Pipeline, **Facade + Strategy** tasarım deseni üzerine inşa edilmiştir. Üst
 ```
 ForecastingPipeline          ← src/pipeline/orchestrator.py  (Facade)
 ├── DataManager              ← src/pipeline/data_manager.py
+│   ├── DataLoader/Updater   ← src/data/
+│   ├── Preprocessor         ← src/data/preprocessor.py
 │   ├── FeaturePipeline      ← src/features/feature_pipeline.py
 │   ├── MacroPipeline        ← src/features/macro_pipeline.py
 │   ├── FeatureCache         ← src/features/feature_cache.py
@@ -50,6 +52,8 @@ ForecastingPipeline          ← src/pipeline/orchestrator.py  (Facade)
 │
 ├── ModelTrainer             ← src/pipeline/model_trainer.py
 │   ├── 11 Model Sınıfı      ← src/models/
+│   ├── TFT v2 Mimarisi      ← src/models/tft_v2/
+│   ├── Ensemble Modeli      ← src/models/ensemble.py
 │   └── WalkForwardCV        ← src/validation/walk_forward.py
 │
 └── EvaluationManager        ← src/pipeline/evaluation_manager.py
@@ -63,6 +67,7 @@ ForecastingPipeline          ← src/pipeline/orchestrator.py  (Facade)
 
 | Dizin | Amaç |
 |---|---|
+| `src/data/` | BIST ve Makro verilerin indirilmesi, ön işlenmesi ve periyodik güncellenmesi |
 | `src/backtesting/` | Sinyal üretimi, backtest motoru, Monte Carlo bootstrap, Kelly pozisyon boyutlandırma |
 | `src/evaluation/` | Finansal metrikler, permütasyon önem testi |
 | `src/xai/` | SHAP/önem açıklamaları, özellik sözlüğü, HTML/metin raporu |
@@ -161,10 +166,19 @@ Tüm modeller `BaseModel` arayüzünden türer ve `train()`, `predict()`, `save(
 |---|---|---|
 | `LSTMModel` / `AttentionLSTMModel` | `lstm_model.py` | Çift yönlü LSTM + dikkat mekanizması (Keras/TensorFlow) |
 | `TFTModel` | `tft_model.py` | Temporal Fusion Transformer; kantil tahmini (PyTorch) |
+| `TFTModelV2` | `tft_v2/model.py` | Modüler blok mimarisine sahip yeni nesil Temporal Fusion Transformer |
 
 **Neden LSTM'de `clipnorm=1.0`?** BIST verisi, yüksek volatilite dönemlerinde (seçimler, kur krizleri) ani gradient patlamalarına yol açabilir. `Adam(clipnorm=1.0)` ile gradients normalize edilerek eğitim kararsızlığı önlenir.
 
-**Neden TFT?** TFT, nokta tahmini değil kantil tahmini (P10/P50/P90) üretir. Bu sayede "fiyat ne olacak?" sorusuna ek olarak "belirsizlik aralığı nedir?" sorusunu da yanıtlar. Risk yönetimi açısından kritik bir bilgidir.
+**Neden TFT ve TFT v2?** TFT, nokta tahmini değil kantil tahmini (P10/P50/P90) üretir. Bu sayede "fiyat ne olacak?" sorusuna ek olarak "belirsizlik aralığı nedir?" sorusunu da yanıtlar. Yeni eklenen **TFT v2** mimarisi ise statik eşdeğişken kodlayıcılar, değişken seçim ağları ve Gated Residual Network (GRN) bloklarını birbirinden ayırarak çok daha esnek, bakımı kolay ve genişletilebilir bir altyapı sunar.
+
+### Topluluk (Ensemble) Modelleri
+
+| Sınıf | Dosya | Açıklama |
+|---|---|---|
+| `EnsembleModel` | `ensemble.py` | L2 (Ridge) regresyonu kullanarak diğer modellerin tahminlerini birleştirir |
+
+**Neden Ensemble?** Tek bir modelin (örneğin XGBoost) iyi çalıştığı piyasa koşulları ile LSTM'in iyi çalıştığı koşullar farklı olabilir. `EnsembleModel`, alt modellerin geçmiş tahmin performanslarına göre (meta-öğrenme) dinamik ağırlıklar belirler. Tek bir modele bağımlı kalma riskini (model risk) azaltır ve getiriyi pürüzsüzleştirir.
 
 ### Deneysel Sequence Baseline'ları
 
@@ -375,6 +389,17 @@ Bu proje, deneysel bir prototipten başlayarak altı faz boyunca sistematik olar
 - `GET /run/status/{job_id}` — İş durumu sorgulama
 - **Neden?** `Merge_PortfoySim` gibi portföy simülasyon uygulamaları, tahmin sonuçlarını HTTP üzerinden sorgulayabilir. Böylece bu pipeline, daha büyük bir sistemin bağımsız mikroservisi haline gelir.
 
+### Faz 6 — Modülerizasyon ve Temiz Mimari (İleri Mimariler)
+
+**Problem:** Veri yükleme, ön işleme gibi araçların kök dizine yayılması kod okunabilirliğini zorlaştırıyor ve derin öğrenme modelleri (TFT) yeni özellik eklemek için çok monolitik (tek parça) kalıyordu. 
+
+**Yapılanlar:**
+- **Veri Araçları Ayrıştırıldı:** `data_loader.py` ve `preprocessor.py` gibi araçlar `src/data/` modülüne taşınarak sorumluluklar netleştirildi.
+- **TFT v2 Mimarisi:** PyTorch tabanlı Temporal Fusion Transformer modeli, bloklarına (Encoder, Decoder, Multi-Head Attention, GLU, GRN) ayrıştırılarak "modüler" hale getirildi. Artık mimarinin içine yeni bir bileşen takmak çok daha kolay.
+- **Ensemble (Topluluk) Modeli:** En iyi modellerin tahminlerini Ridge regresyonu ile dinamik ağırlıklandıran Ensemble yapısı `src/models/ensemble.py` olarak standart modele dahil edildi.
+
+**Bu işe ne yarar?** Sistemin bakım maliyeti (maintenance cost) ciddi oranda düştü. İleride makine öğrenimi mühendisleri, TFT'nin sadece Gated Residual Network bloklarında veya veri yükleyicinin sadece tek bir API çağrısında değişiklik yaparak tüm sistemi bozmadan çalışabilecek.
+
 ---
 
 ## 7. Kurulum
@@ -501,6 +526,24 @@ python -m pytest tests/test_smoke.py -v
 python -m pytest tests/test_leakage_guards.py -v
 ```
 
+### 8.5 Operasyonel Süreçler: Veri Güncelleme
+
+Günlük piyasa kapanışlarından sonra modelin güncel verilerle çalışması için veri setinin güncellenmesi gerekir. Bu işlem `src/data/data_updater.py` kullanılarak veya `run_batch.py` üzerinden yapılabilir.
+
+```bash
+# Sadece veri setini günceller (Model çalıştırmaz)
+python -m src.data.data_updater --symbols TUPRS,ASELS
+
+# Tüm BIST evreninin verisini günceller
+python -m src.data.data_updater --universe data/bist_universe.csv
+
+# Batch mod ile hem veriyi güncelle hem de tahmin üret
+# (Veri eksikse veya eskiyle otomatik olarak Yahoo Finance üzerinden tamamlanır)
+python run_batch.py --universe data/bist_universe.csv --mode single_split
+```
+
+> **Not:** Makro veriler (BIST100, USDTRY vb.) pipeline çalıştığında `MacroPipeline` veya `data_updater` aracılığıyla otomatik olarak FRED ve Yahoo Finance üzerinden güncellenir.
+
 ---
 
 ## 9. Yapılandırma Referansı
@@ -622,6 +665,27 @@ GitHub Actions otomatik olarak her `push` ve `pull_request`'te çalışır:
 | Değişken | Açıklama |
 |---|---|
 | `RISK_FREE_RATE_ANNUAL` | Sharpe hesabı için risksiz oran geçersiz kıl (örn: `0.45`) |
+
+---
+
+## 13. Geliştirici Rehberi: Yeni Model Ekleme
+
+Sisteme kendi algoritmanızı (örneğin yeni bir PyTorch tabanlı Transformer veya özel bir istatistiksel model) eklemek için aşağıdaki 3 adımı izlemeniz yeterlidir:
+
+1. **`BaseModel`'den Türetin:** `src/models/` dizini altında yeni bir dosya oluşturun ve sınıfınızı `BaseModel` arayüzünden (`src.models.base_model.BaseModel`) türetin.
+2. **Metodları İmplemente Edin:** Zorunlu olan `train()`, `predict()`, `save()`, ve `load()` metodlarını doldurun.
+3. **Kayıt İşlemi:** Modelinizi `src/model_registry/model_registry.py` içindeki sözlüğe veya kullanacağınız `ModelConfig` sınıfına tanıtın.
+
+---
+
+## 14. Sorun Giderme (Troubleshooting)
+
+| Sorun | Neden ve Çözüm |
+|---|---|
+| **yfinance 429 Too Many Requests** | *Neden:* Çok fazla hisse verisi aynı anda istendi. *Çözüm:* `run_batch.py` içindeki `--workers` sayısını düşürün veya farklı bir IP adresi/VPN kullanın. |
+| **CUDA OOM (Out of Memory)** | *Neden:* TFT v2 veya LSTM eğitilirken ekran kartı belleği doldu. *Çözüm:* `PipelineConfig` altındaki `time_steps` değerini küçültün veya model batch size değerini azaltın. |
+| **Missing Macro Data (FRED/Yahoo)** | *Neden:* İnternet bağlantısı koptu veya API değişti. *Çözüm:* `src/data/data_updater.py`'yi tekrar çalıştırın; veriler önbellekten okunmak yerine sıfırdan indirilir. |
+| **SQLite database is locked** | *Neden:* Optuna warm-start kullanırken çok fazla worker aynı DB dosyasına yazmaya çalıştı. *Çözüm:* Worker sayısını düşürün (`--workers 2` veya `1`). |
 
 ---
 
