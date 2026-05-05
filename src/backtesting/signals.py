@@ -143,6 +143,8 @@ def generate_professional_signals(
     )
 
     decisions: list[str] = []
+    recommendations: list[str] = []
+    recommendations_tr: list[str] = []
     positions = np.zeros(n, dtype=float)
     signal_strength = np.zeros(n, dtype=float)
     risk_states: list[str] = []
@@ -165,8 +167,9 @@ def generate_professional_signals(
         signal_strength[idx] = exp_ret / max(float(entry_threshold[idx]), 1e-12)
 
         if in_position:
-            holding_bars = idx - entry_idx + 1
-            current_return = float(np.prod(1.0 + observed_arr[entry_idx : idx + 1]) - 1.0)
+            holding_bars = max(0, idx - entry_idx)
+            held_returns = observed_arr[entry_idx + 1 : idx + 1]
+            current_return = float(np.prod(1.0 + held_returns) - 1.0) if len(held_returns) else 0.0
             take_profit = max(cfg.take_profit_vol_multiplier * vol, total_cost * cfg.entry_cost_multiplier)
             stop_loss = -max(cfg.stop_loss_vol_multiplier * vol, total_cost * cfg.entry_cost_multiplier)
             holding_bars_values[idx] = holding_bars
@@ -183,7 +186,7 @@ def generate_professional_signals(
                 should_exit = True
                 risk_state = "stop_loss"
                 reason = "Acil zarar-kes bariyeri tetiklendigi icin minimum bekleme suresi beklenmeden cikis sinyali uretildi."
-            elif holding_bars <= cfg.min_holding_bars:
+            elif holding_bars < cfg.min_holding_bars:
                 decision = "HOLD"
                 risk_state = "min_hold"
                 reason = "Minimum elde tutma suresi dolmadigi icin pozisyon korunuyor."
@@ -228,7 +231,7 @@ def generate_professional_signals(
                 entry_price = float(prev_close[idx])
                 entry_idx = idx
                 positions[idx] = 1.0
-                holding_bars_values[idx] = 1
+                holding_bars_values[idx] = 0
                 trade_return_values[idx] = 0.0
                 take_profit_values[idx] = max(cfg.take_profit_vol_multiplier * vol, total_cost * cfg.entry_cost_multiplier)
                 stop_loss_values[idx] = -max(cfg.stop_loss_vol_multiplier * vol, total_cost * cfg.entry_cost_multiplier)
@@ -238,11 +241,20 @@ def generate_professional_signals(
                 reason = "Beklenen getiri maliyet ve volatilite esigini asmadigi icin islem acilmadi."
 
         decisions.append(decision)
+        recommendation, recommendation_tr = _recommendation_from_decision(
+            decision,
+            exp_ret,
+            float(entry_threshold[idx]),
+        )
+        recommendations.append(recommendation)
+        recommendations_tr.append(recommendation_tr)
         risk_states.append(risk_state)
         reasons.append(reason)
 
     return pd.DataFrame({
         "Decision": decisions,
+        "Recommendation": recommendations,
+        "Recommendation_TR": recommendations_tr,
         "Position": positions,
         "Expected_Return": expected_return,
         "Base_Entry_Threshold": base_entry_threshold,
@@ -346,6 +358,20 @@ def _expected_return_to_simple_return(expected_return: np.ndarray, target_mode: 
     if target_mode == "return":
         return expected_return
     return expected_return
+
+
+def _recommendation_from_decision(
+    decision: str,
+    expected_return: float,
+    entry_threshold: float,
+) -> tuple[str, str]:
+    if decision == "BUY":
+        return "BUY", "AL"
+    if decision == "EXIT":
+        return "SELL", "SAT"
+    if decision == "NO_TRADE" and expected_return < -abs(entry_threshold):
+        return "SELL", "SAT"
+    return "HOLD", "TUT"
 
 
 def _rolling_volatility(returns: np.ndarray, window: int) -> np.ndarray:

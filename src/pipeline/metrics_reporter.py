@@ -22,6 +22,12 @@ import pandas as pd
 
 from src.database.stock_model_db import compute_composite_score
 from src.evaluation.evaluator import enrich_with_benchmark_metrics
+from src.pipeline.model_scope import (
+    BENCHMARK_MODELS,
+    is_selection_candidate,
+    report_group,
+    reportable_model_names,
+)
 try:
     from src.xai import XAIExplainer, XAIReportWriter
 except ImportError as _xai_import_error:  # pragma: no cover
@@ -99,7 +105,28 @@ class _MetricsReporterMixin:
                 model_metrics["Model_Family"] = "gradient_boosting_return_baseline"
             else:
                 model_metrics.setdefault("Model_Family", model_name)
+        return self._attach_model_scope_metadata(metrics_dict)
+
+    def _attach_model_scope_metadata(
+        self, metrics_dict: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Dict[str, Any]]:
+        candidate_models = set(self.dataset_metadata.get("candidate_models", []))
+        benchmark_models = set(self.dataset_metadata.get("benchmark_models", BENCHMARK_MODELS))
+        for model_name, model_metrics in metrics_dict.items():
+            group = report_group(model_name, candidate_models)
+            model_metrics["Candidate_For_Selection"] = bool(is_selection_candidate(model_name, candidate_models))
+            model_metrics["Report_Group"] = group
+            model_metrics["Benchmark_Model"] = bool(model_name in benchmark_models)
         return metrics_dict
+
+    def _filter_reportable_models(
+        self, data: Dict[str, Any],
+        metrics_dict: Dict[str, Dict[str, Any]] | None = None,
+    ) -> Dict[str, Any]:
+        candidate_models = set(self.dataset_metadata.get("candidate_models", []))
+        names = set(metrics_dict or data)
+        allowed = reportable_model_names(names, candidate_models)
+        return {name: value for name, value in data.items() if name in allowed}
 
     # ------------------------------------------------------------------ #
     #  Walk-forward fold metric enrichment                               #
@@ -161,11 +188,18 @@ class _MetricsReporterMixin:
     def _select_best_model(metrics_dict: Dict[str, Dict[str, Any]]) -> Optional[str]:
         if not metrics_dict:
             return None
+        candidates = {
+            name: metrics
+            for name, metrics in metrics_dict.items()
+            if bool(metrics.get("Candidate_For_Selection", False))
+        }
+        if not candidates:
+            return None
         return max(
-            metrics_dict,
+            candidates,
             key=lambda name: (
-                float(metrics_dict[name].get("Composite_Score", float("-inf"))),
-                -float(metrics_dict[name].get("RMSE", float("inf"))),
+                float(candidates[name].get("Composite_Score", float("-inf"))),
+                -float(candidates[name].get("RMSE", float("inf"))),
             ),
         )
 
@@ -194,10 +228,10 @@ class _MetricsReporterMixin:
                 y_true_aligned=self.y_true_aligned,
                 quantile_predictions=self.quantile_predictions,
             )
-            self._write_xai_reports(payload, suffix="wf")
+            self._write_xai_reports(payload, suffix="latest")
             return payload
         except Exception as exc:
-            print(f"  [WARN] Walk-forward XAI raporu olusturulamadi, atlaniyor: {exc}")
+            print(f"  [WARN] Single split XAI raporu olusturulamadi, atlaniyor: {exc}")
             return None
 
     def _get_xai_walk_forward(
@@ -233,7 +267,11 @@ class _MetricsReporterMixin:
         if not payload or XAIReportWriter is None:
             return
         try:
-            XAIReportWriter(self.xai_dir).write(payload, suffix=suffix)
+            XAIReportWriter(
+                self.xai_dir,
+                write_tables=bool(getattr(self, "write_xai_tables", False)),
+                write_markdown=bool(getattr(self, "write_markdown_reports", True)),
+            ).write(payload, suffix=suffix)
         except Exception as exc:
             print(f"  [WARN] XAI dosya yazimi basarisiz ({suffix}): {exc}")
 
@@ -244,7 +282,7 @@ class _MetricsReporterMixin:
         Sütun yapısı: h1 | h5 | h10 | h21  (mevcut horizonlara göre dinamik)
         """
         mh = getattr(self, "multihorizon_predictions", {})
-        if not mh:
+        if not mh or not bool(getattr(self, "write_xai_tables", True)):
             return
         try:
             os.makedirs(self.xai_dir, exist_ok=True)

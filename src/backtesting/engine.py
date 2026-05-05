@@ -116,7 +116,7 @@ def run_backtest(
     else:
         raise ValueError(f"Desteklenmeyen signal_mode: {signal_mode}. Beklenen: legacy, professional")
 
-    execution_positions = np.concatenate(([0.0], decision_positions[:-1]))
+    execution_positions = decision_positions.copy()
     previous_execution_positions = np.concatenate(([0.0], execution_positions[:-1]))
     entry_events = ((previous_execution_positions == 0.0) & (execution_positions == 1.0)).astype(float)
     exit_events = ((previous_execution_positions == 1.0) & (execution_positions == 0.0)).astype(float)
@@ -223,6 +223,8 @@ def run_backtest(
 
     for column in [
         "Decision",
+        "Recommendation",
+        "Recommendation_TR",
         "Expected_Return",
         "Base_Entry_Threshold",
         "Entry_Threshold",
@@ -271,8 +273,12 @@ def run_backtest(
 def _legacy_signal_frame(signals: np.ndarray, n: int) -> pd.DataFrame:
     signals = np.asarray(signals, dtype=float).ravel()[-n:]
     decisions = np.where(signals > 0, "BUY", "NO_TRADE")
+    recommendations = np.where(signals > 0, "BUY", "HOLD")
+    recommendations_tr = np.where(signals > 0, "AL", "TUT")
     return pd.DataFrame({
         "Decision": decisions,
+        "Recommendation": recommendations,
+        "Recommendation_TR": recommendations_tr,
         "Position": signals,
         "Expected_Return": np.nan,
         "Entry_Threshold": np.nan,
@@ -290,6 +296,8 @@ def _legacy_signal_frame(signals: np.ndarray, n: int) -> pd.DataFrame:
 def _blocked_signal_frame(n: int, reason: str, risk_state: str) -> pd.DataFrame:
     return pd.DataFrame({
         "Decision": ["NO_TRADE"] * n,
+        "Recommendation": ["HOLD"] * n,
+        "Recommendation_TR": ["TUT"] * n,
         "Position": np.zeros(n, dtype=float),
         "Expected_Return": np.full(n, np.nan, dtype=float),
         "Base_Entry_Threshold": np.full(n, np.nan, dtype=float),

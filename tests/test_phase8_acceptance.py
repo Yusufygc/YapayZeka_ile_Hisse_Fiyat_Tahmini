@@ -197,6 +197,83 @@ class Phase8AcceptanceTests(unittest.TestCase):
         self.assertEqual(int(soft_row["Blocked_By_DirAcc"]), 0)
 
     @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    def test_run_backtests_disables_gate_and_shadow_by_default(self):
+        manager = EvaluationManager.__new__(EvaluationManager)
+        manager.outputs_dir = self.tmp
+        manager.backtest_enabled = True
+        manager.dataset_metadata = {"target_mode": "price"}
+        manager.signal_mode = "professional"
+        manager.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=5)
+        manager.commission_bps = 10.0
+        manager.slippage_bps = 5.0
+        manager.initial_capital = 100000.0
+        manager.latest_backtest_results = {}
+        manager.latest_backtest_metrics = {}
+
+        dates = pd.date_range("2024-01-01", periods=8, freq="B")
+        payload = {
+            "dates": dates,
+            "prediction_dates": dates - pd.Timedelta(days=1),
+            "y_true_price": np.full(8, 101.0),
+            "pred_price": np.full(8, 104.0),
+            "prev_close": np.full(8, 100.0),
+            "market_regime": np.zeros(8),
+        }
+
+        with patch.object(EvaluationManager, "_get_signal_gate_diagnostics") as gate_probe, \
+             patch.object(EvaluationManager, "_get_shadow_backtests") as shadow_probe:
+            result = EvaluationManager._run_backtests(
+                manager,
+                {"Candidate": payload},
+                suffix="default_diag",
+                model_metrics_by_model={"Candidate": {"Dir_Acc": 53.0, "RMSE_vs_benchmark": 0.95, "Composite_Score": 55.0}},
+            )
+
+        gate_probe.assert_not_called()
+        shadow_probe.assert_not_called()
+        self.assertEqual(result["gate_diagnostics"]["status"], "disabled")
+        self.assertEqual(result["shadow_results"]["status"], "disabled")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "signal_gate_diagnostics_v1_default_diag.csv")))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "shadow_backtest_comparison_v1_default_diag.csv")))
+
+    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    def test_run_backtests_writes_gate_and_shadow_when_enabled(self):
+        manager = EvaluationManager.__new__(EvaluationManager)
+        manager.outputs_dir = self.tmp
+        manager.backtest_enabled = True
+        manager.enable_gate_diagnostics = True
+        manager.enable_shadow_backtests = True
+        manager.dataset_metadata = {"target_mode": "price"}
+        manager.signal_mode = "professional"
+        manager.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=5)
+        manager.commission_bps = 10.0
+        manager.slippage_bps = 5.0
+        manager.initial_capital = 100000.0
+        manager.latest_backtest_results = {}
+        manager.latest_backtest_metrics = {}
+
+        dates = pd.date_range("2024-01-01", periods=8, freq="B")
+        payload = {
+            "dates": dates,
+            "prediction_dates": dates - pd.Timedelta(days=1),
+            "y_true_price": np.full(8, 101.0),
+            "pred_price": np.full(8, 104.0),
+            "prev_close": np.full(8, 100.0),
+            "market_regime": np.zeros(8),
+        }
+        result = EvaluationManager._run_backtests(
+            manager,
+            {"Candidate": payload},
+            suffix="enabled_diag",
+            model_metrics_by_model={"Candidate": {"Dir_Acc": 53.0, "RMSE_vs_benchmark": 0.95, "Composite_Score": 55.0}},
+        )
+
+        self.assertIsInstance(result["gate_diagnostics"], pd.DataFrame)
+        self.assertIn("comparison_df", result["shadow_results"])
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "signal_gate_diagnostics_v1_enabled_diag.csv")))
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "shadow_backtest_comparison_v1_enabled_diag.csv")))
+
+    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_walk_forward_signal_calibration_excludes_final_holdout_and_writes_reports(self):
         manager = EvaluationManager.__new__(EvaluationManager)
         manager.outputs_dir = self.tmp
@@ -240,9 +317,96 @@ class Phase8AcceptanceTests(unittest.TestCase):
         summary = manager.signal_threshold_calibration_summary
         self.assertEqual(summary["execution_calibration_set"], "walk_forward_backtest_inputs_only")
         self.assertFalse(summary["final_holdout_used"])
+        self.assertEqual(summary["grid_size"], 1)
+        self.assertEqual(summary["executed_trials"], 1)
+        self.assertEqual(summary["trial_cap"], 64)
+        self.assertEqual(summary["calibration_profile"], "production")
         self.assertEqual(manager.signal_threshold_source, "walk_forward_signal_calibration")
-        self.assertTrue(os.path.exists(os.path.join(self.tmp, "signal_calibration_v1.csv")))
-        self.assertTrue(os.path.exists(os.path.join(self.tmp, "signal_calibration_decision_v1.md")))
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "csv", "signal_calibration_v1.csv")))
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "md", "signal_calibration_decision_v1.md")))
+
+    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    def test_signal_calibration_production_profile_caps_trials(self):
+        manager = EvaluationManager.__new__(EvaluationManager)
+        manager.outputs_dir = self.tmp
+        manager.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=6)
+        manager.default_signal_config = manager.signal_config
+        manager.signal_threshold_source = "default_config"
+        manager.signal_threshold_calibration_summary = {}
+        manager.dataset_metadata = {"target_mode": "price"}
+        manager.commission_bps = 10.0
+        manager.slippage_bps = 5.0
+        manager.initial_capital = 100000.0
+        manager.signal_calibration_profile = "production"
+        manager.signal_calibration_max_trials = 2
+
+        dates = pd.date_range("2024-01-01", periods=8, freq="B")
+        payload = {
+            "dates": dates,
+            "prediction_dates": dates - pd.Timedelta(days=1),
+            "y_true_price": np.full(8, 101.0),
+            "pred_price": np.full(8, 104.0),
+            "prev_close": np.full(8, 100.0),
+            "market_regime": np.zeros(8),
+        }
+        grid = [
+            {
+                "min_directional_accuracy": 48.0 + idx,
+                "volatility_multiplier": 0.10,
+                "entry_cost_multiplier": 1.5,
+                "min_entry_threshold": 0.0,
+                "max_holding_bars": 6,
+                "take_profit_vol_multiplier": 1.0,
+                "stop_loss_vol_multiplier": 0.75,
+            }
+            for idx in range(5)
+        ]
+
+        with patch.object(EvaluationManager, "_signal_calibration_grid", return_value=grid):
+            result = EvaluationManager._calibrate_walk_forward_signal_parameters(
+                manager,
+                wf_backtest_inputs={"Candidate": payload},
+                model_metrics_by_model={"Candidate": {"Dir_Acc": 53.0, "RMSE_vs_benchmark": 0.95, "Composite_Score": 55.0}},
+            )
+
+        summary = manager.signal_threshold_calibration_summary
+        self.assertEqual(summary["grid_size"], 5)
+        self.assertEqual(summary["executed_trials"], 2)
+        self.assertEqual(summary["trial_cap"], 2)
+        self.assertEqual(summary["calibration_profile"], "production")
+        self.assertEqual(len(result["calibration_df"]), 2)
+
+    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    def test_signal_calibration_prefers_traded_trial_over_zero_trade_when_min_not_met(self):
+        rows = [
+            {
+                "Trial": 1,
+                "Mean_Net_Return": 0.0,
+                "Median_Net_Return": 0.0,
+                "Mean_Max_Drawdown": 0.0,
+                "Total_Trade_Count": 0,
+                "Min_Trade_Count": 3,
+                "Meets_Min_Trade_Count": False,
+                "Mean_Sharpe": 0.0,
+                "Positive_Net_Return": False,
+                "Status": "ok",
+            },
+            {
+                "Trial": 2,
+                "Mean_Net_Return": -0.01,
+                "Median_Net_Return": -0.01,
+                "Mean_Max_Drawdown": -0.02,
+                "Total_Trade_Count": 2,
+                "Min_Trade_Count": 3,
+                "Meets_Min_Trade_Count": False,
+                "Mean_Sharpe": -0.5,
+                "Positive_Net_Return": False,
+                "Status": "ok",
+            },
+        ]
+
+        selected = EvaluationManager._select_signal_calibration_row(rows)
+        self.assertEqual(selected["Trial"], 2)
 
     @unittest.skipIf(ForecastingPipeline is None, f"ForecastingPipeline import failed: {globals().get('ORCHESTRATOR_IMPORT_ERROR')}")
     def test_window_selection_rows_and_decision_keep_final_holdout_out_of_selection(self):

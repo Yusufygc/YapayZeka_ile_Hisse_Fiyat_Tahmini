@@ -76,7 +76,10 @@ class GRN(nn.Module):
         residual = self.proj(x)
         h = self.fc1(x)
         if context is not None and self.fc_ctx is not None:
-            h = h + self.fc_ctx(context)
+            ctx = self.fc_ctx(context)
+            while ctx.ndim < h.ndim:
+                ctx = ctx.unsqueeze(-2)
+            h = h + ctx
         h = self.elu(h)
         h = self.dropout(self.fc2(h))
         h = self.glu(h)

@@ -9,6 +9,7 @@ train/test ayırma ve tensör hazırlama işlemlerinden sorumludur.
 import os
 import json
 import hashlib
+from dataclasses import fields
 import numpy as np
 import pandas as pd
 
@@ -33,11 +34,18 @@ class DataManager:
 
     def __init__(
         self,
-        data_cfg:        DataConfig,
-        val_cfg:         ValidationConfig,
-        models_dir:      str,
+        data_cfg:        DataConfig | None = None,
+        val_cfg:         ValidationConfig | None = None,
+        models_dir:      str | None = None,
         macro_cache_dir: str  = None,
+        **legacy_kwargs,
     ):
+        data_cfg, val_cfg, models_dir = self._normalize_constructor_args(
+            data_cfg=data_cfg,
+            val_cfg=val_cfg,
+            models_dir=models_dir,
+            legacy_kwargs=legacy_kwargs,
+        )
         self.data_cfg   = data_cfg
         self.val_cfg    = val_cfg
         self.models_dir = models_dir
@@ -96,6 +104,110 @@ class DataManager:
         # hangi fold'un scaler'ının geçerli olduğunu belirsizleştirir.
         self._wf_mode: bool = False
 
+    @staticmethod
+    def _config_kwargs(config_cls, values: dict) -> dict:
+        field_names = {field.name for field in fields(config_cls)}
+        return {key: value for key, value in values.items() if key in field_names}
+
+    @classmethod
+    def _normalize_constructor_args(
+        cls,
+        *,
+        data_cfg: DataConfig | None,
+        val_cfg: ValidationConfig | None,
+        models_dir: str | None,
+        legacy_kwargs: dict,
+    ) -> tuple[DataConfig, ValidationConfig, str]:
+        """
+        Backward-compatible constructor adapter.
+
+        Older callers passed flat arguments such as data_file/test_ratio/time_steps
+        directly to DataManager. Normalize those into config objects immediately so
+        the rest of the class can keep using self.data_cfg/self.val_cfg.
+        """
+        if data_cfg is None:
+            data_values = cls._config_kwargs(DataConfig, legacy_kwargs)
+            if "data_file" not in data_values:
+                raise TypeError("DataManager requires data_cfg or legacy data_file.")
+            data_cfg = DataConfig(**data_values)
+        elif not isinstance(data_cfg, DataConfig):
+            raise TypeError("data_cfg must be a DataConfig instance.")
+
+        if val_cfg is None:
+            val_values = cls._config_kwargs(ValidationConfig, legacy_kwargs)
+            val_cfg = ValidationConfig(**val_values)
+        elif not isinstance(val_cfg, ValidationConfig):
+            raise TypeError("val_cfg must be a ValidationConfig instance.")
+
+        if models_dir is None:
+            models_dir = legacy_kwargs.get("models_dir")
+        if models_dir is None:
+            models_dir = os.path.join("outputs", "_models")
+
+        unknown = sorted(
+            set(legacy_kwargs)
+            - {field.name for field in fields(DataConfig)}
+            - {field.name for field in fields(ValidationConfig)}
+            - {"models_dir"}
+        )
+        if unknown:
+            raise TypeError(f"Unsupported DataManager arguments: {unknown}")
+
+        return data_cfg, val_cfg, models_dir
+
+    def _ensure_config_objects(self) -> None:
+        """
+        Normalize legacy __new__-constructed test objects before using methods.
+        Production construction goes through __init__; this protects older tests and
+        external scripts that set flat attributes and call methods directly.
+        """
+        if not hasattr(self, "data_cfg"):
+            self.data_cfg = DataConfig(
+                data_file=getattr(self, "data_file", ""),
+                test_ratio=getattr(self, "test_ratio", 0.20),
+                time_steps=getattr(self, "time_steps", 30),
+                target_mode=getattr(self, "target_mode", "log_return"),
+                scaling_mode=getattr(self, "scaling_mode", "robust_x_standard_y_clip"),
+                use_macro=getattr(self, "use_macro", True),
+                universe_file=getattr(self, "universe_file", "data/bist_universe.csv"),
+                clip_shift_warning_threshold_pct=getattr(self, "clip_shift_warning_threshold_pct", 1.0),
+                training_window_years=getattr(self, "training_window_years", 5),
+                window_candidates=getattr(self, "window_candidates", None) or [3, 5, 7, 10, None],
+                min_history_days=getattr(self, "min_history_days", 504),
+                new_listing_min_days=getattr(self, "new_listing_min_days", 252),
+                auto_update_data=getattr(self, "auto_update_data", False),
+                auto_update_interactive=getattr(self, "auto_update_interactive", False),
+            )
+        if not hasattr(self, "val_cfg"):
+            self.val_cfg = ValidationConfig(
+                validation_mode=getattr(self, "validation_mode", "single_split"),
+                final_holdout_size=getattr(self, "final_holdout_size", 60),
+            )
+        if not hasattr(self, "models_dir"):
+            self.models_dir = getattr(self, "models_dir", os.path.join("outputs", "_models"))
+        if not hasattr(self, "scaling_reports"):
+            self.scaling_reports = []
+        if not hasattr(self, "_prepare_tensors_call_idx"):
+            self._prepare_tensors_call_idx = 0
+        if not hasattr(self, "_wf_mode"):
+            self._wf_mode = False
+        if not hasattr(self, "validation_config"):
+            effective_wf_embargo_size = (
+                self.data_cfg.time_steps
+                if self.val_cfg.wf_embargo_size is None
+                else max(0, int(self.val_cfg.wf_embargo_size))
+            )
+            wf_max_train_size = None if self.val_cfg.wf_window_type == "expanding" else self.val_cfg.wf_max_train_size
+            self.validation_config = {
+                "wf_n_splits": self.val_cfg.wf_n_splits,
+                "wf_min_train_size": self.val_cfg.wf_min_train_size,
+                "wf_test_size": self.val_cfg.wf_test_size,
+                "wf_max_train_size": wf_max_train_size,
+                "wf_window_type": self.val_cfg.wf_window_type,
+                "wf_embargo_size": effective_wf_embargo_size,
+                "final_holdout_size": self.val_cfg.final_holdout_size,
+            }
+
     # ── Veri Yükleme & Özellik Mühendisliği ──────────────────────────────────
     def ingest_and_engineer(self) -> None:
         print("\n" + "=" * 60)
@@ -103,7 +215,12 @@ class DataManager:
         print("=" * 60)
 
         # Ham hisse verisi
-        DataUpdater.check_and_update(self.data_cfg.data_file, self.stock_symbol)
+        if self.data_cfg.auto_update_data:
+            DataUpdater.check_and_update(
+                self.data_cfg.data_file,
+                self.stock_symbol,
+                interactive=self.data_cfg.auto_update_interactive,
+            )
         raw_df = load_data(self.data_cfg.data_file)
         self.corporate_action_report = dict(raw_df.attrs.get("corporate_action_report", {}))
         raw_df = self._apply_training_window(raw_df)
@@ -183,13 +300,14 @@ class DataManager:
         self._refresh_dataset_metadata()
 
     def _apply_training_window(self, raw_df: pd.DataFrame) -> pd.DataFrame:
+        cfg = getattr(self, "data_cfg", self)
         if raw_df is None or raw_df.empty:
             self.training_window_report = {
                 "status": "empty_dataset",
-                "requested_training_window_years": self.data_cfg.training_window_years,
+                "requested_training_window_years": cfg.training_window_years,
                 "window_candidates": self._format_window_candidates(),
-                "min_history_days": self.data_cfg.min_history_days,
-                "new_listing_min_days": self.data_cfg.new_listing_min_days,
+                "min_history_days": cfg.min_history_days,
+                "new_listing_min_days": cfg.new_listing_min_days,
             }
             return raw_df
 
@@ -202,26 +320,26 @@ class DataManager:
         raw_start = pd.to_datetime(df["Date"].iloc[0]).normalize()
         raw_end = pd.to_datetime(df["Date"].iloc[-1]).normalize()
         raw_history_days = int(len(df))
-        new_listing_mode = raw_history_days < self.data_cfg.new_listing_min_days
-        insufficient_history = raw_history_days < self.data_cfg.min_history_days
+        new_listing_mode = raw_history_days < cfg.new_listing_min_days
+        insufficient_history = raw_history_days < cfg.min_history_days
 
         effective_df = df
-        effective_years = self.data_cfg.training_window_years
+        effective_years = cfg.training_window_years
         effective_label = "all"
         cutoff_date = None
         status = "all_data_used"
 
-        if self.data_cfg.training_window_years is not None:
-            window_years = int(self.data_cfg.training_window_years)
+        if cfg.training_window_years is not None:
+            window_years = int(cfg.training_window_years)
             cutoff_date = raw_end - pd.DateOffset(years=window_years)
             candidate_df = df[df["Date"] >= cutoff_date].copy()
-            if len(candidate_df) >= self.data_cfg.min_history_days and len(candidate_df) < len(df):
+            if len(candidate_df) >= cfg.min_history_days and len(candidate_df) < len(df):
                 effective_df = candidate_df
                 effective_df.reset_index(drop=True, inplace=True)
                 effective_df.attrs.update(raw_df.attrs)
                 effective_label = f"{window_years}y"
                 status = "window_applied"
-            elif len(candidate_df) < self.data_cfg.min_history_days:
+            elif len(candidate_df) < cfg.min_history_days:
                 effective_years = None
                 status = "window_skipped_min_history"
             else:
@@ -238,14 +356,14 @@ class DataManager:
             "raw_date_start": raw_start.strftime("%Y-%m-%d"),
             "raw_date_end": raw_end.strftime("%Y-%m-%d"),
             "raw_history_days": raw_history_days,
-            "requested_training_window_years": self.data_cfg.training_window_years,
+            "requested_training_window_years": cfg.training_window_years,
             "effective_training_window_years": effective_years,
             "effective_training_window_years_label": effective_label,
             "effective_date_start": effective_start.strftime("%Y-%m-%d"),
             "effective_date_end": effective_end.strftime("%Y-%m-%d"),
             "history_days": int(len(effective_df)),
-            "min_history_days": self.data_cfg.min_history_days,
-            "new_listing_min_days": self.data_cfg.new_listing_min_days,
+            "min_history_days": cfg.min_history_days,
+            "new_listing_min_days": cfg.new_listing_min_days,
             "new_listing_mode": bool(new_listing_mode),
             "insufficient_history_warning": bool(insufficient_history),
             "window_candidates": self._format_window_candidates(),
@@ -255,7 +373,8 @@ class DataManager:
         return effective_df
 
     def _format_window_candidates(self) -> list[str]:
-        return ["all" if years is None else f"{int(years)}y" for years in self.data_cfg.window_candidates]
+        cfg = getattr(self, "data_cfg", self)
+        return ["all" if years is None else f"{int(years)}y" for years in cfg.window_candidates]
 
     def _check_survivorship_bias(self) -> dict:
         if self.df is None or self.df.empty:
@@ -370,7 +489,7 @@ class DataManager:
             "feature_mode": self.data_cfg.feature_mode,
             "scaling_mode": self.data_cfg.scaling_mode,
             "target_semantics": "X[t] uses information known after close t; y[t] is t+1 return/price.",
-            "execution_lag": "Signals generated after close t are evaluated on the next realized bar.",
+            "execution_lag": "Signals generated after close t are applied to the aligned next realized bar.",
             "macro_release_lag": {
                 "rate_days": self.data_cfg.macro_rate_lag_days,
                 "cpi_days": self.data_cfg.macro_cpi_lag_days,
@@ -432,6 +551,7 @@ class DataManager:
         self,
         close_values: np.ndarray,
     ) -> np.ndarray:
+        self._ensure_config_objects()
         if self.data_cfg.target_mode == "log_return":
             return np.log(close_values[1:] / close_values[:-1])
         if self.data_cfg.target_mode == "return":
@@ -442,6 +562,17 @@ class DataManager:
             f"Desteklenmeyen target_mode: {self.data_cfg.target_mode}. "
             "Beklenen: price, return, log_return"
         )
+
+    @staticmethod
+    def _scale_data_compat(*args, **kwargs):
+        try:
+            return scale_data(*args, **kwargs)
+        except TypeError as exc:
+            if "save_scaler" not in str(exc) or "save_scaler" not in kwargs:
+                raise
+            legacy_kwargs = dict(kwargs)
+            legacy_kwargs.pop("save_scaler", None)
+            return scale_data(*args, **legacy_kwargs)
 
     def prepare_tensors(
         self,
@@ -460,6 +591,7 @@ class DataManager:
         Böylece aynı gün bilgisinden aynı gün hedef üretilmez. Tree ve sequence
         modeller aynı tahmin problemi üzerinde çalışır.
         """
+        self._ensure_config_objects()
         exclude = {"Date", "Close"}
         features = [c for c in train_df.columns if c not in exclude]
 
@@ -485,7 +617,7 @@ class DataManager:
         else:
             market_regime_test = np.zeros(len(y_test), dtype=float)
 
-        X_train_s, X_test_s, y_train_s, y_test_s, scaler_X, scaler_y = scale_data(
+        X_train_s, X_test_s, y_train_s, y_test_s, scaler_X, scaler_y = self._scale_data_compat(
             X_train, X_test, y_train, y_test,
             save_dir=self.models_dir,
             scaling_mode=self.data_cfg.scaling_mode,
@@ -545,6 +677,7 @@ class DataManager:
         }
 
     def _record_scaling_report(self, train_df: pd.DataFrame, test_df: pd.DataFrame, scaler_X: object) -> None:
+        self._ensure_config_objects()
         clip_report = dict(getattr(scaler_X, "clip_report_", {}) or {})
         if not clip_report:
             clip_report = {
@@ -581,6 +714,7 @@ class DataManager:
 
     # ── Train/Test Bölme ──────────────────────────────────────────────────────
     def split_data(self, validation_mode: str) -> None:
+        self._ensure_config_objects()
         print("\n" + "=" * 60)
         print("  ADIM 2 | Train/Test Split (DataManager)")
         print("=" * 60)

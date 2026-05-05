@@ -1088,6 +1088,17 @@ class TestPipelineXAIWrite:
     XAIReportWriter.write() çağrısını tetiklemeli.
     """
 
+    @staticmethod
+    def _workspace_output_dir(name: str) -> str:
+        path = os.path.join(os.getcwd(), "outputs", "_test_tft_xai_write", name)
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    @staticmethod
+    def _remove_if_exists(path: str) -> None:
+        if os.path.exists(path):
+            os.remove(path)
+
     def test_write_xai_reports_creates_summary_md(self):
         """
         _write_xai_reports() sonunda xai_dir içinde xai_summary_latest.md
@@ -1104,19 +1115,20 @@ class TestPipelineXAIWrite:
                 self.dataset_metadata = {}
                 self.ensemble_weights = {}
 
-        with tempfile.TemporaryDirectory() as tmp:
-            stub = _Stub(tmp)
-            payload = {
-                "top_reasons": pd.DataFrame(),
-                "daily_reasons": pd.DataFrame(),
-                "summary_md": "# Test XAI\n\nOK.",
-            }
-            stub._write_xai_reports(payload, suffix="latest")
-            from src.utils.reporting_utils import route_output_path
-            md_path = route_output_path(os.path.join(tmp, "xai_summary_latest.md"))
-            assert os.path.exists(md_path), f"MD dosyası oluşturulmadı: {md_path}"
-            content = open(md_path, encoding="utf-8").read()
-            assert "Test XAI" in content
+        tmp = self._workspace_output_dir("summary_md")
+        stub = _Stub(tmp)
+        payload = {
+            "top_reasons": pd.DataFrame(),
+            "daily_reasons": pd.DataFrame(),
+            "summary_md": "# Test XAI\n\nOK.",
+        }
+        from src.utils.reporting_utils import route_output_path
+        md_path = route_output_path(os.path.join(tmp, "xai_summary_latest.md"))
+        self._remove_if_exists(md_path)
+        stub._write_xai_reports(payload, suffix="latest")
+        assert os.path.exists(md_path), f"MD dosyası oluşturulmadı: {md_path}"
+        content = open(md_path, encoding="utf-8").read()
+        assert "Test XAI" in content
 
     def test_save_multihorizon_report_creates_csv(self):
         """
@@ -1135,16 +1147,17 @@ class TestPipelineXAIWrite:
                     }
                 }
 
-        with tempfile.TemporaryDirectory() as tmp:
-            stub = _Stub(tmp)
-            stub._save_multihorizon_report(suffix="latest")
-            csv_path = os.path.join(tmp, "tft_multihorizon_TFT_latest.csv")
-            assert os.path.exists(csv_path), f"CSV dosyası oluşturulmadı: {csv_path}"
-            import pandas as pd
-            df = pd.read_csv(csv_path)
-            assert "h1" in df.columns
-            assert "h5" in df.columns
-            assert len(df) == 3
+        tmp = self._workspace_output_dir("multihorizon")
+        stub = _Stub(tmp)
+        csv_path = os.path.join(tmp, "tft_multihorizon_TFT_latest.csv")
+        self._remove_if_exists(csv_path)
+        stub._save_multihorizon_report(suffix="latest")
+        assert os.path.exists(csv_path), f"CSV dosyası oluşturulmadı: {csv_path}"
+        import pandas as pd
+        df = pd.read_csv(csv_path)
+        assert "h1" in df.columns
+        assert "h5" in df.columns
+        assert len(df) == 3
 
     def test_write_xai_reports_with_tft_attention_creates_png(self):
         """
@@ -1162,16 +1175,17 @@ class TestPipelineXAIWrite:
                 self.dataset_metadata = {}
                 self.ensemble_weights = {}
 
-        with tempfile.TemporaryDirectory() as tmp:
-            stub = _Stub(tmp)
-            attn_arr = np.random.rand(4, 1, 10).astype(np.float32)
-            payload = {
-                "top_reasons":    pd.DataFrame(),
-                "daily_reasons":  pd.DataFrame(),
-                "summary_md":     "# Test",
-                "tft_attention_data": {"TFT": attn_arr},
-            }
-            stub._write_xai_reports(payload, suffix="latest")
-            raw = os.path.join(tmp, "xai_tft_attention_TFT_latest.png")
-            png_path = route_output_path(raw)
-            assert os.path.exists(png_path), f"PNG oluşturulmadı: {png_path}"
+        tmp = self._workspace_output_dir("attention_png")
+        stub = _Stub(tmp)
+        attn_arr = np.random.rand(4, 1, 10).astype(np.float32)
+        payload = {
+            "top_reasons":    pd.DataFrame(),
+            "daily_reasons":  pd.DataFrame(),
+            "summary_md":     "# Test",
+            "tft_attention_data": {"TFT": attn_arr},
+        }
+        raw = os.path.join(tmp, "xai_tft_attention_TFT_latest.png")
+        png_path = route_output_path(raw)
+        self._remove_if_exists(png_path)
+        stub._write_xai_reports(payload, suffix="latest")
+        assert os.path.exists(png_path), f"PNG oluşturulmadı: {png_path}"

@@ -11,6 +11,7 @@ Sorumluluklar:
 
 from __future__ import annotations
 
+import os
 from dataclasses import replace
 from typing import Any, Dict, Optional
 
@@ -166,6 +167,23 @@ class _BacktestRunnerMixin:
             "trades_df": trades_df,
         }
 
+    def _run_shadow_backtests(
+        self,
+        *,
+        backtest_inputs: Dict[str, Dict[str, Any]],
+        model_metrics_by_model: Dict[str, Dict[str, Any]],
+        suffix: str,
+        target_mode: str,
+    ) -> Dict[str, Any]:
+        shadow_results = self._get_shadow_backtests(
+            backtest_inputs=backtest_inputs,
+            model_metrics_by_model=model_metrics_by_model,
+            suffix=suffix,
+            target_mode=target_mode,
+        )
+        self._write_shadow_backtest_reports(shadow_results, suffix)
+        return shadow_results
+
     # ------------------------------------------------------------------ #
     #  Signal gate diagnostics                                            #
     # ------------------------------------------------------------------ #
@@ -266,6 +284,37 @@ class _BacktestRunnerMixin:
 
         return pd.DataFrame(rows)
 
+    def _write_signal_gate_diagnostics(self, diagnostics: pd.DataFrame, suffix: str) -> None:
+        outputs_dir = getattr(self, "outputs_dir", "")
+        if not outputs_dir or not isinstance(diagnostics, pd.DataFrame):
+            return
+        try:
+            os.makedirs(outputs_dir, exist_ok=True)
+            path = os.path.join(outputs_dir, f"signal_gate_diagnostics_v1_{suffix}.csv")
+            diagnostics.to_csv(path, index=False)
+            print(f"  [OK] Signal gate diagnostik raporu kaydedildi -> {path}")
+        except Exception as exc:
+            print(f"  [WARN] Signal gate diagnostik raporu kaydedilemedi: {exc}")
+
+    def _write_shadow_backtest_reports(self, shadow_results: Dict[str, Any], suffix: str) -> None:
+        outputs_dir = getattr(self, "outputs_dir", "")
+        if not outputs_dir or not shadow_results:
+            return
+        try:
+            os.makedirs(outputs_dir, exist_ok=True)
+            comparison_df = shadow_results.get("comparison_df", pd.DataFrame())
+            trades_df = shadow_results.get("trades_df", pd.DataFrame())
+            comparison_path = os.path.join(outputs_dir, f"shadow_backtest_comparison_v1_{suffix}.csv")
+            trades_path = os.path.join(outputs_dir, f"shadow_backtest_trades_v1_{suffix}.csv")
+            if isinstance(comparison_df, pd.DataFrame):
+                comparison_df.to_csv(comparison_path, index=False)
+                print(f"  [OK] Shadow backtest karsilastirma raporu kaydedildi -> {comparison_path}")
+            if isinstance(trades_df, pd.DataFrame) and bool(getattr(self, "write_trade_logs", False)):
+                trades_df.to_csv(trades_path, index=False)
+                print(f"  [OK] Shadow backtest islem raporu kaydedildi -> {trades_path}")
+        except Exception as exc:
+            print(f"  [WARN] Shadow backtest raporu kaydedilemedi: {exc}")
+
     # ------------------------------------------------------------------ #
     #  Main backtest runner                                               #
     # ------------------------------------------------------------------ #
@@ -330,20 +379,29 @@ class _BacktestRunnerMixin:
         self.latest_backtest_results[suffix] = results
         self.latest_backtest_metrics[suffix] = metrics_by_model
 
-        gate_diagnostics = self._get_signal_gate_diagnostics(
-            backtest_inputs=backtest_inputs,
-            backtest_results=results,
-            backtest_metrics=metrics_by_model,
-            model_metrics_by_model=model_metrics_by_model or {},
-            suffix=suffix,
-            target_mode=target_mode,
-        )
-        shadow_results = self._get_shadow_backtests(
-            backtest_inputs=backtest_inputs,
-            model_metrics_by_model=model_metrics_by_model or {},
-            suffix=suffix,
-            target_mode=target_mode,
-        )
+        if bool(getattr(self, "enable_gate_diagnostics", False)):
+            gate_diagnostics = self._get_signal_gate_diagnostics(
+                backtest_inputs=backtest_inputs,
+                backtest_results=results,
+                backtest_metrics=metrics_by_model,
+                model_metrics_by_model=model_metrics_by_model or {},
+                suffix=suffix,
+                target_mode=target_mode,
+            )
+            self._write_signal_gate_diagnostics(gate_diagnostics, suffix)
+        else:
+            gate_diagnostics = {"status": "disabled"}
+
+        if bool(getattr(self, "enable_shadow_backtests", False)):
+            shadow_results = self._get_shadow_backtests(
+                backtest_inputs=backtest_inputs,
+                model_metrics_by_model=model_metrics_by_model or {},
+                suffix=suffix,
+                target_mode=target_mode,
+            )
+            self._write_shadow_backtest_reports(shadow_results, suffix)
+        else:
+            shadow_results = {"status": "disabled"}
 
         # ── Grafik ve rapor kayıtları ──────────────────────────────
         try:
@@ -354,14 +412,14 @@ class _BacktestRunnerMixin:
                     equity_curves,
                     save_path=_os.path.join(_out, f'backtest_equity_{suffix}.png'),
                     title=f'{getattr(self, "stock_symbol", "")} Equity Curves ({suffix})',
-                    selected_models=getattr(self, 'selected_models', None),
+                    selected_models=set(metrics_by_model),
                 )
             if _out and metrics_by_model:
                 save_backtest_report(
                     metrics_by_model,
                     save_path=_os.path.join(_out, f'backtest_report_{suffix}.csv'),
                 )
-            if _out and trades_by_model:
+            if _out and trades_by_model and bool(getattr(self, "write_trade_logs", False)):
                 save_trade_logs(
                     trades_by_model,
                     save_path=_os.path.join(_out, f'backtest_trades_{suffix}.csv'),

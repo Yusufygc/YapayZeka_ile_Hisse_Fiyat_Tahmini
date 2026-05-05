@@ -124,6 +124,45 @@ class TestModelTrainerSmoke(unittest.TestCase):
             )
             self.assertEqual(trainer.selected_models, set(_ALL_MODELS))
 
+    def test_tree_hpo_storage_is_available_for_each_selected_tree_model(self):
+        """XGBoost olmadan Random Forest secilirse Optuna storage tanimsiz kalmamali."""
+        from src.pipeline.model_trainer import ModelTrainer
+        from src.experiments.experiment_tracker import ExperimentTracker
+
+        tensors = {
+            "X_train_s": np.ones((12, 2), dtype=float),
+            "y_train_s": np.ones((12, 1), dtype=float),
+        }
+
+        class FakeTunedModel:
+            calls = []
+
+            def tune_and_train(self, X_train, y_train, **kwargs):
+                self.__class__.calls.append(kwargs)
+
+        for selected in (["Random Forest"], ["XGBoost"], ["XGBoost", "Random Forest"]):
+            FakeTunedModel.calls = []
+            tmpdir = os.path.join(os.getcwd(), "outputs", "_test_tree_hpo_storage")
+            os.makedirs(tmpdir, exist_ok=True)
+            with patch.object(ModelTrainer, "_baseline_specs", return_value=[]), \
+                 patch.object(ModelTrainer, "_linear_baseline_specs", return_value=[]), \
+                 patch.object(ModelTrainer, "_boosting_baseline_specs", return_value=[]), \
+                 patch.object(ModelTrainer, "_sequence_baseline_specs", return_value=[]), \
+                 patch("src.pipeline.model_trainer.XGBoostModel", FakeTunedModel), \
+                 patch("src.pipeline.model_trainer.RandomForestModel", FakeTunedModel):
+                trainer = ModelTrainer(
+                    stock_symbol="TEST",
+                    tracker=ExperimentTracker(tmpdir),
+                    feature_names=["f1", "f2"],
+                    selected_models=selected,
+                    dataset_metadata={"target_mode": "log_return"},
+                )
+                trainer.train_single_split(tensors)
+
+            self.assertEqual(len(FakeTunedModel.calls), len(selected))
+            for call in FakeTunedModel.calls:
+                self.assertEqual(call.get("study_storage"), "sqlite:///optuna_studies_TEST.db")
+
 
 # ── 3. DataManager Smoke ──────────────────────────────────────────────────────
 
@@ -131,7 +170,7 @@ class TestDataManagerSmoke(unittest.TestCase):
 
     def setUp(self):
         """DataUpdater.check_and_update'i devre disi birak."""
-        patcher = patch("src.data_updater.DataUpdater.check_and_update", return_value=None)
+        patcher = patch("src.pipeline.data_manager.DataUpdater.check_and_update", return_value=None)
         self.mock_updater = patcher.start()
         self.addCleanup(patcher.stop)
 

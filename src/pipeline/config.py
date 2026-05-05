@@ -31,6 +31,8 @@ class DataConfig:
     window_candidates: List[Optional[int]] = field(default_factory=lambda: [3, 5, 7, 10, None])
     min_history_days: int = 504
     new_listing_min_days: int = 252
+    auto_update_data: bool = False
+    auto_update_interactive: bool = False
 
 @dataclass
 class ValidationConfig:
@@ -96,6 +98,18 @@ class ExecutionConfig:
     # "wf_train" → kalibrasyon yalnizca WF fold verisi kullanir; final holdout ASLA.
     # Baska bir deger atanirsa _assert_wf_train_scope() RuntimeError firlatir.
     calibration_scope: str = "wf_train"
+    signal_calibration_train_ratio: float = 0.70
+    min_signal_evaluation_folds: int = 3
+    enable_signal_execution_calibration: bool = True
+    enable_gate_diagnostics: bool = False
+    enable_shadow_backtests: bool = False
+    signal_calibration_max_trials: int = 64
+    signal_calibration_profile: str = "production"  # "production" veya "research"
+    report_detail_level: str = "summary"  # "summary" veya "research"
+    write_text_reports: bool = False
+    write_markdown_reports: bool = True
+    write_xai_tables: bool = False
+    write_trade_logs: bool = False
 
 @dataclass
 class PipelineConfig:

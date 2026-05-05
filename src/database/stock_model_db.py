@@ -21,7 +21,11 @@ Kullanım:
 import json
 import sqlite3
 from datetime import datetime
+import hashlib
+import math
 from typing import Any, Dict, List, Optional
+
+from src.pipeline.model_scope import BENCHMARK_MODELS
 
 
 _CREATE_EXPERIMENTS = """
@@ -43,6 +47,9 @@ CREATE TABLE IF NOT EXISTS experiments (
     model_path       TEXT,
     features         TEXT,
     dataset_hash     TEXT,
+    is_production_candidate INTEGER NOT NULL DEFAULT 0,
+    selection_source TEXT,
+    run_id           TEXT,
     trained_at       TEXT    NOT NULL
 );
 """
@@ -56,6 +63,10 @@ CREATE TABLE IF NOT EXISTS best_models (
     target_mode     TEXT    NOT NULL DEFAULT 'price',
     feature_mode    TEXT    NOT NULL DEFAULT 'legacy_price_features',
     scaling_mode    TEXT    NOT NULL DEFAULT 'minmax',
+    validation_mode TEXT    NOT NULL DEFAULT 'final_holdout',
+    dataset_hash    TEXT,
+    run_id          TEXT,
+    selection_source TEXT,
     mae             REAL,
     rmse            REAL,
     mape            REAL,
@@ -76,6 +87,79 @@ CREATE INDEX IF NOT EXISTS idx_experiments_symbol
 _CREATE_IDX_SCORE = """
 CREATE INDEX IF NOT EXISTS idx_experiments_score
     ON experiments (stock_symbol, composite_score DESC);
+"""
+
+_CREATE_FORECAST_RUNS = """
+CREATE TABLE IF NOT EXISTS forecast_runs (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_key                TEXT    NOT NULL UNIQUE,
+    stock_symbol           TEXT    NOT NULL,
+    model_name             TEXT    NOT NULL,
+    source_experiment_id   INTEGER,
+    run_at                 TEXT    NOT NULL,
+    last_observed_date     TEXT    NOT NULL,
+    last_close             REAL    NOT NULL,
+    horizon_days           INTEGER NOT NULL,
+    trend_label            TEXT    NOT NULL,
+    weekly_expected_return REAL,
+    trend_threshold        REAL,
+    rules_version          TEXT    NOT NULL,
+    status                 TEXT    NOT NULL DEFAULT 'pending',
+    FOREIGN KEY (source_experiment_id) REFERENCES experiments(id)
+);
+"""
+
+_CREATE_FORECAST_POINTS = """
+CREATE TABLE IF NOT EXISTS forecast_points (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id                   INTEGER NOT NULL,
+    target_date              TEXT    NOT NULL,
+    horizon_index            INTEGER NOT NULL,
+    raw_predicted_close      REAL,
+    bounded_predicted_close  REAL,
+    predicted_return         REAL,
+    lower_band               REAL,
+    upper_band               REAL,
+    price_tick               REAL,
+    actual_close             REAL,
+    actual_return            REAL,
+    abs_error                REAL,
+    direction_correct        INTEGER,
+    resolved_at              TEXT,
+    UNIQUE(run_id, target_date),
+    FOREIGN KEY (run_id) REFERENCES forecast_runs(id) ON DELETE CASCADE
+);
+"""
+
+_CREATE_FORECAST_ACCURACY = """
+CREATE TABLE IF NOT EXISTS forecast_accuracy_summary (
+    run_id                   INTEGER PRIMARY KEY,
+    stock_symbol             TEXT    NOT NULL,
+    model_name               TEXT    NOT NULL,
+    rmse                     REAL,
+    mae                      REAL,
+    mape                     REAL,
+    dir_acc                  REAL,
+    weekly_direction_correct INTEGER,
+    resolved_points          INTEGER NOT NULL,
+    updated_at               TEXT    NOT NULL,
+    FOREIGN KEY (run_id) REFERENCES forecast_runs(id) ON DELETE CASCADE
+);
+"""
+
+_CREATE_IDX_FORECAST_SYMBOL = """
+CREATE INDEX IF NOT EXISTS idx_forecast_runs_symbol
+    ON forecast_runs (stock_symbol, run_at DESC);
+"""
+
+_CREATE_IDX_FORECAST_RUN_KEY = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_forecast_runs_run_key
+    ON forecast_runs (run_key);
+"""
+
+_CREATE_IDX_FORECAST_POINTS_DATE = """
+CREATE INDEX IF NOT EXISTS idx_forecast_points_target_date
+    ON forecast_points (target_date);
 """
 
 
@@ -160,12 +244,28 @@ class StockModelDB:
             conn.execute(_CREATE_BEST_MODELS)
             conn.execute(_CREATE_IDX_SYMBOL)
             conn.execute(_CREATE_IDX_SCORE)
+            conn.execute(_CREATE_FORECAST_RUNS)
+            conn.execute(_CREATE_FORECAST_POINTS)
+            conn.execute(_CREATE_FORECAST_ACCURACY)
+            self._ensure_column(conn, "forecast_runs", "run_key", "TEXT")
+            conn.execute(_CREATE_IDX_FORECAST_SYMBOL)
+            conn.execute(_CREATE_IDX_FORECAST_RUN_KEY)
+            conn.execute(_CREATE_IDX_FORECAST_POINTS_DATE)
             self._ensure_column(conn, "experiments", "target_mode", "TEXT NOT NULL DEFAULT 'price'")
             self._ensure_column(conn, "experiments", "feature_mode", "TEXT NOT NULL DEFAULT 'legacy_price_features'")
             self._ensure_column(conn, "experiments", "scaling_mode", "TEXT NOT NULL DEFAULT 'minmax'")
+            self._ensure_column(conn, "experiments", "is_production_candidate", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "experiments", "selection_source", "TEXT")
+            self._ensure_column(conn, "experiments", "run_id", "TEXT")
             self._ensure_column(conn, "best_models", "target_mode", "TEXT NOT NULL DEFAULT 'price'")
             self._ensure_column(conn, "best_models", "feature_mode", "TEXT NOT NULL DEFAULT 'legacy_price_features'")
             self._ensure_column(conn, "best_models", "scaling_mode", "TEXT NOT NULL DEFAULT 'minmax'")
+            self._ensure_column(conn, "best_models", "validation_mode", "TEXT NOT NULL DEFAULT 'final_holdout'")
+            self._ensure_column(conn, "best_models", "dataset_hash", "TEXT")
+            self._ensure_column(conn, "best_models", "run_id", "TEXT")
+            self._ensure_column(conn, "best_models", "selection_source", "TEXT")
+            self._migrate_legacy_production_candidates(conn)
+            self._refresh_best_models_from_production_experiments(conn)
 
     @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
@@ -186,6 +286,9 @@ class StockModelDB:
         dataset_hash: str = "N/A",
         validation_mode: str = "single_split",
         dataset_metadata: Optional[Dict[str, Any]] = None,
+        is_production_candidate: bool = False,
+        selection_source: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> int:
         """
         Bir model eğitim çalışmasını kaydeder ve bileşik skoru hesaplar.
@@ -200,6 +303,7 @@ class StockModelDB:
         target_mode = dataset_metadata.get("target_mode", "price")
         feature_mode = dataset_metadata.get("feature_mode", "legacy_price_features")
         scaling_mode = dataset_metadata.get("scaling_mode", "minmax")
+        run_id = run_id or dataset_metadata.get("run_id")
 
         with self._connect() as conn:
             cursor = conn.execute(
@@ -207,9 +311,10 @@ class StockModelDB:
                 INSERT INTO experiments
                     (stock_symbol, model_name, validation_mode, target_mode, feature_mode, scaling_mode,
                      mae, rmse, mape, dir_acc, sharpe, hit_rate,
-                     composite_score, model_path, features, dataset_hash, trained_at)
+                     composite_score, model_path, features, dataset_hash,
+                     is_production_candidate, selection_source, run_id, trained_at)
                 VALUES
-                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     stock_symbol, model_name, validation_mode,
@@ -218,15 +323,28 @@ class StockModelDB:
                     metrics.get("MAPE"), metrics.get("Dir_Acc"),
                     metrics.get("Sharpe"), metrics.get("Hit_Rate"),
                     composite, model_path, features_json,
-                    dataset_hash, trained_at,
+                    dataset_hash, int(bool(is_production_candidate)),
+                    selection_source, run_id, trained_at,
                 ),
             )
             experiment_id = cursor.lastrowid
 
-        self._update_best_model(
-            stock_symbol, model_name, experiment_id,
-            composite, metrics, model_path, trained_at,
-            target_mode, feature_mode, scaling_mode,
+        self._update_production_best_model(
+            stock_symbol=stock_symbol,
+            model_name=model_name,
+            experiment_id=experiment_id,
+            composite_score=composite,
+            metrics=metrics,
+            model_path=model_path,
+            trained_at=trained_at,
+            target_mode=target_mode,
+            feature_mode=feature_mode,
+            scaling_mode=scaling_mode,
+            validation_mode=validation_mode,
+            dataset_hash=dataset_hash,
+            is_production_candidate=bool(is_production_candidate),
+            selection_source=selection_source,
+            run_id=run_id,
         )
 
         print(
@@ -237,8 +355,9 @@ class StockModelDB:
         )
         return experiment_id
 
-    def _update_best_model(
+    def _update_production_best_model(
         self,
+        *,
         stock_symbol: str,
         model_name: str,
         experiment_id: int,
@@ -249,58 +368,191 @@ class StockModelDB:
         target_mode: str,
         feature_mode: str,
         scaling_mode: str,
+        validation_mode: str,
+        dataset_hash: str,
+        is_production_candidate: bool,
+        selection_source: Optional[str],
+        run_id: Optional[str],
     ) -> None:
-        """
-        Bu hisse için en iyi modeli günceller.
-        Mevcut kayıt yoksa ekler, varsa yalnızca skor daha iyiyse üzerine yazar.
-        """
+        if validation_mode != "final_holdout" or not is_production_candidate:
+            return
+
         with self._connect() as conn:
             existing = conn.execute(
-                "SELECT composite_score FROM best_models WHERE stock_symbol = ?",
+                "SELECT model_name, experiment_id FROM best_models WHERE stock_symbol = ?",
                 (stock_symbol,),
             ).fetchone()
-
-            if existing is None or composite_score > existing["composite_score"]:
-                conn.execute(
-                    """
-                    INSERT INTO best_models
-                        (stock_symbol, model_name, experiment_id, composite_score,
-                         target_mode, feature_mode, scaling_mode,
-                         mae, rmse, mape, dir_acc, sharpe, hit_rate,
-                         model_path, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(stock_symbol) DO UPDATE SET
-                        model_name      = excluded.model_name,
-                        experiment_id   = excluded.experiment_id,
-                        composite_score = excluded.composite_score,
-                        target_mode     = excluded.target_mode,
-                        feature_mode    = excluded.feature_mode,
-                        scaling_mode    = excluded.scaling_mode,
-                        mae             = excluded.mae,
-                        rmse            = excluded.rmse,
-                        mape            = excluded.mape,
-                        dir_acc         = excluded.dir_acc,
-                        sharpe          = excluded.sharpe,
-                        hit_rate        = excluded.hit_rate,
-                        model_path      = excluded.model_path,
-                        updated_at      = excluded.updated_at
-                    """,
-                    (
-                        stock_symbol, model_name, experiment_id, composite_score,
-                        target_mode, feature_mode, scaling_mode,
-                        metrics.get("MAE"), metrics.get("RMSE"),
-                        metrics.get("MAPE"), metrics.get("Dir_Acc"),
-                        metrics.get("Sharpe"), metrics.get("Hit_Rate"),
-                        model_path, trained_at,
-                    ),
+            self._upsert_best_from_values(
+                conn=conn,
+                stock_symbol=stock_symbol,
+                model_name=model_name,
+                experiment_id=experiment_id,
+                composite_score=composite_score,
+                metrics=metrics,
+                model_path=model_path,
+                updated_at=trained_at,
+                target_mode=target_mode,
+                feature_mode=feature_mode,
+                scaling_mode=scaling_mode,
+                validation_mode=validation_mode,
+                dataset_hash=dataset_hash,
+                run_id=run_id,
+                selection_source=selection_source,
+            )
+            if existing is None:
+                print(f"  [DB] ✓ {stock_symbol} production best: {model_name}")
+            elif int(existing["experiment_id"]) != int(experiment_id):
+                print(
+                    f"  [DB] ✓ {stock_symbol} production best guncellendi: "
+                    f"{existing['model_name']} -> {model_name}"
                 )
-                if existing is None:
-                    print(f"  [DB] ✓ {stock_symbol} → ilk kayıt: {model_name}")
-                else:
-                    print(
-                        f"  [DB] ✓ {stock_symbol} → yeni en iyi: {model_name} "
-                        f"(skor {existing['composite_score']:.2f} → {composite_score:.2f})"
-                    )
+        return
+
+    @staticmethod
+    def _upsert_best_from_values(
+        *,
+        conn: sqlite3.Connection,
+        stock_symbol: str,
+        model_name: str,
+        experiment_id: int,
+        composite_score: float,
+        metrics: Dict[str, Any],
+        model_path: str,
+        updated_at: str,
+        target_mode: str,
+        feature_mode: str,
+        scaling_mode: str,
+        validation_mode: str,
+        dataset_hash: Optional[str],
+        run_id: Optional[str],
+        selection_source: Optional[str],
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO best_models
+                (stock_symbol, model_name, experiment_id, composite_score,
+                 target_mode, feature_mode, scaling_mode, validation_mode,
+                 dataset_hash, run_id, selection_source,
+                 mae, rmse, mape, dir_acc, sharpe, hit_rate,
+                 model_path, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(stock_symbol) DO UPDATE SET
+                model_name       = excluded.model_name,
+                experiment_id    = excluded.experiment_id,
+                composite_score  = excluded.composite_score,
+                target_mode      = excluded.target_mode,
+                feature_mode     = excluded.feature_mode,
+                scaling_mode     = excluded.scaling_mode,
+                validation_mode  = excluded.validation_mode,
+                dataset_hash     = excluded.dataset_hash,
+                run_id           = excluded.run_id,
+                selection_source = excluded.selection_source,
+                mae              = excluded.mae,
+                rmse             = excluded.rmse,
+                mape             = excluded.mape,
+                dir_acc          = excluded.dir_acc,
+                sharpe           = excluded.sharpe,
+                hit_rate         = excluded.hit_rate,
+                model_path       = excluded.model_path,
+                updated_at       = excluded.updated_at
+            """,
+            (
+                stock_symbol,
+                model_name,
+                experiment_id,
+                composite_score,
+                target_mode,
+                feature_mode,
+                scaling_mode,
+                validation_mode,
+                dataset_hash,
+                run_id,
+                selection_source,
+                metrics.get("MAE"),
+                metrics.get("RMSE"),
+                metrics.get("MAPE"),
+                metrics.get("Dir_Acc"),
+                metrics.get("Sharpe"),
+                metrics.get("Hit_Rate"),
+                model_path,
+                updated_at,
+            ),
+        )
+
+    def _migrate_legacy_production_candidates(self, conn: sqlite3.Connection) -> None:
+        placeholders = ",".join("?" for _ in BENCHMARK_MODELS)
+        conn.execute(
+            f"""
+            UPDATE experiments
+            SET is_production_candidate = 1,
+                selection_source = COALESCE(selection_source, 'legacy_final_holdout_migration')
+            WHERE validation_mode = 'final_holdout'
+              AND COALESCE(is_production_candidate, 0) = 0
+              AND model_name NOT LIKE 'Ensemble %'
+              AND model_name NOT IN ({placeholders})
+            """,
+            tuple(BENCHMARK_MODELS),
+        )
+
+    def _refresh_best_models_from_production_experiments(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            DELETE FROM best_models
+            WHERE experiment_id NOT IN (
+                SELECT id
+                FROM experiments
+                WHERE validation_mode = 'final_holdout'
+                  AND COALESCE(is_production_candidate, 0) = 1
+            )
+            """
+        )
+        stocks = conn.execute(
+            """
+            SELECT DISTINCT stock_symbol
+            FROM experiments
+            WHERE validation_mode = 'final_holdout'
+              AND COALESCE(is_production_candidate, 0) = 1
+            """
+        ).fetchall()
+        for stock_row in stocks:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM experiments
+                WHERE stock_symbol = ?
+                  AND validation_mode = 'final_holdout'
+                  AND COALESCE(is_production_candidate, 0) = 1
+                ORDER BY trained_at DESC, id DESC
+                LIMIT 1
+                """,
+                (stock_row["stock_symbol"],),
+            ).fetchone()
+            if row is None:
+                continue
+            self._upsert_best_from_values(
+                conn=conn,
+                stock_symbol=row["stock_symbol"],
+                model_name=row["model_name"],
+                experiment_id=int(row["id"]),
+                composite_score=float(row["composite_score"] or 0.0),
+                metrics={
+                    "MAE": row["mae"],
+                    "RMSE": row["rmse"],
+                    "MAPE": row["mape"],
+                    "Dir_Acc": row["dir_acc"],
+                    "Sharpe": row["sharpe"],
+                    "Hit_Rate": row["hit_rate"],
+                },
+                model_path=row["model_path"] or "",
+                updated_at=row["trained_at"],
+                target_mode=row["target_mode"],
+                feature_mode=row["feature_mode"],
+                scaling_mode=row["scaling_mode"],
+                validation_mode=row["validation_mode"],
+                dataset_hash=row["dataset_hash"],
+                run_id=row["run_id"],
+                selection_source=row["selection_source"],
+            )
 
     def get_best_model(self, stock_symbol: str) -> Optional[Dict[str, Any]]:
         """
@@ -402,6 +654,332 @@ class StockModelDB:
                 (stock_symbol,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def log_forecast_run(
+        self,
+        *,
+        stock_symbol: str,
+        model_name: str,
+        source_experiment_id: Optional[int],
+        last_observed_date: str,
+        last_close: float,
+        horizon_days: int,
+        trend_label: str,
+        weekly_expected_return: float,
+        trend_threshold: float,
+        rules_version: str,
+        points: List[Dict[str, Any]],
+        status: str = "pending",
+        run_at: Optional[str] = None,
+    ) -> int:
+        """Persist one forward forecast run and its daily forecast points."""
+        stock_symbol = stock_symbol.upper()
+        run_at = run_at or datetime.now().isoformat(timespec="seconds")
+        run_key = self._forecast_run_key(
+            stock_symbol,
+            model_name,
+            source_experiment_id,
+            last_observed_date,
+            horizon_days,
+            rules_version,
+        )
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO forecast_runs
+                    (run_key, stock_symbol, model_name, source_experiment_id,
+                     run_at, last_observed_date, last_close, horizon_days,
+                     trend_label, weekly_expected_return, trend_threshold,
+                     rules_version, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_key) DO UPDATE SET
+                    run_at                 = excluded.run_at,
+                    last_close             = excluded.last_close,
+                    trend_label            = excluded.trend_label,
+                    weekly_expected_return = excluded.weekly_expected_return,
+                    trend_threshold        = excluded.trend_threshold,
+                    status                 = excluded.status
+                """,
+                (
+                    run_key,
+                    stock_symbol,
+                    model_name,
+                    source_experiment_id,
+                    run_at,
+                    last_observed_date,
+                    float(last_close),
+                    int(horizon_days),
+                    trend_label,
+                    float(weekly_expected_return),
+                    float(trend_threshold),
+                    rules_version,
+                    status,
+                ),
+            )
+            run_id = int(conn.execute(
+                "SELECT id FROM forecast_runs WHERE run_key = ?",
+                (run_key,),
+            ).fetchone()["id"])
+            for point in points:
+                conn.execute(
+                    """
+                    INSERT INTO forecast_points
+                        (run_id, target_date, horizon_index, raw_predicted_close,
+                         bounded_predicted_close, predicted_return, lower_band,
+                         upper_band, price_tick)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(run_id, target_date) DO UPDATE SET
+                        horizon_index           = excluded.horizon_index,
+                        raw_predicted_close     = excluded.raw_predicted_close,
+                        bounded_predicted_close = excluded.bounded_predicted_close,
+                        predicted_return        = excluded.predicted_return,
+                        lower_band              = excluded.lower_band,
+                        upper_band              = excluded.upper_band,
+                        price_tick              = excluded.price_tick,
+                        actual_close            = NULL,
+                        actual_return           = NULL,
+                        abs_error               = NULL,
+                        direction_correct       = NULL,
+                        resolved_at             = NULL
+                    """,
+                    (
+                        run_id,
+                        str(point["target_date"])[:10],
+                        int(point["horizon_index"]),
+                        self._optional_float(point.get("raw_predicted_close")),
+                        self._optional_float(point.get("bounded_predicted_close")),
+                        self._optional_float(point.get("predicted_return")),
+                        self._optional_float(point.get("lower_band")),
+                        self._optional_float(point.get("upper_band")),
+                        self._optional_float(point.get("price_tick")),
+                    ),
+                )
+        return run_id
+
+    def get_latest_forecast(self, stock_symbol: str) -> Optional[Dict[str, Any]]:
+        rows = self.get_forecast_history(stock_symbol, limit=1)
+        return rows[0] if rows else None
+
+    def get_forecast_history(self, stock_symbol: str, limit: int = 20) -> List[Dict[str, Any]]:
+        stock_symbol = stock_symbol.upper()
+        with self._connect() as conn:
+            runs = conn.execute(
+                """
+                SELECT *
+                FROM forecast_runs
+                WHERE stock_symbol = ?
+                ORDER BY run_at DESC, id DESC
+                LIMIT ?
+                """,
+                (stock_symbol, int(limit)),
+            ).fetchall()
+            result: List[Dict[str, Any]] = []
+            for run in runs:
+                run_dict = dict(run)
+                points = conn.execute(
+                    """
+                    SELECT *
+                    FROM forecast_points
+                    WHERE run_id = ?
+                    ORDER BY horizon_index ASC
+                    """,
+                    (run_dict["id"],),
+                ).fetchall()
+                summary = conn.execute(
+                    "SELECT * FROM forecast_accuracy_summary WHERE run_id = ?",
+                    (run_dict["id"],),
+                ).fetchone()
+                run_dict["points"] = [dict(point) for point in points]
+                run_dict["accuracy_summary"] = dict(summary) if summary else None
+                result.append(run_dict)
+        return result
+
+    def resolve_forecasts(self, stock_symbol: str, actual_prices: Dict[str, float]) -> int:
+        """Attach actual closes to unresolved forecast points and refresh accuracy."""
+        stock_symbol = stock_symbol.upper()
+        normalized_actuals = {
+            str(key)[:10]: float(value)
+            for key, value in actual_prices.items()
+            if value is not None
+        }
+        if not normalized_actuals:
+            return 0
+
+        resolved = 0
+        now = datetime.now().isoformat(timespec="seconds")
+        with self._connect() as conn:
+            runs = conn.execute(
+                "SELECT * FROM forecast_runs WHERE stock_symbol = ?",
+                (stock_symbol,),
+            ).fetchall()
+            for run in runs:
+                run_id = int(run["id"])
+                points = conn.execute(
+                    """
+                    SELECT *
+                    FROM forecast_points
+                    WHERE run_id = ?
+                    ORDER BY horizon_index ASC
+                    """,
+                    (run_id,),
+                ).fetchall()
+                previous_actual = float(run["last_close"])
+                contiguous = True
+                for point in points:
+                    target_date = str(point["target_date"])[:10]
+                    actual_close = normalized_actuals.get(target_date)
+                    if actual_close is None:
+                        contiguous = False
+                        continue
+                    if not contiguous:
+                        continue
+                    predicted = self._optional_float(point["bounded_predicted_close"])
+                    predicted_return = self._optional_float(point["predicted_return"])
+                    actual_return = (actual_close / previous_actual) - 1.0 if previous_actual else None
+                    abs_error = abs(actual_close - predicted) if predicted is not None else None
+                    direction_correct = None
+                    if predicted_return is not None and actual_return is not None:
+                        direction_correct = int(self._sign(predicted_return) == self._sign(actual_return))
+                    conn.execute(
+                        """
+                        UPDATE forecast_points
+                        SET actual_close = ?,
+                            actual_return = ?,
+                            abs_error = ?,
+                            direction_correct = ?,
+                            resolved_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            actual_close,
+                            actual_return,
+                            abs_error,
+                            direction_correct,
+                            now,
+                            int(point["id"]),
+                        ),
+                    )
+                    previous_actual = actual_close
+                    resolved += 1
+                self._refresh_forecast_accuracy(conn, run_id)
+        return resolved
+
+    def resolve_forecasts_from_csv(self, stock_symbol: str, csv_path: str) -> int:
+        import pandas as pd
+
+        df = pd.read_csv(csv_path)
+        if "Date" not in df.columns or "Close" not in df.columns:
+            raise ValueError("CSV must include Date and Close columns.")
+        df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
+        actuals = {
+            row["Date"]: float(row["Close"])
+            for _, row in df.dropna(subset=["Date", "Close"]).iterrows()
+        }
+        return self.resolve_forecasts(stock_symbol, actuals)
+
+    def _refresh_forecast_accuracy(self, conn: sqlite3.Connection, run_id: int) -> None:
+        run = conn.execute("SELECT * FROM forecast_runs WHERE id = ?", (run_id,)).fetchone()
+        if run is None:
+            return
+        points = conn.execute(
+            """
+            SELECT *
+            FROM forecast_points
+            WHERE run_id = ? AND actual_close IS NOT NULL
+            ORDER BY horizon_index ASC
+            """,
+            (run_id,),
+        ).fetchall()
+        if not points:
+            conn.execute("DELETE FROM forecast_accuracy_summary WHERE run_id = ?", (run_id,))
+            return
+
+        actual = [float(point["actual_close"]) for point in points]
+        pred = [float(point["bounded_predicted_close"]) for point in points]
+        errors = [a - p for a, p in zip(actual, pred)]
+        abs_errors = [abs(err) for err in errors]
+        rmse = math.sqrt(sum(err * err for err in errors) / len(errors))
+        mae = sum(abs_errors) / len(abs_errors)
+        mape_vals = [abs((a - p) / a) for a, p in zip(actual, pred) if a]
+        mape = (sum(mape_vals) / len(mape_vals) * 100.0) if mape_vals else None
+        direction_values = [
+            int(point["direction_correct"])
+            for point in points
+            if point["direction_correct"] is not None
+        ]
+        dir_acc = (sum(direction_values) / len(direction_values) * 100.0) if direction_values else None
+        weekly_direction_correct = None
+        if len(points) >= int(run["horizon_days"]):
+            weekly_actual_return = (float(points[-1]["actual_close"]) / float(run["last_close"])) - 1.0
+            weekly_direction_correct = int(
+                self._sign(float(run["weekly_expected_return"])) == self._sign(weekly_actual_return)
+            )
+
+        conn.execute(
+            """
+            INSERT INTO forecast_accuracy_summary
+                (run_id, stock_symbol, model_name, rmse, mae, mape, dir_acc,
+                 weekly_direction_correct, resolved_points, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                rmse                     = excluded.rmse,
+                mae                      = excluded.mae,
+                mape                     = excluded.mape,
+                dir_acc                  = excluded.dir_acc,
+                weekly_direction_correct = excluded.weekly_direction_correct,
+                resolved_points          = excluded.resolved_points,
+                updated_at               = excluded.updated_at
+            """,
+            (
+                run_id,
+                run["stock_symbol"],
+                run["model_name"],
+                rmse,
+                mae,
+                mape,
+                dir_acc,
+                weekly_direction_correct,
+                len(points),
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+
+    @staticmethod
+    def _forecast_run_key(
+        stock_symbol: str,
+        model_name: str,
+        source_experiment_id: Optional[int],
+        last_observed_date: str,
+        horizon_days: int,
+        rules_version: str,
+    ) -> str:
+        raw = "|".join([
+            stock_symbol.upper(),
+            model_name,
+            str(source_experiment_id or ""),
+            str(last_observed_date)[:10],
+            str(int(horizon_days)),
+            rules_version,
+        ])
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+    @staticmethod
+    def _optional_float(value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            return None
+        return result if math.isfinite(result) else None
+
+    @staticmethod
+    def _sign(value: float) -> int:
+        if value > 0:
+            return 1
+        if value < 0:
+            return -1
+        return 0
 
     def __repr__(self) -> str:
         return f"<StockModelDB path={self.db_path!r}>"

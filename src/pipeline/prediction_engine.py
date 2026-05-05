@@ -80,7 +80,13 @@ class _PredictionEngineMixin:
     def _add_single_split_ensembles(self) -> None:
         if not self.ensemble_enabled:
             return
-        base_preds = self._base_predictions_for_ensemble(self.predictions)
+        metadata = getattr(self, "dataset_metadata", {}) or {}
+        candidates = set(metadata.get("candidate_models") or [])
+        base_preds = {
+            name: preds
+            for name, preds in self._base_predictions_for_ensemble(self.predictions).items()
+            if not candidates or name in candidates
+        }
         if len(base_preds) < 2 or self.y_true_aligned is None:
             return
 
@@ -124,7 +130,13 @@ class _PredictionEngineMixin:
     ) -> None:
         if not self.ensemble_enabled or wf_y_true is None:
             return
-        base_preds = self._base_predictions_for_ensemble(wf_predictions)
+        metadata = getattr(self, "dataset_metadata", {}) or {}
+        candidates = set(metadata.get("candidate_models") or [])
+        base_preds = {
+            name: preds
+            for name, preds in self._base_predictions_for_ensemble(wf_predictions).items()
+            if not candidates or name in candidates
+        }
         if len(base_preds) < 2:
             return
 

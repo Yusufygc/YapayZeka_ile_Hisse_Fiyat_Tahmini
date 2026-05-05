@@ -16,8 +16,16 @@ from src.utils.reporting_utils import route_output_path, with_output_extension, 
 
 
 class XAIReportWriter:
-    def __init__(self, output_dir: str):
+    def __init__(
+        self,
+        output_dir: str,
+        *,
+        write_tables: bool = False,
+        write_markdown: bool = True,
+    ):
         self.output_dir = output_dir
+        self.write_tables = write_tables
+        self.write_markdown = write_markdown
         os.makedirs(self.output_dir, exist_ok=True)
 
     def write(self, payload: Dict[str, pd.DataFrame | str], suffix: str = "latest") -> None:
@@ -28,16 +36,18 @@ class XAIReportWriter:
         summary_md = str(payload.get("summary_md", ""))
 
         if isinstance(top_reasons, pd.DataFrame) and not top_reasons.empty:
-            write_csv_and_aligned_view(
-                top_reasons,
-                os.path.join(self.output_dir, f"xai_top_reasons_{suffix}.csv"),
-            )
+            if self.write_tables:
+                write_csv_and_aligned_view(
+                    top_reasons,
+                    os.path.join(self.output_dir, f"xai_top_reasons_{suffix}.csv"),
+                )
             group_importance = self._group_importance(top_reasons)
             if not group_importance.empty:
-                write_csv_and_aligned_view(
-                    group_importance,
-                    os.path.join(self.output_dir, f"xai_group_importance_{suffix}.csv"),
-                )
+                if self.write_tables:
+                    write_csv_and_aligned_view(
+                        group_importance,
+                        os.path.join(self.output_dir, f"xai_group_importance_{suffix}.csv"),
+                    )
                 self._plot_group_importance(
                     group_importance,
                     os.path.join(self.output_dir, f"xai_group_importance_{suffix}.png"),
@@ -45,24 +55,27 @@ class XAIReportWriter:
             self._plot_importance(top_reasons, os.path.join(self.output_dir, f"xai_feature_importance_{suffix}.png"))
 
         if isinstance(daily_reasons, pd.DataFrame) and not daily_reasons.empty:
-            write_csv_and_aligned_view(
-                daily_reasons,
-                os.path.join(self.output_dir, f"xai_daily_reasons_{suffix}.csv"),
-            )
+            if self.write_tables:
+                write_csv_and_aligned_view(
+                    daily_reasons,
+                    os.path.join(self.output_dir, f"xai_daily_reasons_{suffix}.csv"),
+                )
 
         if isinstance(signal_reasons, pd.DataFrame) and not signal_reasons.empty:
-            write_csv_and_aligned_view(
-                signal_reasons,
-                os.path.join(self.output_dir, f"xai_signal_reasons_{suffix}.csv"),
-            )
+            if self.write_tables:
+                write_csv_and_aligned_view(
+                    signal_reasons,
+                    os.path.join(self.output_dir, f"xai_signal_reasons_{suffix}.csv"),
+                )
             self._plot_signal_timeline(signal_reasons, os.path.join(self.output_dir, f"xai_signal_timeline_{suffix}.png"))
             self._plot_threshold_diagnostics(signal_reasons, os.path.join(self.output_dir, f"xai_threshold_diagnostics_{suffix}.png"))
 
         if isinstance(trade_explanations, pd.DataFrame) and not trade_explanations.empty:
-            write_csv_and_aligned_view(
-                trade_explanations,
-                os.path.join(self.output_dir, f"xai_trade_explanations_{suffix}.csv"),
-            )
+            if self.write_tables:
+                write_csv_and_aligned_view(
+                    trade_explanations,
+                    os.path.join(self.output_dir, f"xai_trade_explanations_{suffix}.csv"),
+                )
 
         # ── [A5] TFT attention heatmap ────────────────────────────────────────
         tft_attention_data = payload.get("tft_attention_data")
@@ -78,11 +91,12 @@ class XAIReportWriter:
                     ),
                 )
 
-        summary_path = with_output_extension(os.path.join(self.output_dir, f"xai_summary_{suffix}.md"), ".md")
-        os.makedirs(os.path.dirname(summary_path), exist_ok=True)
-        with open(summary_path, "w", encoding="utf-8") as handle:
-            handle.write(summary_md.strip())
-            handle.write("\n")
+        if self.write_markdown:
+            summary_path = with_output_extension(os.path.join(self.output_dir, f"xai_summary_{suffix}.md"), ".md")
+            os.makedirs(os.path.dirname(summary_path), exist_ok=True)
+            with open(summary_path, "w", encoding="utf-8") as handle:
+                handle.write(summary_md.strip())
+                handle.write("\n")
 
         print(f"[OK] XAI raporlari kaydedildi -> {self.output_dir}")
 

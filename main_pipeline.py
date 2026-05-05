@@ -19,6 +19,7 @@ from src.pipeline.config import (
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+META_CSV_STEMS = {"bist_universe", "bist_calendar"}
 
 AVAILABLE_MODELS = [
     "Prophet",
@@ -62,13 +63,43 @@ def _ask(prompt: str, valid: set | None = None) -> str:
 
 # ─── Adım 1 — Hisse Senedi ───────────────────────────────────────────────────
 
+def _is_stock_csv(path: str) -> bool:
+    stem = os.path.splitext(os.path.basename(path))[0].lower()
+    if stem in META_CSV_STEMS:
+        return False
+    try:
+        with open(path, "r", encoding="utf-8-sig") as handle:
+            header = handle.readline().strip().lower()
+    except UnicodeDecodeError:
+        with open(path, "r", encoding="cp1254", errors="ignore") as handle:
+            header = handle.readline().strip().lower()
+    except OSError:
+        return False
+    columns = {
+        col.strip()
+        .replace("ı", "i")
+        .replace("ş", "s")
+        .replace("ü", "u")
+        .replace("ğ", "g")
+        .replace("ö", "o")
+        .replace("ç", "c")
+        for col in header.split(",")
+    }
+    has_date = bool({"date", "tarih"} & columns)
+    has_close = bool({"close", "kapanis"} & columns)
+    return has_date and has_close
+
+
 def select_stock() -> str:
     csv_files = sorted(glob.glob(os.path.join(DATA_DIR, "*.csv")))
     if not csv_files:
         raise FileNotFoundError(f"'{DATA_DIR}' dizininde CSV dosyası bulunamadı.")
 
     # Sadece hisse dosyalarını listele, meta veri dosyalarını hariç tut
-    stocks = [os.path.splitext(os.path.basename(f))[0] for f in csv_files if "bist_universe" not in f]
+    stock_files = [f for f in csv_files if _is_stock_csv(f)]
+    stocks = [os.path.splitext(os.path.basename(f))[0] for f in stock_files]
+    if not stocks:
+        raise FileNotFoundError(f"'{DATA_DIR}' dizininde OHLCV hisse CSV dosyasi bulunamadi.")
 
     _header("ADIM 1 | Hisse Senedi Seçimi")
     for i, s in enumerate(stocks, 1):
@@ -77,7 +108,7 @@ def select_stock() -> str:
     choice = _ask("Numara girin", {str(i) for i in range(1, len(stocks) + 1)})
     selected = stocks[int(choice) - 1]
     print(f"  ✔ Seçildi: {selected}\n")
-    return os.path.join(DATA_DIR, f"{selected}.csv")
+    return stock_files[int(choice) - 1]
 
 # ─── Adım 2 — Validasyon Modu ────────────────────────────────────────────────
 
@@ -179,7 +210,11 @@ def main() -> None:
 
     # Rely on dataclass defaults for everything else
     pipeline_cfg = PipelineConfig(
-        data=DataConfig(data_file=data_file),
+        data=DataConfig(
+            data_file=data_file,
+            auto_update_data=True,
+            auto_update_interactive=True,
+        ),
         validation=ValidationConfig(validation_mode=validation_mode),
         models=ModelConfig(selected_models=selected_models),
         execution=ExecutionConfig()

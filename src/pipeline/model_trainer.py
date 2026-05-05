@@ -15,10 +15,11 @@ from src.models.naive_model import NaiveDriftModel, NaiveLastValueModel, NaiveZe
 from src.models.random_forest_model import RandomForestModel
 from src.models.tft_v2 import TFTModel   # v2: A4 quantile crossing fix
 from src.models.xgboost_model import XGBoostModel
+from src.pipeline.model_scope import BENCHMARK_MODELS, DEFAULT_CANDIDATE_MODELS, normalize_candidate_models
 from src.validation.walk_forward import WalkForwardValidator
 
 # Aktif üretim modelleri — pipeline menüsünde gösterilir
-_ALL_MODELS = ["XGBoost", "LSTM", "TFT", "DLinear", "NLinear"]
+_ALL_MODELS = list(DEFAULT_CANDIDATE_MODELS)
 
 # Kabul görmüş literatüre göre isteğe bağlı; yüksek hesaplama maliyeti veya
 # sınırlı ek değer sunar; yalnızca karşılaştırma amacıyla kullanılır
@@ -29,17 +30,7 @@ _OPTIONAL_MODELS = ["Random Forest", "LightGBM Return"]
 #   Prophet — walk-forward desteği yok; yalnızca single-split (Taylor & Letham 2018)
 _LEGACY_MODELS = ["ARIMA", "Prophet"]
 
-_BASELINE_MODELS = [
-    "Naive Last Value",
-    "Naive Zero Return",
-    "Naive Drift",
-    "ARIMA",
-    "Ridge Return",
-    "ElasticNet Return",
-    "LightGBM Return",
-    "DLinear",
-    "NLinear",
-]
+_BENCHMARK_MODELS = set(BENCHMARK_MODELS)
 _TREE_MODELS = {"XGBoost", "Random Forest", "Ridge Return", "ElasticNet Return", "LightGBM Return"}
 _SEQ_MODELS = {"LSTM", "TFT", "DLinear", "NLinear"}
 
@@ -58,7 +49,9 @@ class ModelTrainer:
         self.stock_symbol = stock_symbol
         self.tracker = tracker
         self.feature_names = feature_names
-        self.selected_models = set(selected_models) if selected_models else set(_ALL_MODELS)
+        self.selected_models = normalize_candidate_models(selected_models)
+        self.candidate_models = set(self.selected_models)
+        self.benchmark_models = set(BENCHMARK_MODELS)
         self.dataset_hash = dataset_hash
         self.dataset_metadata = dataset_metadata or {}
         self.model_config = model_config or self.dataset_metadata.get("model_config", {})
@@ -171,7 +164,7 @@ class ModelTrainer:
         return True
 
     def _skip(self, name: str) -> bool:
-        if name in _BASELINE_MODELS:
+        if name in _BENCHMARK_MODELS:
             return False
         if name not in self.selected_models:
             print(f"  [--] {name} atlandi (secilmedi).")
@@ -207,16 +200,18 @@ class ModelTrainer:
             else:
                 raise
 
-    def _baseline_specs(self):
+    def _benchmark_specs(self):
         target_mode = self.dataset_metadata.get("target_mode", "log_return")
         specs = [
             ("Naive Last Value", NaiveLastValueModel),
             ("Naive Drift", NaiveDriftModel),
-            ("ARIMA", self._make_arima),
         ]
         if target_mode in {"return", "log_return"}:
             specs.insert(1, ("Naive Zero Return", NaiveZeroReturnModel))
         return specs
+
+    def _baseline_specs(self):
+        return self._benchmark_specs()
 
     def _linear_baseline_specs(self):
         return [
@@ -234,7 +229,8 @@ class ModelTrainer:
         ]
 
     def _model_class_for_name(self, model_name: str):
-        mapping = {name: cls for name, cls in self._baseline_specs()}
+        mapping = {name: cls for name, cls in self._benchmark_specs()}
+        mapping["ARIMA"] = self._make_arima
         mapping.update({name: cls for name, cls in self._linear_baseline_specs()})
         mapping.update({name: cls for name, cls in self._boosting_baseline_specs()})
         mapping.update({name: cls for name, cls in self._sequence_baseline_specs()})
@@ -288,17 +284,28 @@ class ModelTrainer:
         return model, tensors
 
     def train_single_split(self, tensors: dict):
+        _optuna_storage = f"sqlite:///optuna_studies_{self.stock_symbol}.db"
+
         for name, cls in self._baseline_specs():
             model = cls()
             model.train(tensors["X_train"], tensors["y_train"], dates_train=tensors["dates_train"])
             self.trained_models[name] = model
 
+        if not self._skip("ARIMA"):
+            model = self._make_arima()
+            model.train(tensors["X_train"], tensors["y_train"], dates_train=tensors["dates_train"])
+            self.trained_models["ARIMA"] = model
+
         for name, cls in self._linear_baseline_specs():
+            if self._skip(name):
+                continue
             model = cls()
             model.train(tensors["X_train_s"], tensors["y_train_s"])
             self.trained_models[name] = model
 
         for name, cls in self._boosting_baseline_specs():
+            if self._skip(name):
+                continue
             try:
                 model = cls()
                 model.train(tensors["X_train_s"], tensors["y_train_s"])
@@ -307,6 +314,8 @@ class ModelTrainer:
                 print(f"  [WARN] {name} atlandi: {exc}")
 
         for name, cls in self._sequence_baseline_specs():
+            if self._skip(name):
+                continue
             if self._has_min_sequences(len(tensors["X_train_seq"]), name, "train"):
                 model = cls()
                 model.train(tensors["X_train_seq"], tensors["y_train_seq"])
@@ -323,7 +332,6 @@ class ModelTrainer:
 
         if not self._skip("XGBoost"):
             xgb = XGBoostModel()
-            _optuna_storage = f"sqlite:///optuna_studies_{self.stock_symbol}.db"
             xgb.tune_and_train(
                 tensors["X_train_s"], tensors["y_train_s"],
                 n_trials=5, n_splits=3,
@@ -405,13 +413,22 @@ class ModelTrainer:
         for name, cls in self._baseline_specs():
             self._wf_run(name, cls, preprocessor_baseline, wf_splits, validators)
 
+        if not self._skip("ARIMA"):
+            self._wf_run("ARIMA", self._make_arima, preprocessor_baseline, wf_splits, validators)
+
         for name, cls in self._linear_baseline_specs():
+            if self._skip(name):
+                continue
             self._wf_run(name, cls, preprocessor_tree, wf_splits, validators)
 
         for name, cls in self._boosting_baseline_specs():
+            if self._skip(name):
+                continue
             self._wf_run(name, cls, preprocessor_tree, wf_splits, validators, skip_import_err=True)
 
         for name, cls in self._sequence_baseline_specs():
+            if self._skip(name):
+                continue
             if self._wf_has_min_sequences(wf_splits, data_manager, name):
                 self._wf_run(name, cls, preprocessor_seq, wf_splits, validators)
 

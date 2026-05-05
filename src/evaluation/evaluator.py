@@ -16,6 +16,7 @@ except ImportError:  # pragma: no cover - plotting is skipped in minimal runtime
 
 from src.utils.reporting_utils import (
     bullet_list,
+    compact_columns,
     prepare_csv_dataframe,
     route_output_path,
     section_table,
@@ -34,6 +35,47 @@ _BASELINE_CANDIDATES = (
     "Naive Drift",
     "Naive Last Value",
 )
+
+METRICS_REPORT_COLUMNS = [
+    "Model",
+    "Sira",
+    "Model_Family",
+    "Score_Type",
+    "RMSE",
+    "MAE",
+    "MAPE",
+    "Return_RMSE",
+    "Return_MAE",
+    "Dir_Acc",
+    "Hit_Rate",
+    "Neutral_Rate",
+    "Sharpe",
+    "BuyHold_Sharpe",
+    "Sharpe_excess_vs_buy_hold",
+    "Composite_Score",
+    "Benchmark_Model",
+    "RMSE_vs_benchmark",
+    "RMSE_vs_zero_return",
+    "DirAcc_vs_benchmark",
+    "Beats_Benchmark_RMSE",
+    "Beats_Zero_Return_RMSE",
+    "Eligible_For_Leader",
+    "RMSE_Fark_Delta",
+    "RMSE_Fark_Yuzde",
+    "Pinball_Loss",
+    "P10_P90_Coverage",
+    "Avg_Interval_Width",
+    "Winkler_Score",
+]
+
+METRICS_AUDIT_COLUMNS = [
+    "Model",
+    "Target_Semantics",
+    "Execution_Lag",
+    "Transaction_Costs",
+    "Validation_Protocol",
+    "Threshold_Config",
+]
 
 
 def compute_metrics(
@@ -240,7 +282,11 @@ def save_metrics_report(
     save_path: str,
 ) -> pd.DataFrame:
     """
-    Save model metrics with cleaner CSV, aligned text, and structured Markdown output.
+    Save model metrics as a compact CSV plus concise Markdown summary.
+
+    The returned DataFrame keeps the full metric set for callers, but the
+    persisted CSV intentionally excludes long protocol/audit blobs. Those fields
+    remain in the Markdown audit section with truncated display text.
     """
     df = pd.DataFrame(metrics_dict).T
     df.index.name = "Model"
@@ -265,11 +311,12 @@ def save_metrics_report(
     df.loc[df.index[0], "RMSE_Fark_Yuzde"] = "Referans"
 
     csv_df = df.reset_index()
-    output_paths = write_csv_and_aligned_view(csv_df, save_path)
+    output_paths = write_csv_and_aligned_view(csv_df, save_path, columns=METRICS_REPORT_COLUMNS)
 
     md_save_path = with_output_extension(save_path, ".md")
     os.makedirs(os.path.dirname(md_save_path), exist_ok=True)
-    display_df = prepare_csv_dataframe(csv_df)
+    display_df = prepare_csv_dataframe(compact_columns(csv_df, METRICS_REPORT_COLUMNS))
+    audit_df = prepare_csv_dataframe(compact_columns(csv_df, METRICS_AUDIT_COLUMNS))
     with open(md_save_path, "w", encoding="utf-8") as handle:
         handle.write(f"# {best_model_name} Liderliginde Performans Raporu\n\n")
         handle.write("## Ozet\n\n")
@@ -307,19 +354,11 @@ def save_metrics_report(
             )
         )
 
-        handle.write("\n\n## Forecast Metrikleri (Price Space)\n\n")
+        handle.write("\n\n## Forecast Metrikleri\n\n")
         handle.write(
             section_table(
                 display_df,
-                ["Model", "RMSE", "MAE", "MAPE"],
-            )
-        )
-
-        handle.write("\n\n## Forecast Metrikleri (Return Space)\n\n")
-        handle.write(
-            section_table(
-                display_df,
-                ["Model", "Return_RMSE", "Return_MAE", "Dir_Acc", "Hit_Rate", "Neutral_Rate"],
+                ["Model", "RMSE", "MAE", "MAPE", "Return_RMSE", "Return_MAE"],
             )
         )
 
@@ -352,41 +391,19 @@ def save_metrics_report(
             )
         )
 
-        handle.write("\n\n## Probabilistic Metrikler\n\n")
-        handle.write(
-            section_table(
-                display_df,
-                [
-                    "Model",
-                    "Pinball_Loss",
-                    "Median_Pinball_Loss",
-                    "Interval_Coverage",
-                    "P10_P90_Coverage",
-                    "Avg_Interval_Width",
-                    "Winkler_Score",
-                ],
-            )
+        probabilistic_table = section_table(
+            display_df,
+            ["Model", "Pinball_Loss", "P10_P90_Coverage", "Avg_Interval_Width", "Winkler_Score"],
         )
+        if probabilistic_table:
+            handle.write("\n\n## Probabilistic Metrikler\n\n")
+            handle.write(probabilistic_table)
 
         handle.write("\n\n## Leakage Guard\n\n")
         handle.write(
             section_table(
-                display_df,
-                [
-                    "Model",
-                    "Target_Semantics",
-                    "Execution_Lag",
-                    "Macro_Release_Lag",
-                    "Transaction_Costs",
-                    "Threshold_Config",
-                    "Validation_Protocol",
-                    "Selection_Set",
-                    "Evaluation_Set",
-                    "Final_Holdout_Used_For_Selection",
-                    "Corporate_Action_Adjustment",
-                    "Feature_Pruning",
-                    "Scaling_Clip_Report",
-                ],
+                audit_df,
+                METRICS_AUDIT_COLUMNS,
             )
         )
 
@@ -395,7 +412,7 @@ def save_metrics_report(
     print("\n" + "=" * 70)
     print("  [INFO]  MODEL KARSILASTIRMA VE PERFORMANS TABLOSU")
     print("=" * 70)
-    print(prepare_csv_dataframe(csv_df).to_string(index=False))
+    print(display_df.to_string(index=False))
     print("-" * 70)
     if "Composite_Score" in df.columns:
         print(

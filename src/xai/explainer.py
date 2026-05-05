@@ -125,7 +125,7 @@ class XAIExplainer:
             summary.append(
                 f"## {model_name}\n\n"
                 f"{sentence}\n\n"
-                "Walk-forward karar ayrintilari `xai_signal_reasons` ve `xai_trade_explanations` dosyalarinda gun bazinda yazilir."
+                "Walk-forward karar ayrintilari ozet XAI PNG/MD ciktisinda tutulur; tablo dokumu yalnizca research profilinde yazilir."
             )
 
         for model_name, result in backtest_results.items():

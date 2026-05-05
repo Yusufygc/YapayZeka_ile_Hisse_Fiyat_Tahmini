@@ -152,9 +152,54 @@ class LeakageGuardTests(unittest.TestCase):
 
         curve = result["equity_curve"]
         self.assertEqual(curve["Desired_Position"].tolist(), [1.0, 1.0, 1.0])
-        self.assertEqual(curve["Position"].tolist(), [0.0, 1.0, 1.0])
-        self.assertEqual(curve["Net_Return"].iloc[0], 0.0)
+        self.assertEqual(curve["Position"].tolist(), [1.0, 1.0, 1.0])
+        self.assertAlmostEqual(curve["Net_Return"].iloc[0], 1.0)
         self.assertAlmostEqual(curve["Net_Return"].iloc[1], 0.10)
+
+    def test_perfect_one_step_signal_is_applied_to_same_aligned_return_row(self):
+        dates = pd.date_range("2024-01-02", periods=3, freq="D")
+        prediction_dates = dates - pd.Timedelta(days=1)
+        prev_close = np.array([100.0, 110.0, 99.0])
+        y_true_price = np.array([110.0, 99.0, 108.9])
+        pred_price = y_true_price.copy()
+
+        result = run_backtest(
+            dates=dates,
+            prediction_dates=prediction_dates,
+            y_true_price=y_true_price,
+            pred_price=pred_price,
+            prev_close=prev_close,
+            model_name="Perfect",
+            validation_mode="test",
+            target_mode="price",
+            signal_mode="legacy",
+            commission_bps=0.0,
+            slippage_bps=0.0,
+        )
+
+        curve = result["equity_curve"]
+        self.assertEqual(curve["Position"].tolist(), [1.0, 0.0, 1.0])
+        np.testing.assert_allclose(curve["Net_Return"].to_numpy(), np.array([0.10, 0.0, 0.10]))
+
+    def test_professional_recommendation_marks_flat_negative_signal_as_sat_without_short(self):
+        pred_target = np.array([-0.03, 0.03, -0.03])
+        prev_close = np.full(3, 100.0)
+        pred_price = prev_close * np.exp(pred_target)
+        frame = generate_professional_signals(
+            pred_target,
+            pred_price,
+            prev_close,
+            "log_return",
+            observed_returns=np.zeros(3),
+            commission_bps=0.0,
+            slippage_bps=0.0,
+            config=SignalConfig(min_holding_bars=1, max_holding_bars=2, min_entry_threshold=0.001),
+        )
+
+        self.assertEqual(frame.loc[0, "Decision"], "NO_TRADE")
+        self.assertEqual(frame.loc[0, "Recommendation_TR"], "SAT")
+        self.assertEqual(frame.loc[0, "Position"], 0.0)
+        self.assertEqual(frame.loc[1, "Recommendation_TR"], "AL")
 
     def test_backtest_accounts_entry_exit_commission_and_slippage_separately(self):
         dates = pd.date_range("2024-01-01", periods=3, freq="D")

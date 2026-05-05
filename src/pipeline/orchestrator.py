@@ -4,7 +4,9 @@ orchestrator.py - Ana ForecastingPipeline sinifi
 """
 
 import os
+import shutil
 import warnings
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
@@ -15,8 +17,10 @@ from src.experiments.experiment_tracker import ExperimentTracker
 from src.pipeline.config import PipelineConfig, DataConfig, ValidationConfig, ModelConfig, ExecutionConfig
 from src.pipeline.data_manager import DataManager
 from src.pipeline.evaluation_manager import EvaluationManager
+from src.pipeline.model_scope import BENCHMARK_MODELS, normalize_candidate_models
 from src.pipeline.model_trainer import ModelTrainer
 from src.utils.reproducibility import set_global_seed
+from src.utils.reporting_utils import write_csv_and_aligned_view
 
 
 class ForecastingPipeline:
@@ -88,8 +92,14 @@ class ForecastingPipeline:
 
         self.stock_symbol = os.path.splitext(os.path.basename(self.data_file))[0]
         self.project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self.candidate_models = normalize_candidate_models(self.selected_models)
+        self.benchmark_models = set(BENCHMARK_MODELS)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.run_id = f"{timestamp}_{self.stock_symbol}_{self.validation_mode}"
 
-        self.outputs_dir = os.path.join(self.project_root, "outputs", self.stock_symbol)
+        self.output_root = os.path.join(self.project_root, "outputs", self.stock_symbol)
+        self.outputs_dir = os.path.join(self.output_root, "runs", self.run_id)
+        self.latest_dir = os.path.join(self.output_root, "latest")
         self.models_dir = os.path.join(self.outputs_dir, "models")
         self.experiment_dir = os.path.join(self.outputs_dir, "experiments")
         self.registry_dir = self.models_dir
@@ -111,9 +121,10 @@ class ForecastingPipeline:
         self.registry_version = "v5"
         self.run_dataset_metadata = {}
         self.run_dataset_hash = "N/A"
+        self.report_detail_level = e.report_detail_level
 
     def setup_environment(self) -> None:
-        for directory in [self.models_dir, self.outputs_dir, self.experiment_dir, self.registry_dir]:
+        for directory in [self.output_root, self.outputs_dir, self.models_dir, self.experiment_dir, self.registry_dir]:
             os.makedirs(directory, exist_ok=True)
 
         print(f"\n  [INFO] Pipeline Modu: {self.validation_mode}")
@@ -136,6 +147,8 @@ class ForecastingPipeline:
         print(f"  [INFO] Backtest    : {'acik' if self.backtest_enabled else 'kapali'}")
         print(f"  [INFO] Signal Mode : {self.signal_mode}")
         print(f"  [INFO] Quality Gate: {self.quality_gate_mode}")
+        print(f"  [INFO] Run ID      : {self.run_id}")
+        print(f"  [INFO] Output Dir  : {self.outputs_dir}")
         print(
             "  [INFO] Feature QC  : "
             f"corr_prune={self.prune_correlated_features}, "
@@ -150,46 +163,160 @@ class ForecastingPipeline:
             f"min_val={deep_cfg.get('min_validation_samples')}"
         )
 
+    def _window_selection_rows(
+        self,
+        window_label: str,
+        window_years: Optional[int],
+        child: Any,
+    ) -> List[Dict[str, Any]]:
+        evaluator = getattr(child, "evaluation_manager", None)
+        if evaluator is None:
+            return []
+        wf_metrics = getattr(evaluator, "latest_model_metrics", {}).get("wf", {})
+        wf_backtests = getattr(evaluator, "latest_backtest_metrics", {}).get("wf", {})
+        final_backtests = getattr(evaluator, "latest_backtest_metrics", {}).get("final_holdout", {})
+        rows: List[Dict[str, Any]] = []
+        for model_name, metrics in wf_metrics.items():
+            bt = wf_backtests.get(model_name, {})
+            final_bt = final_backtests.get(model_name, {})
+            final_net = final_bt.get("Net_Return")
+            final_bh = final_bt.get("BuyHold_Return")
+            final_gap = (
+                float(final_net) - float(final_bh)
+                if final_net is not None and final_bh is not None
+                else None
+            )
+            rows.append({
+                "Window_Label": window_label,
+                "Window_Years": window_years,
+                "Model": model_name,
+                "Dir_Acc": metrics.get("Dir_Acc"),
+                "RMSE": metrics.get("RMSE"),
+                "RMSE_vs_benchmark": metrics.get("RMSE_vs_benchmark"),
+                "Sharpe_excess_vs_buy_hold": metrics.get("Sharpe_excess_vs_buy_hold"),
+                "Composite_Score": metrics.get("Composite_Score"),
+                "Trade_Count": bt.get("Trade_Count"),
+                "Exposure": bt.get("Exposure"),
+                "Net_Return": bt.get("Net_Return"),
+                "BuyHold_Return": bt.get("BuyHold_Return"),
+                "Max_Drawdown": bt.get("Max_Drawdown"),
+                "Sharpe": bt.get("Sharpe"),
+                "Final_Holdout_Net_Return": final_net,
+                "Final_Holdout_BuyHold_Return": final_bh,
+                "Final_Holdout_BuyHold_Gap": final_gap,
+                "Final_Holdout_Used_For_Selection": False,
+            })
+        return rows
+
+    def _write_window_selection_decision(self, comparison_df: Any, save_path: str) -> str:
+        import pandas as _pd
+
+        if not isinstance(comparison_df, _pd.DataFrame):
+            comparison_df = _pd.DataFrame(comparison_df)
+        decision_path = os.path.splitext(save_path)[0] + "_decision.md"
+        os.makedirs(os.path.dirname(decision_path), exist_ok=True)
+        best = comparison_df.iloc[0].to_dict() if not comparison_df.empty else {}
+        with open(decision_path, "w", encoding="utf-8") as handle:
+            handle.write("# Training Window Selection Decision\n\n")
+            handle.write("Final holdout used for selection: `False`\n\n")
+            if best:
+                handle.write("## Selected Row\n\n")
+                for key, value in best.items():
+                    handle.write(f"- `{key}`: `{value}`\n")
+        return decision_path
+
+    def _write_validation_and_quality_reports(self) -> None:
+        try:
+            vp_df = self.data_manager.get_validation_protocol_data()
+            if vp_df is not None and not vp_df.empty:
+                vp_path = os.path.join(self.outputs_dir, "validation_protocol_report.csv")
+                write_csv_and_aligned_view(
+                    vp_df,
+                    vp_path,
+                    columns=[
+                        "Split",
+                        "Protocol",
+                        "Window_Type",
+                        "Train_Rows",
+                        "Test_Rows",
+                        "Train_Date_Start",
+                        "Train_Date_End",
+                        "Test_Date_Start",
+                        "Test_Date_End",
+                        "Scaler_Fit_Start",
+                        "Scaler_Fit_End",
+                        "Features_Count",
+                        "Selection_Set",
+                        "Evaluation_Set",
+                        "Final_Holdout_Used_For_Selection",
+                    ],
+                )
+                print(f"  [OK] Validation protocol raporu kaydedildi -> {vp_path}")
+
+            dq_reports = self.data_manager.get_data_quality_reports()
+            summary_rows = []
+            for report_name, report_data in dq_reports.items():
+                if not report_data:
+                    continue
+                summary_rows.append({
+                    "Report": report_name,
+                    "Row_Count": len(report_data) if hasattr(report_data, "__len__") else 1,
+                    "Status": "available",
+                })
+                if self.report_detail_level == "research":
+                    import pandas as _pd
+
+                    dq_df = _pd.DataFrame(report_data)
+                    dq_path = os.path.join(self.outputs_dir, f"data_quality_{report_name}.csv")
+                    write_csv_and_aligned_view(dq_df, dq_path)
+
+            if summary_rows:
+                import pandas as _pd
+
+                summary_path = os.path.join(self.outputs_dir, "data_quality_summary.csv")
+                write_csv_and_aligned_view(_pd.DataFrame(summary_rows), summary_path)
+                print(f"  [OK] Data quality ozet raporu kaydedildi -> {summary_path}")
+        except Exception as exc:
+            print(f"  [WARN] Validation/data quality raporlari kaydedilemedi: {exc}")
+
+    def _sync_latest_output(self) -> None:
+        root = os.path.abspath(self.output_root)
+        run_dir = os.path.abspath(self.outputs_dir)
+        latest_dir = os.path.abspath(self.latest_dir)
+        root_prefix = root + os.sep
+        if not run_dir.startswith(root_prefix) or not latest_dir.startswith(root_prefix):
+            raise RuntimeError("Output latest senkronizasyon hedefi output root disinda.")
+        if os.path.exists(latest_dir):
+            shutil.rmtree(latest_dir)
+        shutil.copytree(run_dir, latest_dir)
+        print(f"  [OK] Latest output senkronlandi -> {latest_dir}")
+
     def run_all(self) -> None:
         self.setup_environment()
 
         self.data_manager.ingest_and_engineer()
         self.data_manager.split_data(self.validation_mode)
-        # --- Save validation protocol report ---
-        try:
-            import pandas as _pd
-            vp_df = self.data_manager.get_validation_protocol_data()
-            if vp_df is not None and not vp_df.empty:
-                vp_path = os.path.join(self.outputs_dir, "validation_protocol_report.csv")
-                vp_df.to_csv(vp_path, index=False)
-                print(f"  [OK] Validation protocol raporu kaydedildi -> {vp_path}")
-        except Exception as _e:
-            print(f"  [WARN] Validation protocol raporu kaydedilemedi: {_e}")
-
-        # --- Save data quality reports ---
-        try:
-            import pandas as _pd
-            dq_reports = self.data_manager.get_data_quality_reports()
-            for report_name, report_data in dq_reports.items():
-                if report_data:
-                    try:
-                        dq_df = _pd.DataFrame(report_data)
-                        dq_path = os.path.join(self.outputs_dir, f"data_quality_{report_name}.csv")
-                        dq_df.to_csv(dq_path, index=False)
-                    except Exception:
-                        pass
-        except Exception as _e:
-            print(f"  [WARN] Data quality raporlari kaydedilemedi: {_e}")
+        self._write_validation_and_quality_reports()
         self.run_dataset_metadata, self.run_dataset_hash = self.data_manager.build_run_metadata(
             self.validation_mode,
             model_config={
                 "selected_models": self.selected_models or "all",
+                "candidate_models": sorted(self.candidate_models),
+                "benchmark_models": list(BENCHMARK_MODELS),
                 "registry_version": self.registry_version,
                 "xgboost_hpo": {"scope": "train_only_temporal_cv", "n_trials": 5, "n_splits": 3},
                 "random_forest_hpo": {"scope": "train_only_temporal_cv", "n_trials": 5, "n_splits": 3},
                 **self.model_config,
             },
         )
+        self.run_dataset_metadata.update({
+            "run_id": self.run_id,
+            "output_run_dir": self.outputs_dir,
+            "latest_dir": self.latest_dir,
+            "selected_models": list(self.selected_models or []),
+            "candidate_models": sorted(self.candidate_models),
+            "benchmark_models": list(BENCHMARK_MODELS),
+        })
         self.run_dataset_metadata["signal_threshold_config"] = {
             "phase": "phase6_backtest_standard",
             "source": "default_config",
@@ -201,7 +328,7 @@ class ForecastingPipeline:
                 "max_rmse_vs_benchmark": self.max_rmse_vs_benchmark,
                 "min_composite_score": self.min_composite_score,
             },
-            "execution_policy": "decision_applies_to_next_bar_return",
+            "execution_policy": "decision_applies_to_aligned_next_bar_return",
             "cost_policy": {
                 "commission_bps": self.commission_bps,
                 "slippage_bps": self.slippage_bps,
@@ -263,19 +390,5 @@ class ForecastingPipeline:
                 except Exception as exc:
                     print(f"  [WARN] Final holdout degerlendirmesi basarisiz, atlaniyor: {exc}")
 
-        # --- Save data quality reports (end of pipeline) ---
-        try:
-            import pandas as _pd
-            dq_reports = self.data_manager.get_data_quality_reports()
-            for report_name, report_data in dq_reports.items():
-                if report_data:
-                    try:
-                        dq_df = _pd.DataFrame(report_data)
-                        dq_path = os.path.join(self.outputs_dir, f"data_quality_{report_name}.csv")
-                        dq_df.to_csv(dq_path, index=False)
-                    except Exception:
-                        pass
-        except Exception as _e:
-            print(f"  [WARN] Data quality raporlari kaydedilemedi: {_e}")
-
+        self._sync_latest_output()
         print("\n  [OK] Pipeline completed successfully!")

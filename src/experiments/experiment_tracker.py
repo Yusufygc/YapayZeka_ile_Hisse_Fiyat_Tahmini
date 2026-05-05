@@ -15,6 +15,26 @@ import pandas as pd
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
+METRIC_LOG_FIELDS = [
+    "RMSE",
+    "MAE",
+    "MAPE",
+    "Return_RMSE",
+    "Return_MAE",
+    "Dir_Acc",
+    "Hit_Rate",
+    "Sharpe",
+    "BuyHold_Sharpe",
+    "RMSE_vs_benchmark",
+    "DirAcc_vs_benchmark",
+    "Sharpe_excess_vs_buy_hold",
+    "Composite_Score",
+    "Net_Return",
+    "BuyHold_Return",
+    "Max_Drawdown",
+    "Trade_Count",
+]
+
 
 class ExperimentTracker:
     def __init__(self, log_dir: str):
@@ -74,8 +94,7 @@ class ExperimentTracker:
         run_data = {
             "Timestamp": timestamp,
             "Model": model_name,
-            "Parameters": str(parameters),
-            "Metrics": str(metrics),
+            "Validation_Params": str(parameters),
             "Features_Count": len(features),
             "Dataset_Hash": dataset_hash,
             "Target_Mode": dataset_metadata.get("target_mode", "N/A"),
@@ -83,18 +102,22 @@ class ExperimentTracker:
             "Scaling_Mode": dataset_metadata.get("scaling_mode", "N/A"),
             "Date_Range": dataset_metadata.get("date_range", "N/A"),
             "Validation_Mode": dataset_metadata.get("validation_mode", "N/A"),
+            "Run_ID": dataset_metadata.get("run_id", "N/A"),
             # Dataset_Metadata blob kaldırıldı — run_metadata/{hash}.json kullanın
         }
+
+        for field in METRIC_LOG_FIELDS:
+            run_data[field] = metrics.get(field)
 
         df_new = pd.DataFrame([run_data])
 
         if os.path.exists(self.log_file):
             df_existing = pd.read_csv(self.log_file)
             # Eski CSV'lerde Dataset_Metadata sutunu varsa uyumluluk icin kaldir
-            df_existing = df_existing.drop(columns=["Dataset_Metadata"], errors="ignore")
+            df_existing = df_existing.drop(columns=["Dataset_Metadata", "Metrics", "Parameters"], errors="ignore")
             df_combined = pd.concat([df_existing, df_new], ignore_index=True)
         else:
             df_combined = df_new
 
-        df_combined.to_csv(self.log_file, index=False)
+        df_combined.to_csv(self.log_file, index=False, encoding="utf-8-sig")
         print(f"  [INFO] Logged experiment run for {model_name} to {self.log_file}")

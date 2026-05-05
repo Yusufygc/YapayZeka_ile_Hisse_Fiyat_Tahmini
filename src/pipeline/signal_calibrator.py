@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, replace
 from io import StringIO
+import os
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -30,8 +31,36 @@ import pandas as pd
 
 from src.backtesting import run_backtest, summarize_backtest
 from src.backtesting.signals import SignalConfig
+from src.utils.reporting_utils import route_output_path, write_csv_and_aligned_view
 
 _VALID_CALIBRATION_SCOPES = ("wf_train",)
+SIGNAL_CALIBRATION_REPORT_COLUMNS = [
+    "Trial",
+    "min_directional_accuracy",
+    "volatility_multiplier",
+    "entry_cost_multiplier",
+    "min_entry_threshold",
+    "max_holding_bars",
+    "take_profit_vol_multiplier",
+    "stop_loss_vol_multiplier",
+    "Model_Count",
+    "Total_Trade_Count",
+    "Min_Trade_Count",
+    "Mean_Net_Return",
+    "Median_Net_Return",
+    "Mean_Max_Drawdown",
+    "Mean_Sharpe",
+    "Positive_Net_Return",
+    "Meets_Min_Trade_Count",
+]
+
+
+def _safe_float(value: Any, default: float) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    return result if np.isfinite(result) else default
 
 
 class _SignalCalibratorMixin:
@@ -95,7 +124,7 @@ class _SignalCalibratorMixin:
                 "min_composite_score": self.default_signal_config.min_composite_score,
             },
             "full_signal_config": cfg,
-            "execution_policy": "decision_applies_to_next_bar_return",
+            "execution_policy": "decision_applies_to_aligned_next_bar_return",
             "cost_policy": {
                 "commission_bps": self.commission_bps,
                 "slippage_bps": self.slippage_bps,
@@ -179,6 +208,7 @@ class _SignalCalibratorMixin:
         *,
         wf_backtest_inputs: Dict[str, Dict[str, Any]],
         model_metrics_by_model: Dict[str, Dict[str, Any]],
+        suffix: str = "",
     ) -> Dict[str, Any]:
         # Leakage guard: yalnizca wf_train kapsaminda calisir
         self._assert_wf_train_scope()
@@ -201,13 +231,13 @@ class _SignalCalibratorMixin:
         base_cfg = self.signal_config
         min_trade_count = max(3, len(candidates))
         rows = []
-        best_row = None
-        best_config = base_cfg
-        best_key = None
+        config_by_trial: Dict[int, SignalConfig] = {}
 
-        grid = self._signal_calibration_grid(base_cfg)
+        full_grid = self._signal_calibration_grid(base_cfg)
+        grid, grid_metadata = self._apply_signal_calibration_trial_policy(full_grid)
         for trial_idx, params in enumerate(grid, start=1):
             cfg = replace(base_cfg, quality_gate_mode="soft", **params)
+            config_by_trial[trial_idx] = cfg
             summaries = []
             for model_name in candidates:
                 payload = wf_backtest_inputs[model_name]
@@ -252,37 +282,45 @@ class _SignalCalibratorMixin:
                 min_trade_count=min_trade_count,
             )
             rows.append(trial_row)
-            key = self._signal_calibration_sort_key(trial_row)
-            if best_key is None or key > best_key:
-                best_key = key
-                best_row = trial_row
-                best_config = cfg
 
         calibration_df = pd.DataFrame(rows)
+        best_row = self._select_signal_calibration_row(rows)
+        best_config = (
+            config_by_trial.get(int(best_row["Trial"]), base_cfg)
+            if best_row is not None and best_row.get("Trial") is not None
+            else base_cfg
+        )
         if not calibration_df.empty:
+            calibration_df["_sort_key"] = calibration_df.apply(
+                lambda row: self._signal_calibration_sort_key(row.to_dict()),
+                axis=1,
+            )
             calibration_df.sort_values(
-                by=[
-                    "Positive_Net_Return",
-                    "Mean_Max_Drawdown",
-                    "Meets_Min_Trade_Count",
-                    "Mean_Sharpe",
-                    "Mean_Net_Return",
-                ],
-                ascending=[False, False, False, False, False],
+                by=["Meets_Min_Trade_Count", "Positive_Net_Return", "Mean_Net_Return", "Mean_Sharpe", "Mean_Max_Drawdown", "Total_Trade_Count"],
+                ascending=[False, False, False, False, False, False],
                 inplace=True,
             )
+            calibration_df.drop(columns=["_sort_key"], inplace=True, errors="ignore")
 
         self.signal_config = best_config
         self.signal_threshold_source = "walk_forward_signal_calibration"
+        no_trade_trials = int(sum(int(row.get("Total_Trade_Count", 0) or 0) == 0 for row in rows))
         self.signal_threshold_calibration_summary.update({
             "execution_calibration_status": "applied",
             "execution_calibration_trials": int(len(rows)),
+            "grid_size": int(grid_metadata["grid_size"]),
+            "executed_trials": int(grid_metadata["executed_trials"]),
+            "trial_cap": grid_metadata["trial_cap"],
+            "calibration_profile": grid_metadata["calibration_profile"],
             "execution_calibration_models": candidates,
             "execution_calibration_min_trade_count": int(min_trade_count),
-            "execution_calibration_objective": "positive_net_return_then_max_drawdown_then_trade_count_then_sharpe",
+            "execution_calibration_objective": "min_trade_count_then_positive_net_return_then_net_return_then_sharpe_then_drawdown_then_trade_count",
             "execution_calibration_set": "walk_forward_backtest_inputs_only",
             "calibration_scope": getattr(self, "calibration_scope", "wf_train"),
             "final_holdout_used": False,
+            "no_trade_trials": no_trade_trials,
+            "selected_meets_min_trade_count": bool(best_row.get("Meets_Min_Trade_Count", False)) if best_row else False,
+            "selected_total_trade_count": int(best_row.get("Total_Trade_Count", 0) or 0) if best_row else 0,
             "selected_execution_params": {
                 "min_directional_accuracy": self.signal_config.min_directional_accuracy,
                 "volatility_multiplier": self.signal_config.volatility_multiplier,
@@ -298,6 +336,7 @@ class _SignalCalibratorMixin:
         self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
 
         decision_md = self._get_signal_calibration_decision_md(best_row)
+        self._write_signal_calibration_reports(calibration_df, decision_md, suffix=suffix)
 
         return {
             "calibration_df": calibration_df,
@@ -337,6 +376,28 @@ class _SignalCalibratorMixin:
                                         "stop_loss_vol_multiplier": round(float(stop_loss), 4),
                                     })
         return grid
+
+    def _apply_signal_calibration_trial_policy(
+        self,
+        grid: list[Dict[str, float | int]],
+    ) -> tuple[list[Dict[str, float | int]], Dict[str, Any]]:
+        profile = str(getattr(self, "signal_calibration_profile", "production") or "production").lower()
+        if profile not in {"production", "research"}:
+            profile = "production"
+        trial_cap = getattr(self, "signal_calibration_max_trials", 64)
+        trial_cap = None if trial_cap is None else max(1, int(trial_cap))
+        if profile == "research":
+            selected_grid = list(grid)
+            effective_cap = None
+        else:
+            effective_cap = trial_cap
+            selected_grid = list(grid[:effective_cap]) if effective_cap is not None else list(grid)
+        return selected_grid, {
+            "grid_size": int(len(grid)),
+            "executed_trials": int(len(selected_grid)),
+            "trial_cap": effective_cap,
+            "calibration_profile": profile,
+        }
 
     @staticmethod
     def _summarize_signal_calibration_trial(
@@ -384,27 +445,77 @@ class _SignalCalibratorMixin:
 
     @staticmethod
     def _signal_calibration_sort_key(row: Dict[str, Any]) -> tuple:
-        mean_net = float(row.get("Mean_Net_Return", -1e9))
-        mean_drawdown = float(row.get("Mean_Max_Drawdown", -1.0))
-        mean_sharpe = float(row.get("Mean_Sharpe", -1e9))
+        mean_net = _safe_float(row.get("Mean_Net_Return"), -1e9)
+        mean_drawdown = _safe_float(row.get("Mean_Max_Drawdown"), -1.0)
+        mean_sharpe = _safe_float(row.get("Mean_Sharpe"), -1e9)
         trade_count = int(row.get("Total_Trade_Count", 0) or 0)
         return (
-            bool(row.get("Positive_Net_Return", False)),
-            mean_drawdown,
             bool(row.get("Meets_Min_Trade_Count", False)),
-            mean_sharpe,
+            bool(row.get("Positive_Net_Return", False)),
             mean_net,
+            mean_sharpe,
+            mean_drawdown,
             trade_count,
         )
+
+    @classmethod
+    def _select_signal_calibration_row(cls, rows: list[Dict[str, Any]]) -> Dict[str, Any] | None:
+        if not rows:
+            return None
+        meeting = [row for row in rows if bool(row.get("Meets_Min_Trade_Count", False))]
+        if meeting:
+            return max(meeting, key=cls._signal_calibration_sort_key)
+
+        traded = [row for row in rows if int(row.get("Total_Trade_Count", 0) or 0) > 0]
+        if traded:
+            return max(
+                traded,
+                key=lambda row: (
+                    int(row.get("Total_Trade_Count", 0) or 0),
+                    bool(row.get("Positive_Net_Return", False)),
+                    _safe_float(row.get("Mean_Net_Return"), -1e9),
+                    _safe_float(row.get("Mean_Sharpe"), -1e9),
+                    _safe_float(row.get("Mean_Max_Drawdown"), -1.0),
+                ),
+            )
+        return max(rows, key=cls._signal_calibration_sort_key)
+
+    def _write_signal_calibration_reports(
+        self,
+        calibration_df: pd.DataFrame,
+        decision_md: str,
+        *,
+        suffix: str = "",
+    ) -> None:
+        outputs_dir = getattr(self, "outputs_dir", "")
+        if not outputs_dir:
+            return
+        try:
+            os.makedirs(outputs_dir, exist_ok=True)
+            suffix_part = f"_{suffix}" if suffix else ""
+            csv_path = os.path.join(outputs_dir, f"signal_calibration_v1{suffix_part}.csv")
+            md_path = route_output_path(os.path.join(outputs_dir, f"signal_calibration_decision_v1{suffix_part}.md"))
+            output_paths = write_csv_and_aligned_view(
+                calibration_df,
+                csv_path,
+                columns=SIGNAL_CALIBRATION_REPORT_COLUMNS,
+            )
+            os.makedirs(os.path.dirname(md_path), exist_ok=True)
+            with open(md_path, "w", encoding="utf-8") as handle:
+                handle.write(decision_md)
+            print(f"  [OK] Signal calibration raporu kaydedildi -> {output_paths['csv']}")
+            print(f"  [OK] Signal calibration karar raporu kaydedildi -> {md_path}")
+        except Exception as exc:
+            print(f"  [WARN] Signal calibration raporu kaydedilemedi: {exc}")
 
     def _get_signal_calibration_decision_md(self, best_row: Dict[str, Any] | None) -> str:
         scope = getattr(self, "calibration_scope", "wf_train")
         handle = StringIO()
         handle.write("# Signal Calibration Decision v2\n\n")
         handle.write(f"- Calibration scope: {scope}\n")
-        handle.write("- Calibration set: walk-forward backtest inputs only\n")
+        handle.write("- Calibration set: walk-forward calibration backtest inputs only\n")
         handle.write("- Final holdout used: False\n")
-        handle.write("- Objective: positive net return, then lower max drawdown, then minimum trade count, then Sharpe\n\n")
+        handle.write("- Objective: minimum trade count, then positive net return, net return, Sharpe, drawdown, trade count\n\n")
         if not best_row:
             handle.write("No valid calibration trial was selected.\n")
             return handle.getvalue()

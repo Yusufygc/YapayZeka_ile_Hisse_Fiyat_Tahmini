@@ -15,12 +15,70 @@ except ImportError:  # pragma: no cover - plotting is skipped in minimal runtime
 from src.backtesting.metrics import summarize_backtest
 from src.utils.reporting_utils import (
     bullet_list,
+    compact_columns,
     prepare_csv_dataframe,
     route_output_path,
     section_table,
     with_output_extension,
     write_csv_and_aligned_view,
 )
+
+BACKTEST_REPORT_COLUMNS = [
+    "Model",
+    "Report_Group",
+    "Candidate_For_Selection",
+    "Net_Return",
+    "BuyHold_Return",
+    "CAGR",
+    "Annualized_Return",
+    "Volatility",
+    "Sharpe",
+    "Sortino",
+    "Deflated_Sharpe",
+    "Max_Drawdown",
+    "Calmar",
+    "VaR_95",
+    "CVaR_95",
+    "Exposure",
+    "Turnover",
+    "Trade_Count",
+    "Win_Rate",
+    "Avg_Trade_Return",
+    "Avg_Holding_Period",
+    "Profit_Factor",
+    "Expectancy",
+    "Cost_Drag",
+    "End_Capital",
+    "Profit_TL",
+    "BuyHold_End_Capital",
+    "BuyHold_Profit_TL",
+    "Beats_BuyHold_NetReturn",
+]
+
+BACKTEST_AUDIT_COLUMNS = [
+    "Model",
+    "Report_Group",
+    "Candidate_For_Selection",
+    "Target_Semantics",
+    "Execution_Lag",
+    "Transaction_Costs",
+    "Validation_Protocol",
+    "Threshold_Config",
+]
+
+FOLD_BACKTEST_COLUMNS = [
+    "Model",
+    "Fold",
+    "Net_Return",
+    "BuyHold_Return",
+    "Sharpe",
+    "Deflated_Sharpe",
+    "Max_Drawdown",
+    "Exposure",
+    "Turnover",
+    "Trade_Count",
+    "Avg_Holding_Period",
+]
 
 
 def save_backtest_report(metrics_by_model: Dict[str, Dict[str, object]], save_path: str) -> pd.DataFrame:
@@ -32,11 +90,12 @@ def save_backtest_report(metrics_by_model: Dict[str, Dict[str, object]], save_pa
         df.sort_values(by=["Net_Return", "Sharpe"], ascending=[False, False], inplace=True)
 
     csv_df = df.reset_index()
-    output_paths = write_csv_and_aligned_view(csv_df, save_path)
+    output_paths = write_csv_and_aligned_view(csv_df, save_path, columns=BACKTEST_REPORT_COLUMNS)
 
     md_path = with_output_extension(save_path, ".md")
     os.makedirs(os.path.dirname(md_path), exist_ok=True)
-    display_df = prepare_csv_dataframe(csv_df)
+    display_df = prepare_csv_dataframe(compact_columns(csv_df, BACKTEST_REPORT_COLUMNS))
+    audit_df = prepare_csv_dataframe(compact_columns(csv_df, BACKTEST_AUDIT_COLUMNS))
     with open(md_path, "w", encoding="utf-8") as handle:
         handle.write("# Backtest Raporu\n\n")
         if not df.empty:
@@ -93,8 +152,8 @@ def save_backtest_report(metrics_by_model: Dict[str, Dict[str, object]], save_pa
             bullet_list(
                 [
                     "Prediction_Date: tahminin uretildigi karar tarihi.",
-                    "Desired_Position karar barinda uretilir; Position bir sonraki bar getirisinde uygulanan yurutme pozisyonudur.",
-                    "Execution_Date / Realized_Return_Date: bir onceki karar pozisyonunun getirisinin olculdugu bar.",
+                    "Desired_Position karar barinda uretilir; Position ayni satirdaki next-bar getirisinde uygulanan yurutme pozisyonudur.",
+                    "Execution_Date / Realized_Return_Date: karar satirindaki next-bar getirisinin olculdugu bar.",
                     "Professional sinyal modu karar aninda gerceklesen fiyat bilgisini kullanmaz.",
                 ]
             )
@@ -111,8 +170,8 @@ def save_backtest_report(metrics_by_model: Dict[str, Dict[str, object]], save_pa
         handle.write("\n\n## Leakage Guard\n\n")
         handle.write(
             section_table(
-                display_df,
-                ["Model", "Target_Semantics", "Execution_Lag", "Macro_Release_Lag", "Transaction_Costs", "Threshold_Config", "Validation_Protocol"],
+                audit_df,
+                BACKTEST_AUDIT_COLUMNS,
             )
         )
 
@@ -167,7 +226,7 @@ def save_fold_backtest_report(
     if not fold_df.empty:
         fold_df.sort_values(by=["Model", "Fold"], inplace=True)
 
-    fold_paths = write_csv_and_aligned_view(fold_df, save_path)
+    fold_paths = write_csv_and_aligned_view(fold_df, save_path, columns=FOLD_BACKTEST_COLUMNS)
 
     worst_rows = []
     if not fold_df.empty:
@@ -181,11 +240,15 @@ def save_fold_backtest_report(
     worst_df = pd.DataFrame(worst_rows)
 
     worst_path = with_output_extension(save_path.replace(".csv", "_worst.csv"), ".csv")
-    worst_paths = write_csv_and_aligned_view(worst_df, worst_path)
+    worst_paths = write_csv_and_aligned_view(
+        worst_df,
+        worst_path,
+        columns=[*FOLD_BACKTEST_COLUMNS, "Worst_Fold_Rule"],
+    )
 
     md_path = with_output_extension(save_path, ".md")
-    display_fold = prepare_csv_dataframe(fold_df)
-    display_worst = prepare_csv_dataframe(worst_df)
+    display_fold = prepare_csv_dataframe(compact_columns(fold_df, FOLD_BACKTEST_COLUMNS))
+    display_worst = prepare_csv_dataframe(compact_columns(worst_df, [*FOLD_BACKTEST_COLUMNS, "Worst_Fold_Rule"]))
     os.makedirs(os.path.dirname(md_path), exist_ok=True)
     with open(md_path, "w", encoding="utf-8") as handle:
         handle.write("# Walk-Forward Fold Backtest Raporu\n\n")

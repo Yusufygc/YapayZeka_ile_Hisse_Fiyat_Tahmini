@@ -3,6 +3,7 @@
 import os
 import shutil
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -164,6 +165,74 @@ class Phase5DataQualityTests(unittest.TestCase):
 
         self.assertEqual(dm.scaling_reports[0]["scaler_fit_scope"], "train_only")
         self.assertIn("distribution_shift_warning", dm.scaling_reports[0]["warning"])
+
+    def test_data_manager_ingest_does_not_auto_update_by_default(self):
+        from src.pipeline.config import DataConfig, ValidationConfig
+        from src.pipeline.data_manager import DataManager
+
+        frame = pd.DataFrame({
+            "Date": pd.date_range("2024-01-01", periods=5),
+            "Close": np.linspace(100.0, 104.0, 5),
+            "Feature": np.arange(5, dtype=float),
+        })
+        cache_meta = {
+            "feature_names": ["Feature"],
+            "feature_groups": {},
+            "feature_pruning_report": {},
+        }
+
+        with patch("src.pipeline.data_manager.DataUpdater.check_and_update") as updater, \
+             patch("src.pipeline.data_manager.load_data", return_value=frame), \
+             patch.object(DataManager, "_apply_training_window", side_effect=lambda df: df), \
+             patch.object(DataManager, "_check_survivorship_bias", return_value={}), \
+             patch("src.pipeline.data_manager.FeatureCache") as cache_cls:
+            cache_cls.return_value.make_key.return_value = "k"
+            cache_cls.return_value.get.return_value = (frame, cache_meta)
+            dm = DataManager(
+                data_cfg=DataConfig(data_file="data/DUMMY.csv", use_macro=False),
+                val_cfg=ValidationConfig(),
+                models_dir="outputs/_test_phase5_data_quality",
+            )
+            dm.ingest_and_engineer()
+
+        updater.assert_not_called()
+        self.assertEqual(dm.feature_names, ["Feature"])
+
+    def test_data_manager_ingest_auto_update_is_explicit_opt_in(self):
+        from src.pipeline.config import DataConfig, ValidationConfig
+        from src.pipeline.data_manager import DataManager
+
+        frame = pd.DataFrame({
+            "Date": pd.date_range("2024-01-01", periods=5),
+            "Close": np.linspace(100.0, 104.0, 5),
+            "Feature": np.arange(5, dtype=float),
+        })
+        cache_meta = {
+            "feature_names": ["Feature"],
+            "feature_groups": {},
+            "feature_pruning_report": {},
+        }
+
+        with patch("src.pipeline.data_manager.DataUpdater.check_and_update") as updater, \
+             patch("src.pipeline.data_manager.load_data", return_value=frame), \
+             patch.object(DataManager, "_apply_training_window", side_effect=lambda df: df), \
+             patch.object(DataManager, "_check_survivorship_bias", return_value={}), \
+             patch("src.pipeline.data_manager.FeatureCache") as cache_cls:
+            cache_cls.return_value.make_key.return_value = "k"
+            cache_cls.return_value.get.return_value = (frame, cache_meta)
+            dm = DataManager(
+                data_cfg=DataConfig(
+                    data_file="data/DUMMY.csv",
+                    use_macro=False,
+                    auto_update_data=True,
+                    auto_update_interactive=False,
+                ),
+                val_cfg=ValidationConfig(),
+                models_dir="outputs/_test_phase5_data_quality",
+            )
+            dm.ingest_and_engineer()
+
+        updater.assert_called_once_with("data/DUMMY.csv", "DUMMY", interactive=False)
 
     def test_market_regime_sma200_uses_first_199_days_as_neutral(self):
         try:

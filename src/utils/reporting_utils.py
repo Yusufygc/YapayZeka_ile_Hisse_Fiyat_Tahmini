@@ -7,6 +7,7 @@ import pandas as pd
 
 
 DEFAULT_FLOAT_DIGITS = 4
+MAX_DISPLAY_TEXT_LENGTH = 180
 INTEGER_COLUMNS = {
     "Sira",
     "Sıra",
@@ -33,6 +34,8 @@ INTEGER_COLUMNS = {
 BOOLEAN_COLUMNS = {
     "Beats_Benchmark_RMSE",
     "Beats_BuyHold_NetReturn",
+    "Candidate_For_Selection",
+    "Benchmark_Model",
     "Positive_Net_Return",
     "Meets_Min_Trade_Count",
 }
@@ -122,6 +125,14 @@ FLOAT_DIGITS_BY_COLUMN = {
 }
 
 
+def compact_columns(df: pd.DataFrame, preferred_columns: Sequence[str]) -> pd.DataFrame:
+    """Return a report-friendly subset while preserving available column order."""
+    available = [column for column in preferred_columns if column in df.columns]
+    if not available:
+        return df.copy()
+    return df.loc[:, available].copy()
+
+
 def prepare_csv_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     csv_df = df.copy()
     for column in csv_df.columns:
@@ -165,19 +176,29 @@ def with_output_extension(save_path: str, extension: str) -> str:
     return route_output_path(os.path.join(directory, f"{stem}{extension}"))
 
 
-def write_csv_and_aligned_view(df: pd.DataFrame, save_path: str) -> dict[str, str]:
+def write_csv_and_aligned_view(
+    df: pd.DataFrame,
+    save_path: str,
+    *,
+    include_txt: bool = False,
+    columns: Sequence[str] | None = None,
+) -> dict[str, str]:
     csv_path = route_output_path(save_path)
     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-    csv_df = prepare_csv_dataframe(df)
+    csv_df = compact_columns(df, columns) if columns is not None else df.copy()
+    csv_df = prepare_csv_dataframe(csv_df)
     csv_df.to_csv(csv_path, sep=";", index=False, encoding="utf-8-sig")
 
-    txt_path = with_output_extension(save_path, ".txt")
-    os.makedirs(os.path.dirname(txt_path), exist_ok=True)
-    aligned_df = prepare_display_dataframe(csv_df)
-    with open(txt_path, "w", encoding="utf-8") as handle:
-        handle.write(aligned_df.to_string(index=False))
-        handle.write("\n")
-    return {"csv": csv_path, "txt": txt_path}
+    paths = {"csv": csv_path}
+    if include_txt:
+        txt_path = with_output_extension(save_path, ".txt")
+        os.makedirs(os.path.dirname(txt_path), exist_ok=True)
+        aligned_df = prepare_display_dataframe(csv_df)
+        with open(txt_path, "w", encoding="utf-8") as handle:
+            handle.write(aligned_df.to_string(index=False))
+            handle.write("\n")
+        paths["txt"] = txt_path
+    return paths
 
 
 def section_table(df: pd.DataFrame, columns: Sequence[str]) -> str:
@@ -197,7 +218,7 @@ def format_cell(value: object, column: str | None = None) -> str:
     if isinstance(value, bool):
         return _format_bool(value)
     if isinstance(value, str):
-        return value
+        return _shorten_text(value)
     if isinstance(value, int):
         return str(value)
     if isinstance(value, float):
@@ -222,6 +243,13 @@ def _format_int(value: object) -> str:
     if pd.isna(value):
         return "-"
     return str(int(round(float(value))))
+
+
+def _shorten_text(value: str) -> str:
+    normalized = " ".join(value.split())
+    if len(normalized) <= MAX_DISPLAY_TEXT_LENGTH:
+        return normalized
+    return normalized[: MAX_DISPLAY_TEXT_LENGTH - 3] + "..."
 
 
 def _to_markdown_table(df: pd.DataFrame) -> str:
