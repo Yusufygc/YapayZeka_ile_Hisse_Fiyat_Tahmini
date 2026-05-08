@@ -49,7 +49,7 @@ class FeatureCache:
             cache.put(key, df, meta)
     """
 
-    _VERSION = "1"  # Bump to invalidate all existing cache entries.
+    _VERSION = "2"  # Bump to invalidate all existing cache entries.
 
     def __init__(self, cache_dir: str, ttl_hours: float = 24.0) -> None:
         self.cache_dir = cache_dir

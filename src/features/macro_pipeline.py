@@ -139,7 +139,12 @@ class MacroPipeline:
     # ══════════════════════════════════════════════════════════════════════════
 
     @staticmethod
-    def _download_yfinance(ticker: str, start: str, end: str) -> Optional[pd.DataFrame]:
+    def _download_yfinance(
+        ticker: str,
+        start: str,
+        end: str,
+        value_name: str | None = None,
+    ) -> Optional[pd.DataFrame]:
         """yfinance'tan günlük kapanış indirir."""
         try:
             import yfinance as yf
@@ -150,7 +155,7 @@ class MacroPipeline:
                 raw.columns = raw.columns.droplevel(1)
             raw.reset_index(inplace=True)
             raw["Date"] = pd.to_datetime(raw["Date"]).dt.normalize()
-            col = ticker.replace("=X", "").replace(".IS", "")
+            col = value_name or ticker.replace("=X", "").replace(".IS", "")
             return raw[["Date", "Close"]].rename(columns={"Close": col})
         except Exception as exc:
             print(f"  [MACRO] yfinance {ticker}: {exc}")
@@ -158,6 +163,46 @@ class MacroPipeline:
 
     def _cache_path(self, key: str) -> str:
         return os.path.join(self.cache_dir, _CACHE_FILES[key])
+
+    @staticmethod
+    def _ticker_aliases(key: str) -> list[str]:
+        ticker = _YFINANCE_TICKERS.get(key, "")
+        aliases = [
+            key,
+            ticker,
+            ticker.replace("=X", "").replace(".IS", ""),
+            ticker.replace("=X", ""),
+        ]
+        if key == "BIST100":
+            aliases.extend(["XU100", "XU100.IS"])
+        return list(dict.fromkeys([alias for alias in aliases if alias]))
+
+    def _normalize_daily_cache_schema(self, key: str, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Older cache files may store yfinance ticker names such as XU100.IS,
+        ^VIX or GC=F. Collapse aliases into the canonical macro key expected
+        by downstream feature engineering.
+        """
+        if key not in _YFINANCE_TICKERS or df is None or df.empty:
+            return df
+
+        normalized = df.copy()
+        aliases = [alias for alias in self._ticker_aliases(key) if alias in normalized.columns]
+        value_cols = [col for col in normalized.columns if col != "Date"]
+        if aliases:
+            canonical = normalized[aliases].bfill(axis=1).iloc[:, 0]
+        elif value_cols:
+            canonical = normalized[value_cols].bfill(axis=1).iloc[:, 0]
+        else:
+            return normalized[["Date"]].copy()
+
+        normalized[key] = pd.to_numeric(canonical, errors="coerce")
+        normalized = normalized[["Date", key]].copy()
+        normalized.dropna(subset=[key], inplace=True)
+        normalized.drop_duplicates("Date", keep="last", inplace=True)
+        normalized.sort_values("Date", inplace=True)
+        normalized.reset_index(drop=True, inplace=True)
+        return normalized
 
     def _is_stale(self, key: str, threshold_days: int) -> bool:
         path = self._cache_path(key)
@@ -175,6 +220,7 @@ class MacroPipeline:
             return None
         df = pd.read_csv(path, parse_dates=["Date"])
         df["Date"] = pd.to_datetime(df["Date"]).dt.normalize()
+        df = self._normalize_daily_cache_schema(key, df)
         return df
 
     def _update_daily_cache(self, key: str, start: str) -> None:
@@ -189,8 +235,9 @@ class MacroPipeline:
         fetch_end = (datetime.today() + timedelta(days=1)).strftime("%Y-%m-%d")
         print(f"  [MACRO] {key} güncelleniyor: {fetch_start} → bugün ...")
 
-        new_data = self._download_yfinance(ticker, fetch_start, fetch_end)
+        new_data = self._download_yfinance(ticker, fetch_start, fetch_end, value_name=key)
         if new_data is not None and not new_data.empty:
+            new_data = self._normalize_daily_cache_schema(key, new_data)
             combined = pd.concat([existing, new_data], ignore_index=True) if existing is not None else new_data
             combined.drop_duplicates("Date", inplace=True)
             combined.sort_values("Date", inplace=True)

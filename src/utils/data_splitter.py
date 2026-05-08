@@ -70,7 +70,14 @@ class TimeSeriesSplitter:
         min_required = min_train_size + embargo_size + total_test_size
         if n < min_required:
             print(f"[WARNING] Not enough data for {n_splits} splits with test_size={test_size} and min_train_size={min_train_size}.")
-            n_splits = max(1, (n - min_train_size - embargo_size) // test_size)
+            max_possible_splits = (n - min_train_size - embargo_size) // test_size
+            if max_possible_splits < 1:
+                print(
+                    "[WARNING] No valid walk-forward split can be created "
+                    f"(rows={n}, required_for_one_split={min_train_size + embargo_size + test_size})."
+                )
+                return []
+            n_splits = min(n_splits, max_possible_splits)
             print(f"[WARNING] Adjusted n_splits to {n_splits}.")
 
         for i in range(n_splits, 0, -1):
@@ -90,6 +97,8 @@ class TimeSeriesSplitter:
             train_df = df.iloc[train_start:train_end].copy()
             embargo_df = df.iloc[embargo_start:embargo_end].copy()
             test_df  = df.iloc[test_start:test_end].copy()
+            if len(train_df) < min_train_size or len(test_df) < test_size:
+                continue
 
             splits.append({
                 "split_idx":   n_splits - i + 1,

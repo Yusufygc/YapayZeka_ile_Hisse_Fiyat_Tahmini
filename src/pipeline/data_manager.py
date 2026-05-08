@@ -763,6 +763,19 @@ class DataManager:
                 max_train_size=self.validation_config["wf_max_train_size"],
                 embargo_size=self.validation_config["wf_embargo_size"],
             )
+            if not self.wf_splits:
+                required_for_one = (
+                    self.validation_config["wf_min_train_size"]
+                    + self.validation_config["wf_embargo_size"]
+                    + self.validation_config["wf_test_size"]
+                )
+                raise ValueError(
+                    "Walk-forward split olusturulamadi: "
+                    f"feature sonrasi satir={len(wf_source_df)}, "
+                    f"tek split icin gereken minimum={required_for_one}. "
+                    "Makro/feature dropna kaynakli veri kaybi veya cok buyuk "
+                    "wf_min_train_size/time_steps ayarlarini kontrol edin."
+                )
             print(
                 "  [INFO] Walk-Forward splitleri olusturuldu "
                 f"({len(self.wf_splits)} adet, {self.validation_config['wf_window_type']} window, "
