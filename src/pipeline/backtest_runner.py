@@ -315,6 +315,51 @@ class _BacktestRunnerMixin:
         except Exception as exc:
             print(f"  [WARN] Shadow backtest raporu kaydedilemedi: {exc}")
 
+    def _attach_signal_diagnosis(
+        self,
+        *,
+        metrics_by_model: Dict[str, Dict[str, Any]],
+        shadow_results: Dict[str, Any],
+    ) -> None:
+        comparison_df = shadow_results.get("comparison_df") if isinstance(shadow_results, dict) else None
+        min_trades = int(getattr(self, "signal_calibration_min_trades", 6) or 6)
+        for model_name, metrics in metrics_by_model.items():
+            labels = []
+            net_return = self._diagnostic_float(metrics.get("Net_Return"))
+            buy_hold_return = self._diagnostic_float(metrics.get("BuyHold_Return"))
+            trade_count = int(self._diagnostic_float(metrics.get("Trade_Count")) or 0)
+            sharpe = self._diagnostic_float(metrics.get("Sharpe"))
+
+            if np.isfinite(net_return) and np.isfinite(buy_hold_return) and net_return <= buy_hold_return:
+                labels.append("underperform_buyhold")
+            if trade_count < min_trades:
+                labels.append("insufficient_trades")
+            if np.isfinite(sharpe) and sharpe <= 0.0:
+                labels.append("model_signal_weak")
+            if getattr(self, "signal_threshold_source", "") == "walk_forward_signal_rejected":
+                labels.append("rejected_no_trade")
+
+            if isinstance(comparison_df, pd.DataFrame) and not comparison_df.empty:
+                model_shadow = comparison_df[comparison_df["Model"].astype(str) == str(model_name)]
+                current = model_shadow[model_shadow["Shadow_Mode"].astype(str) == "professional_current"]
+                alternatives = model_shadow[
+                    model_shadow["Shadow_Mode"].astype(str).isin(["professional_soft_gate", "legacy_directional"])
+                ]
+                current_trades = trade_count
+                current_net = net_return
+                if not current.empty:
+                    current_trades = int(self._diagnostic_float(current.iloc[0].get("Trade_Count")) or current_trades)
+                    current_net = self._diagnostic_float(current.iloc[0].get("Net_Return"))
+                if not alternatives.empty:
+                    alt_trades = pd.to_numeric(alternatives.get("Trade_Count"), errors="coerce").fillna(0.0)
+                    alt_net = pd.to_numeric(alternatives.get("Net_Return"), errors="coerce")
+                    if float(alt_trades.max()) > float(current_trades) and (
+                        not np.isfinite(current_net) or float(alt_net.max()) > float(current_net)
+                    ):
+                        labels.append("gate_too_strict")
+
+            metrics["Signal_Diagnosis"] = ",".join(dict.fromkeys(labels)) if labels else "ok"
+
     # ------------------------------------------------------------------ #
     #  Main backtest runner                                               #
     # ------------------------------------------------------------------ #
@@ -336,6 +381,12 @@ class _BacktestRunnerMixin:
 
         for model_name, payload in backtest_inputs.items():
             try:
+                effective_signal_mode = self.signal_mode
+                if (
+                    getattr(self, "signal_threshold_source", "") == "walk_forward_signal_rejected"
+                    and str(getattr(self, "signal_calibration_reject_behavior", "no_trade")).lower() == "no_trade"
+                ):
+                    effective_signal_mode = "rejected_no_trade"
                 result = run_backtest(
                     dates=payload.get("dates"),
                     prediction_dates=payload.get("prediction_dates"),
@@ -350,7 +401,7 @@ class _BacktestRunnerMixin:
                     target_mode=target_mode,
                     commission_bps=self.commission_bps,
                     slippage_bps=self.slippage_bps,
-                    signal_mode=self.signal_mode,
+                    signal_mode=effective_signal_mode,
                     signal_config=self.signal_config,
                     model_metrics=(model_metrics_by_model or {}).get(model_name, {}),
                 )
@@ -378,8 +429,9 @@ class _BacktestRunnerMixin:
 
         self.latest_backtest_results[suffix] = results
         self.latest_backtest_metrics[suffix] = metrics_by_model
+        auto_diagnostics = bool(getattr(self, "auto_signal_diagnostics", True)) and suffix in {"wf", "final_holdout"}
 
-        if bool(getattr(self, "enable_gate_diagnostics", False)):
+        if bool(getattr(self, "enable_gate_diagnostics", False)) or auto_diagnostics:
             gate_diagnostics = self._get_signal_gate_diagnostics(
                 backtest_inputs=backtest_inputs,
                 backtest_results=results,
@@ -392,7 +444,7 @@ class _BacktestRunnerMixin:
         else:
             gate_diagnostics = {"status": "disabled"}
 
-        if bool(getattr(self, "enable_shadow_backtests", False)):
+        if bool(getattr(self, "enable_shadow_backtests", False)) or auto_diagnostics:
             shadow_results = self._get_shadow_backtests(
                 backtest_inputs=backtest_inputs,
                 model_metrics_by_model=model_metrics_by_model or {},
@@ -402,6 +454,7 @@ class _BacktestRunnerMixin:
             self._write_shadow_backtest_reports(shadow_results, suffix)
         else:
             shadow_results = {"status": "disabled"}
+        self._attach_signal_diagnosis(metrics_by_model=metrics_by_model, shadow_results=shadow_results)
 
         # ── Grafik ve rapor kayıtları ──────────────────────────────
         try:

@@ -113,8 +113,16 @@ def run_backtest(
                 signal_frame["Quality_Gate_Reason"] = quality_reason
         decision_positions = signal_frame["Position"].to_numpy(dtype=float)
         signals = (signal_frame["Decision"].isin(["BUY", "HOLD"]).to_numpy(dtype=float))
+    elif signal_mode in {"rejected_no_trade", "no_trade"}:
+        signal_frame = _blocked_signal_frame(
+            n,
+            "Walk-forward OOS confirmation gate rejected this model; no production trade is allowed.",
+            "rejected_no_trade",
+        )
+        decision_positions = signal_frame["Position"].to_numpy(dtype=float)
+        signals = np.zeros(n, dtype=float)
     else:
-        raise ValueError(f"Desteklenmeyen signal_mode: {signal_mode}. Beklenen: legacy, professional")
+        raise ValueError(f"Desteklenmeyen signal_mode: {signal_mode}. Beklenen: legacy, professional, rejected_no_trade")
 
     execution_positions = decision_positions.copy()
     previous_execution_positions = np.concatenate(([0.0], execution_positions[:-1]))

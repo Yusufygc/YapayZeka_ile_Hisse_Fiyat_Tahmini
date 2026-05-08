@@ -53,6 +53,7 @@ BACKTEST_REPORT_COLUMNS = [
     "BuyHold_End_Capital",
     "BuyHold_Profit_TL",
     "Beats_BuyHold_NetReturn",
+    "Signal_Diagnosis",
 ]
 
 BACKTEST_AUDIT_COLUMNS = [
@@ -113,6 +114,7 @@ def save_backtest_report(metrics_by_model: Dict[str, Dict[str, object]], save_pa
                         f"Buy & Hold donem sonu: `{buy_hold_end_capital:,.2f} TL`",
                         f"Islem kalitesi: Profit Factor `{float(df.iloc[0].get('Profit_Factor', 0.0)):.4f}`, "
                         f"Expectancy `{float(df.iloc[0].get('Expectancy', 0.0)):.6f}`",
+                        f"Sinyal teshisi: `{df.iloc[0].get('Signal_Diagnosis', 'ok')}`",
                     ]
                 )
             )
@@ -134,7 +136,7 @@ def save_backtest_report(metrics_by_model: Dict[str, Dict[str, object]], save_pa
                     "Model", "Net_Return", "CAGR", "Annualized_Return", "Volatility",
                     "Sharpe", "Sortino", "Max_Drawdown", "Calmar",
                     "VaR_95", "CVaR_95", "Deflated_Sharpe", "Sharpe_Probabilistic_Score",
-                    "Beats_BuyHold_NetReturn",
+                    "Beats_BuyHold_NetReturn", "Signal_Diagnosis",
                 ],
             )
         )
