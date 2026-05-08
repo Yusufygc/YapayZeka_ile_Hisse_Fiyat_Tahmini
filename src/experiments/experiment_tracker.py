@@ -5,7 +5,7 @@ experiment_tracker.py -- Experiment Logging Module.
 Faz 1.4 — Normalizasyon:
   Dataset_Metadata blobu CSV'den kaldirildi.
   Metadata artik run_metadata/{dataset_hash}.json dosyasinda
-  hash basina bir kez saklanir; CSV'de yalnizca Dataset_Hash kalir.
+  hash basina guncel snapshot olarak saklanir; CSV'de yalnizca Dataset_Hash kalir.
   Bu sayede her satirdaki 2KB tekrarli blob ortadan kalkar.
 """
 
@@ -48,15 +48,15 @@ class ExperimentTracker:
     def _save_metadata_blob(self, dataset_hash: str, dataset_metadata: Dict[str, Any]) -> None:
         """
         Metadata'yi run_metadata/{dataset_hash}.json dosyasina yazar.
-        Ayni hash icin sadece bir kez yazilir (idempotent).
+        Ayni run icinde kalibrasyon/final holdout sonradan zenginlestigi icin
+        mevcut blob en guncel metadata ile yenilenir.
         """
         if dataset_hash in ("N/A", "", None):
             return
         os.makedirs(self.metadata_dir, exist_ok=True)
         meta_path = os.path.join(self.metadata_dir, f"{dataset_hash}.json")
-        if not os.path.exists(meta_path):
-            with open(meta_path, "w", encoding="utf-8") as f:
-                json.dump(dataset_metadata, f, ensure_ascii=False, indent=2, sort_keys=True)
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(dataset_metadata, f, ensure_ascii=False, indent=2, sort_keys=True)
 
     def get_metadata(self, dataset_hash: str) -> Optional[Dict[str, Any]]:
         """Hash'e gore metadata blob'unu yukler. Bulunamazsa None doner."""
@@ -81,12 +81,12 @@ class ExperimentTracker:
         Tek bir deney calismasini CSV'ye kaydeder.
 
         Dataset_Metadata artik CSV satirina yazilmaz; bunun yerine
-        run_metadata/{dataset_hash}.json dosyasina hash basina bir kez
+        run_metadata/{dataset_hash}.json dosyasina guncel snapshot olarak
         yazilir. Boylece N satir x 2KB blob yerine 1 JSON dosyasi kalir.
         """
         dataset_metadata = dataset_metadata or {}
 
-        # Metadata'yi hash'e gore bir kez kaydet
+        # Metadata'yi hash'e gore guncel snapshot olarak kaydet
         self._save_metadata_blob(dataset_hash, dataset_metadata)
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

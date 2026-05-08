@@ -5,6 +5,8 @@ orchestrator.py - Ana ForecastingPipeline sinifi
 
 import os
 import shutil
+import hashlib
+import re
 import warnings
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -95,7 +97,8 @@ class ForecastingPipeline:
         self.candidate_models = normalize_candidate_models(self.selected_models)
         self.benchmark_models = set(BENCHMARK_MODELS)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.run_id = f"{timestamp}_{self.stock_symbol}_{self.validation_mode}"
+        model_slug = self._model_slug_for_run_id(self.selected_models)
+        self.run_id = f"{timestamp}_{self.stock_symbol}_{self.validation_mode}_{model_slug}"
 
         self.output_root = os.path.join(self.project_root, "outputs", self.stock_symbol)
         self.outputs_dir = os.path.join(self.output_root, "runs", self.run_id)
@@ -122,6 +125,26 @@ class ForecastingPipeline:
         self.run_dataset_metadata = {}
         self.run_dataset_hash = "N/A"
         self.report_detail_level = e.report_detail_level
+
+    @staticmethod
+    def _slugify_model_name(model_name: str) -> str:
+        slug = re.sub(r"[^A-Za-z0-9]+", "", str(model_name))
+        return slug or "Model"
+
+    @classmethod
+    def _model_slug_for_run_id(cls, selected_models: Optional[List[str]]) -> str:
+        models = [cls._slugify_model_name(model) for model in (selected_models or [])]
+        models = [model for model in models if model]
+        if not models:
+            return "models-All"
+        if len(models) == 1:
+            return f"model-{models[0]}"
+        if len(models) <= 3:
+            return "models-" + "-".join(models)
+
+        digest = hashlib.sha1("|".join(models).encode("utf-8")).hexdigest()[:8]
+        visible = "-".join(models[:3])
+        return f"models-{visible}-plus{len(models) - 3}-{digest}"
 
     def setup_environment(self) -> None:
         for directory in [self.output_root, self.outputs_dir, self.models_dir, self.experiment_dir, self.registry_dir]:

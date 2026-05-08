@@ -1,7 +1,8 @@
 # ── Kullanıcının Ekledikleri ────────────────────────────────────────────
 /outputs
 /models
-/docs/
+/docs/*
+!/docs/glossary.md
 
 /stock_models.db
 /data/stock_models.db
@@ -93,3 +94,4 @@ cover/
 .pre-commit-config.yaml
 .flake8
 pyproject.toml
+.codex_tmp/
