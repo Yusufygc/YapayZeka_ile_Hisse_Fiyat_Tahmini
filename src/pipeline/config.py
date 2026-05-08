@@ -105,6 +105,15 @@ class ExecutionConfig:
     enable_shadow_backtests: bool = False
     signal_calibration_max_trials: int = 64
     signal_calibration_profile: str = "production"  # "production" veya "research"
+    signal_calibration_sampler: str = "adaptive_stratified"
+    signal_calibration_seed: int = 42
+    signal_calibration_objective: str = "risk_adjusted"
+    signal_calibration_min_trades: int = 6
+    signal_calibration_require_oos_confirmation: bool = True
+    signal_calibration_min_eval_excess_return: float = 0.0
+    signal_calibration_min_eval_sharpe: float = 0.0
+    signal_calibration_reject_behavior: str = "no_trade"
+    auto_signal_diagnostics: bool = True
     report_detail_level: str = "summary"  # "summary" veya "research"
     write_text_reports: bool = False
     write_markdown_reports: bool = True

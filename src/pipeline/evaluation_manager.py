@@ -89,6 +89,15 @@ class EvaluationManager:
         self.enable_shadow_backtests = self.exe_cfg.enable_shadow_backtests
         self.signal_calibration_max_trials = self.exe_cfg.signal_calibration_max_trials
         self.signal_calibration_profile = self.exe_cfg.signal_calibration_profile
+        self.signal_calibration_sampler = self.exe_cfg.signal_calibration_sampler
+        self.signal_calibration_seed = self.exe_cfg.signal_calibration_seed
+        self.signal_calibration_objective = self.exe_cfg.signal_calibration_objective
+        self.signal_calibration_min_trades = self.exe_cfg.signal_calibration_min_trades
+        self.signal_calibration_require_oos_confirmation = self.exe_cfg.signal_calibration_require_oos_confirmation
+        self.signal_calibration_min_eval_excess_return = self.exe_cfg.signal_calibration_min_eval_excess_return
+        self.signal_calibration_min_eval_sharpe = self.exe_cfg.signal_calibration_min_eval_sharpe
+        self.signal_calibration_reject_behavior = self.exe_cfg.signal_calibration_reject_behavior
+        self.auto_signal_diagnostics = self.exe_cfg.auto_signal_diagnostics
         self.report_detail_level = self.exe_cfg.report_detail_level
         self.write_text_reports = self.exe_cfg.write_text_reports
         self.write_markdown_reports = self.exe_cfg.write_markdown_reports
@@ -318,6 +327,7 @@ class EvaluationManager:
         self,
         *,
         wf_backtest_inputs: Dict[str, Dict[str, Any]],
+        wf_evaluation_backtest_inputs: Optional[Dict[str, Dict[str, Any]]] = None,
         model_metrics_by_model: Dict[str, Dict[str, Any]],
         suffix: str = "",
     ) -> Dict[str, Any]:
@@ -329,6 +339,7 @@ class EvaluationManager:
         )
         return self.signal_calibration_service._calibrate_walk_forward_signal_parameters(
             wf_backtest_inputs=wf_backtest_inputs,
+            wf_evaluation_backtest_inputs=wf_evaluation_backtest_inputs,
             model_metrics_by_model=model_metrics_by_model,
             suffix=suffix,
         )
@@ -693,6 +704,7 @@ class EvaluationManager:
         if getattr(self, "enable_signal_execution_calibration", True) and signal_calibration_backtest_inputs:
             calibration_results = self._calibrate_walk_forward_signal_parameters(
                 wf_backtest_inputs=signal_calibration_backtest_inputs,
+                wf_evaluation_backtest_inputs=signal_evaluation_backtest_inputs,
                 model_metrics_by_model=wf_results,
                 suffix="wf_calibration",
             )
