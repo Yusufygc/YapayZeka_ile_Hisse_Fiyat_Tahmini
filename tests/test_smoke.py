@@ -227,7 +227,12 @@ class TestDataManagerSmoke(unittest.TestCase):
             dm.feature_names = [c for c in df.columns if c != "Date"]
 
             with patch("src.pipeline.data_manager.TimeSeriesSplitter") as mock_ts:
-                mock_ts.walk_forward_splits.return_value = []
+                mock_ts.walk_forward_splits.return_value = [{
+                    "split_idx": 1,
+                    "train": df.iloc[:100].copy(),
+                    "embargo_context": df.iloc[100:130].copy(),
+                    "test": df.iloc[130:151].copy(),
+                }]
                 dm.split_data("walk_forward")
 
             self.assertTrue(dm._wf_mode,

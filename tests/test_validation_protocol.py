@@ -61,6 +61,32 @@ class ValidationProtocolTests(unittest.TestCase):
         self.assertTrue(all(split["train_start"] == 0 for split in splits))
         self.assertGreater(len(splits[-1]["train"]), len(splits[0]["train"]))
 
+    def test_walk_forward_returns_no_splits_when_one_fold_is_impossible(self):
+        splits = TimeSeriesSplitter.walk_forward_splits(
+            self._frame(11),
+            n_splits=12,
+            min_train_size=504,
+            test_size=21,
+            max_train_size=756,
+            embargo_size=30,
+        )
+
+        self.assertEqual(splits, [])
+
+    def test_walk_forward_never_emits_empty_train_after_adjustment(self):
+        splits = TimeSeriesSplitter.walk_forward_splits(
+            self._frame(560),
+            n_splits=12,
+            min_train_size=504,
+            test_size=21,
+            max_train_size=756,
+            embargo_size=30,
+        )
+
+        self.assertEqual(len(splits), 1)
+        self.assertTrue(all(len(split["train"]) >= 504 for split in splits))
+        self.assertTrue(all(len(split["test"]) == 21 for split in splits))
+
     def test_final_holdout_metadata_is_selection_safe_shape(self):
         selection = self._frame(840)
         holdout = self._frame(60)
