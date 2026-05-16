@@ -5,6 +5,7 @@ __all__ = [
     "run_backtest",
     "save_backtest_report",
     "save_fold_backtest_report",
+    "save_order_report",
     "save_trade_logs",
     "summarize_backtest",
 ]
@@ -19,13 +20,20 @@ def __getattr__(name: str):
         from src.backtesting.metrics import summarize_backtest
 
         return summarize_backtest
-    if name in {"plot_equity_curves", "save_backtest_report", "save_fold_backtest_report", "save_trade_logs"}:
-        from src.backtesting.reporting import plot_equity_curves, save_backtest_report, save_fold_backtest_report, save_trade_logs
+    if name in {"plot_equity_curves", "save_backtest_report", "save_fold_backtest_report", "save_order_report", "save_trade_logs"}:
+        from src.backtesting.reporting import (
+            plot_equity_curves,
+            save_backtest_report,
+            save_fold_backtest_report,
+            save_order_report,
+            save_trade_logs,
+        )
 
         return {
             "plot_equity_curves": plot_equity_curves,
             "save_backtest_report": save_backtest_report,
             "save_fold_backtest_report": save_fold_backtest_report,
+            "save_order_report": save_order_report,
             "save_trade_logs": save_trade_logs,
         }[name]
     raise AttributeError(name)

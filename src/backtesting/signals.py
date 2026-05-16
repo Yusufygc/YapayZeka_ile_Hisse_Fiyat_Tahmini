@@ -8,16 +8,21 @@ from typing import Tuple
 import numpy as np
 import pandas as pd
 
+from src.backtesting import signal_math
+from src.backtesting.signal_validation import validate_signal_config
+
 
 @dataclass(frozen=True)
 class SignalConfig:
     """
-    Professional long/flat signal settings.
+    Long/flat signal settings.
 
-    The defaults are intentionally conservative and include transaction-cost and
-    volatility buffers before opening a position.
+    The simple mode uses buy_threshold and sell_threshold. Professional mode
+    keeps the conservative transaction-cost and volatility buffers.
     """
 
+    buy_threshold: float = 0.0
+    sell_threshold: float = 0.0
     entry_cost_multiplier: float = 2.0
     exit_cost_multiplier: float = 1.0
     volatility_window: int = 20
@@ -76,6 +81,112 @@ def generate_long_flat_signals(
     return signals
 
 
+def generate_simple_signals(
+    pred_target: np.ndarray | None,
+    pred_price: np.ndarray,
+    prev_close: np.ndarray,
+    target_mode: str,
+    config: SignalConfig | None = None,
+) -> pd.DataFrame:
+    """
+    Generate plain AL/SAT/TUT-compatible long/flat decisions.
+
+    BUY opens a long position, EXIT closes an existing long position, and
+    HOLD/NO_TRADE preserve the current state. SELL never opens a short.
+    """
+    cfg = config or SignalConfig()
+    _validate_config(cfg)
+
+    pred_price = np.asarray(pred_price, dtype=float).ravel()
+    prev_close = np.asarray(prev_close, dtype=float).ravel()
+    expected_return = _expected_return(pred_target, pred_price, prev_close, target_mode)
+
+    n = min(len(expected_return), len(pred_price), len(prev_close))
+    expected_return = expected_return[-n:]
+
+    decisions: list[str] = []
+    recommendations: list[str] = []
+    recommendations_tr: list[str] = []
+    risk_states: list[str] = []
+    reasons: list[str] = []
+    positions = np.zeros(n, dtype=float)
+
+    in_position = False
+    buy_threshold = float(cfg.buy_threshold)
+    sell_threshold = float(cfg.sell_threshold)
+    exit_threshold = -abs(sell_threshold)
+
+    for idx in range(n):
+        exp_ret = float(expected_return[idx])
+
+        if not in_position and exp_ret > buy_threshold:
+            decision = "BUY"
+            recommendation = "BUY"
+            recommendation_tr = "AL"
+            risk_state = "simple_entry"
+            reason = (
+                f"Beklenen getiri {exp_ret:.6f}, alis esigi {buy_threshold:.6f} "
+                "uzerinde oldugu icin AL sinyali uretildi."
+            )
+            in_position = True
+        elif in_position and exp_ret < exit_threshold:
+            decision = "EXIT"
+            recommendation = "SELL"
+            recommendation_tr = "SAT"
+            risk_state = "simple_exit"
+            reason = (
+                f"Beklenen getiri {exp_ret:.6f}, satis esigi {exit_threshold:.6f} "
+                "altinda oldugu icin SAT sinyali uretildi."
+            )
+            in_position = False
+        elif in_position:
+            decision = "HOLD"
+            recommendation = "HOLD"
+            recommendation_tr = "TUT"
+            risk_state = "simple_hold"
+            reason = "Pozisyon acik ve satis esigi tetiklenmedigi icin TUT sinyali uretildi."
+        else:
+            decision = "NO_TRADE"
+            recommendation = "HOLD"
+            recommendation_tr = "TUT"
+            risk_state = "simple_flat"
+            reason = "Pozisyon yok ve alis esigi tetiklenmedigi icin TUT sinyali uretildi."
+
+        positions[idx] = 1.0 if in_position else 0.0
+        decisions.append(decision)
+        recommendations.append(recommendation)
+        recommendations_tr.append(recommendation_tr)
+        risk_states.append(risk_state)
+        reasons.append(reason)
+
+    return pd.DataFrame({
+        "Decision": decisions,
+        "Recommendation": recommendations,
+        "Recommendation_TR": recommendations_tr,
+        "Position": positions,
+        "Expected_Return": expected_return,
+        "Base_Entry_Threshold": np.full(n, buy_threshold, dtype=float),
+        "Entry_Threshold": np.full(n, buy_threshold, dtype=float),
+        "Exit_Threshold": np.full(n, exit_threshold, dtype=float),
+        "Signal_Strength": expected_return.copy(),
+        "Quality_Gate_Mode": ["simple"] * n,
+        "Quality_Threshold_Multiplier": np.ones(n, dtype=float),
+        "Market_Regime_SMA200": np.zeros(n, dtype=float),
+        "Regime_Threshold_Multiplier": np.ones(n, dtype=float),
+        "Volatility_Regime": ["simple"] * n,
+        "Volatility_Threshold_Multiplier": np.ones(n, dtype=float),
+        "Final_Threshold_Multiplier": np.ones(n, dtype=float),
+        "Rolling_Volatility": np.full(n, np.nan, dtype=float),
+        "Holding_Bars": np.zeros(n, dtype=int),
+        "Trade_Return": np.zeros(n, dtype=float),
+        "Take_Profit_Return": np.full(n, np.nan, dtype=float),
+        "Stop_Loss_Return": np.full(n, np.nan, dtype=float),
+        "Cooldown_Remaining": np.zeros(n, dtype=int),
+        "Risk_State": risk_states,
+        "Signal_Reason": reasons,
+    })
+
+
 def generate_professional_signals(
     pred_target: np.ndarray | None,
     pred_price: np.ndarray,
@@ -95,6 +206,7 @@ def generate_professional_signals(
     compatibility but is not used. Volatility, stop-loss and take-profit state
     are based on returns known before each decision.
     """
+    _ = realized_price  # Compatibility-only; do not use realized prices in signal decisions.
     cfg = config or SignalConfig()
     _validate_config(cfg)
     pred_price = np.asarray(pred_price, dtype=float).ravel()
@@ -280,60 +392,7 @@ def generate_professional_signals(
 
 
 def _validate_config(config: SignalConfig) -> None:
-    if config.entry_cost_multiplier <= 0:
-        raise ValueError("entry_cost_multiplier pozitif olmalidir.")
-    if config.exit_cost_multiplier < 0:
-        raise ValueError("exit_cost_multiplier negatif olamaz.")
-    if config.volatility_window < 2:
-        raise ValueError("volatility_window en az 2 olmalidir.")
-    if config.volatility_multiplier < 0 or config.exit_volatility_multiplier < 0:
-        raise ValueError("volatilite carpani negatif olamaz.")
-    if config.min_holding_bars < 1:
-        raise ValueError("min_holding_bars en az 1 olmalidir.")
-    if config.max_holding_bars < config.min_holding_bars:
-        raise ValueError("max_holding_bars, min_holding_bars degerinden kucuk olamaz.")
-    if config.take_profit_vol_multiplier <= 0:
-        raise ValueError("take_profit_vol_multiplier pozitif olmalidir.")
-    if config.stop_loss_vol_multiplier <= 0:
-        raise ValueError("stop_loss_vol_multiplier pozitif olmalidir.")
-    if config.cooldown_bars < 0:
-        raise ValueError("cooldown_bars negatif olamaz.")
-    if config.quality_gate_mode not in {"hard", "soft", "off"}:
-        raise ValueError("quality_gate_mode 'hard', 'soft' veya 'off' olmalidir.")
-    if config.min_directional_accuracy < 0 or config.min_directional_accuracy > 100:
-        raise ValueError("min_directional_accuracy 0-100 arasinda olmalidir.")
-    if config.max_rmse_vs_benchmark <= 0:
-        raise ValueError("max_rmse_vs_benchmark pozitif olmalidir.")
-    if config.min_composite_score < 0:
-        raise ValueError("min_composite_score negatif olamaz.")
-    if config.entry_threshold_multiplier < 1.0:
-        raise ValueError("entry_threshold_multiplier 1.0 veya daha buyuk olmalidir.")
-    if config.soft_dir_acc_low < 0 or config.soft_dir_acc_low > 100:
-        raise ValueError("soft_dir_acc_low 0-100 arasinda olmalidir.")
-    if config.soft_entry_threshold_multiplier_mid < 1.0:
-        raise ValueError("soft_entry_threshold_multiplier_mid 1.0 veya daha buyuk olmalidir.")
-    if config.soft_entry_threshold_multiplier_low < config.soft_entry_threshold_multiplier_mid:
-        raise ValueError("soft_entry_threshold_multiplier_low mid carpandan kucuk olamaz.")
-    if config.soft_rmse_penalty_full <= 0:
-        raise ValueError("soft_rmse_penalty_full pozitif olmalidir.")
-    if config.soft_composite_low < 0:
-        raise ValueError("soft_composite_low negatif olamaz.")
-    for name in [
-        "regime_bull_entry_multiplier",
-        "regime_neutral_entry_multiplier",
-        "regime_bear_entry_multiplier",
-        "volatility_low_entry_multiplier",
-        "volatility_normal_entry_multiplier",
-        "volatility_high_entry_multiplier",
-    ]:
-        if getattr(config, name) <= 0:
-            raise ValueError(f"{name} pozitif olmalidir.")
-    if not 0 <= config.volatility_low_quantile <= 1:
-        raise ValueError("volatility_low_quantile 0-1 arasinda olmalidir.")
-    if not 0 <= config.volatility_high_quantile <= 1:
-        raise ValueError("volatility_high_quantile 0-1 arasinda olmalidir.")
-    if config.volatility_low_quantile >= config.volatility_high_quantile:
-        raise ValueError("volatility_low_quantile high quantile degerinden kucuk olmalidir.")
+    validate_signal_config(config)
 
 
 def _expected_return(
@@ -342,22 +401,11 @@ def _expected_return(
     prev_close: np.ndarray,
     target_mode: str,
 ) -> np.ndarray:
-    if pred_target is not None and target_mode in {"log_return", "return"}:
-        return np.asarray(pred_target, dtype=float).ravel()
-    if target_mode == "price":
-        return (pred_price / np.maximum(prev_close, 1e-12)) - 1.0
-    if pred_target is not None:
-        return np.asarray(pred_target, dtype=float).ravel()
-    return (pred_price / np.maximum(prev_close, 1e-12)) - 1.0
+    return signal_math.expected_return(pred_target, pred_price, prev_close, target_mode)
 
 
 def _expected_return_to_simple_return(expected_return: np.ndarray, target_mode: str) -> np.ndarray:
-    expected_return = np.asarray(expected_return, dtype=float).ravel()
-    if target_mode == "log_return":
-        return np.expm1(expected_return)
-    if target_mode == "return":
-        return expected_return
-    return expected_return
+    return signal_math.expected_return_to_simple_return(expected_return, target_mode)
 
 
 def _recommendation_from_decision(
@@ -365,50 +413,16 @@ def _recommendation_from_decision(
     expected_return: float,
     entry_threshold: float,
 ) -> tuple[str, str]:
-    if decision == "BUY":
-        return "BUY", "AL"
-    if decision == "EXIT":
-        return "SELL", "SAT"
-    if decision == "NO_TRADE" and expected_return < -abs(entry_threshold):
-        return "SELL", "SAT"
-    return "HOLD", "TUT"
+    return signal_math.recommendation_from_decision(decision, expected_return, entry_threshold)
 
 
 def _rolling_volatility(returns: np.ndarray, window: int) -> np.ndarray:
-    returns = np.asarray(returns, dtype=float).ravel()
-    if len(returns) == 0:
-        return returns
-
-    window = max(2, int(window))
-    vol = pd.Series(returns).rolling(window=window, min_periods=2).std()
-    fallback = 1e-6
-    vol = vol.fillna(fallback).replace(0.0, fallback)
-    return vol.to_numpy(dtype=float)
+    return signal_math.rolling_volatility(returns, window)
 
 
 def _regime_entry_multiplier(market_regime: np.ndarray, config: SignalConfig) -> np.ndarray:
-    regime = np.asarray(market_regime, dtype=float).ravel()
-    multiplier = np.full(len(regime), config.regime_neutral_entry_multiplier, dtype=float)
-    multiplier[regime > 0] = config.regime_bull_entry_multiplier
-    multiplier[regime < 0] = config.regime_bear_entry_multiplier
-    return multiplier
+    return signal_math.regime_entry_multiplier(market_regime, config)
 
 
 def _volatility_entry_multiplier(rolling_vol: np.ndarray, config: SignalConfig) -> tuple[np.ndarray, np.ndarray]:
-    vol = np.asarray(rolling_vol, dtype=float).ravel()
-    regimes = np.full(len(vol), "normal_vol", dtype=object)
-    multipliers = np.full(len(vol), config.volatility_normal_entry_multiplier, dtype=float)
-    for idx in range(len(vol)):
-        history = vol[: idx + 1]
-        history = history[np.isfinite(history)]
-        if history.size < max(5, config.volatility_window // 2):
-            continue
-        low = float(np.quantile(history, config.volatility_low_quantile))
-        high = float(np.quantile(history, config.volatility_high_quantile))
-        if vol[idx] <= low:
-            regimes[idx] = "low_vol"
-            multipliers[idx] = config.volatility_low_entry_multiplier
-        elif vol[idx] >= high:
-            regimes[idx] = "high_vol"
-            multipliers[idx] = config.volatility_high_entry_multiplier
-    return regimes, multipliers
+    return signal_math.volatility_entry_multiplier(rolling_vol, config)

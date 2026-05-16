@@ -8,8 +8,11 @@ from typing import Dict, Tuple
 import pandas as pd
 
 try:
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
-except ImportError:  # pragma: no cover - plotting is skipped in minimal runtimes
+except Exception:  # pragma: no cover - plotting is skipped in minimal/headless runtimes
     plt = None
 
 from src.backtesting.metrics import summarize_backtest
@@ -79,6 +82,25 @@ FOLD_BACKTEST_COLUMNS = [
     "Turnover",
     "Trade_Count",
     "Avg_Holding_Period",
+]
+
+BACKTEST_ORDER_COLUMNS = [
+    "Model",
+    "Prediction_Date",
+    "Date",
+    "Execution_Date",
+    "Executable_Order_TR",
+    "Executable_Order",
+    "Previous_Position",
+    "New_Position",
+    "Decision",
+    "Recommendation_TR",
+    "Expected_Return",
+    "Realized_Return",
+    "Entry_Threshold",
+    "Exit_Threshold",
+    "Risk_State",
+    "Order_Reason",
 ]
 
 
@@ -287,6 +309,26 @@ def save_trade_logs(trades_by_model: Dict[str, pd.DataFrame], save_path: str) ->
     combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     output_paths = write_csv_and_aligned_view(combined, save_path)
     print(f"[OK] Backtest trade log kaydedildi -> {output_paths['csv']}")
+    return combined
+
+
+def save_order_report(equity_curves: Dict[str, pd.DataFrame], save_path: str) -> pd.DataFrame:
+    frames = []
+    for model_name, curve in equity_curves.items():
+        if curve is None or curve.empty:
+            continue
+        frame = curve.copy()
+        if "Model" not in frame.columns:
+            frame.insert(0, "Model", model_name)
+        if "Execution_Date" not in frame.columns and "Date" in frame.columns:
+            frame["Execution_Date"] = frame["Date"]
+        if "Order_Reason" not in frame.columns and "Signal_Reason" in frame.columns:
+            frame["Order_Reason"] = frame["Signal_Reason"]
+        frames.append(frame)
+
+    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=BACKTEST_ORDER_COLUMNS)
+    output_paths = write_csv_and_aligned_view(combined, save_path, columns=BACKTEST_ORDER_COLUMNS)
+    print(f"[OK] Backtest emir raporu kaydedildi -> {output_paths['csv']}")
     return combined
 
 

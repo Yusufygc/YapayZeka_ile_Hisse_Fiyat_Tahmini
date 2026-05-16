@@ -8,7 +8,17 @@ from typing import Any, Dict
 import numpy as np
 import pandas as pd
 
-from src.backtesting.signals import SignalConfig, generate_long_flat_signals, generate_professional_signals
+from src.backtesting import equity as equity_helpers
+from src.backtesting import execution as execution_helpers
+from src.backtesting import trades as trade_helpers
+from src.backtesting.signals import (
+    SignalConfig,
+    generate_long_flat_signals,
+    generate_professional_signals,
+    generate_simple_signals,
+)
+
+SIGNAL_FRAME_COLUMNS = equity_helpers.SIGNAL_FRAME_COLUMNS
 
 
 def run_backtest(
@@ -24,9 +34,9 @@ def run_backtest(
     validation_mode: str,
     target_mode: str,
     pred_target=None,
-    commission_bps: float = 10.0,
-    slippage_bps: float = 5.0,
-    signal_mode: str = "legacy",
+    commission_bps: float = 0.0,
+    slippage_bps: float = 0.0,
+    signal_mode: str = "simple",
     signal_config: SignalConfig | None = None,
     model_metrics: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
@@ -81,182 +91,93 @@ def run_backtest(
     observed_returns = np.concatenate(([0.0], realized_returns[:-1]))
     buy_hold_equity = np.cumprod(1.0 + realized_returns)
 
-    signal_mode = signal_mode.lower()
-    if signal_mode == "legacy":
-        signals = generate_long_flat_signals(
-            pred_target=pred_target_arr,
-            pred_price=pred_price,
-            prev_close=prev_close,
-            target_mode=target_mode,
-        )
-        decision_positions = signals.copy()
-        signal_frame = _legacy_signal_frame(signals, n)
-    elif signal_mode == "professional":
-        cfg = signal_config or SignalConfig()
-        block_reason, block_state = _professional_trade_block(model_name, model_metrics or {}, cfg)
-        if block_reason:
-            signal_frame = _blocked_signal_frame(n, block_reason, block_state)
-        else:
-            cfg, quality_reason = _apply_soft_quality_gate(model_metrics or {}, cfg)
-            signal_frame = generate_professional_signals(
-                pred_target=pred_target_arr,
-                pred_price=pred_price,
-                prev_close=prev_close,
-                target_mode=target_mode,
-                observed_returns=observed_returns,
-                market_regime=market_regime_arr,
-                commission_bps=commission_bps,
-                slippage_bps=slippage_bps,
-                config=cfg,
-            ).reset_index(drop=True)
-            if quality_reason:
-                signal_frame["Quality_Gate_Reason"] = quality_reason
-        decision_positions = signal_frame["Position"].to_numpy(dtype=float)
-        signals = (signal_frame["Decision"].isin(["BUY", "HOLD"]).to_numpy(dtype=float))
-    elif signal_mode in {"rejected_no_trade", "no_trade"}:
-        signal_frame = _blocked_signal_frame(
-            n,
-            "Walk-forward OOS confirmation gate rejected this model; no production trade is allowed.",
-            "rejected_no_trade",
-        )
-        decision_positions = signal_frame["Position"].to_numpy(dtype=float)
-        signals = np.zeros(n, dtype=float)
-    else:
-        raise ValueError(f"Desteklenmeyen signal_mode: {signal_mode}. Beklenen: legacy, professional, rejected_no_trade")
+    signal_mode, signal_frame, decision_positions, signals = _build_signal_frame(
+        signal_mode=signal_mode,
+        n=n,
+        pred_target_arr=pred_target_arr,
+        pred_price=pred_price,
+        prev_close=prev_close,
+        target_mode=target_mode,
+        observed_returns=observed_returns,
+        market_regime_arr=market_regime_arr,
+        commission_bps=commission_bps,
+        slippage_bps=slippage_bps,
+        signal_config=signal_config,
+        model_name=model_name,
+        model_metrics=model_metrics or {},
+    )
 
-    execution_positions = decision_positions.copy()
-    previous_execution_positions = np.concatenate(([0.0], execution_positions[:-1]))
-    entry_events = ((previous_execution_positions == 0.0) & (execution_positions == 1.0)).astype(float)
-    exit_events = ((previous_execution_positions == 1.0) & (execution_positions == 0.0)).astype(float)
-
-    forced_exit_events = np.zeros(n, dtype=float)
-    if execution_positions[-1] == 1.0:
-        forced_exit_events[-1] = 1.0
-    exit_events_for_cost = exit_events + forced_exit_events
-
-    commission_rate = commission_bps / 10000.0
-    slippage_rate = slippage_bps / 10000.0
-    entry_commission_costs = entry_events * commission_rate
-    exit_commission_costs = exit_events_for_cost * commission_rate
-    entry_slippage_costs = entry_events * slippage_rate
-    exit_slippage_costs = exit_events_for_cost * slippage_rate
-    commission_costs = entry_commission_costs + exit_commission_costs
-    slippage_costs = entry_slippage_costs + exit_slippage_costs
-    entry_transaction_costs = entry_commission_costs + entry_slippage_costs
-    exit_transaction_costs = exit_commission_costs + exit_slippage_costs
-    transaction_costs = entry_transaction_costs + exit_transaction_costs
-    position_changes = entry_events + exit_events_for_cost
-
-    gross_strategy_returns = execution_positions * realized_returns
-    net_strategy_returns = gross_strategy_returns - transaction_costs
+    execution = _execution_arrays(decision_positions)
+    costs = _cost_arrays(
+        entry_events=execution["entry_events"],
+        exit_events_for_cost=execution["exit_events_for_cost"],
+        commission_bps=commission_bps,
+        slippage_bps=slippage_bps,
+    )
+    gross_strategy_returns = execution["positions"] * realized_returns
+    net_strategy_returns = gross_strategy_returns - costs["transaction_costs"]
     equity = np.cumprod(1.0 + net_strategy_returns)
 
-    trade_rows = []
-    entry_idx = None
-    for idx in range(n):
-        current_position = execution_positions[idx]
-        prev_position = execution_positions[idx - 1] if idx > 0 else 0.0
-        opened = prev_position == 0.0 and current_position == 1.0
-        closed = prev_position == 1.0 and current_position == 0.0
+    execution_positions = execution["positions"]
+    previous_execution_positions = execution["previous_positions"]
+    entry_events = execution["entry_events"]
+    exit_events = execution["exit_events"]
+    exit_events_for_cost = execution["exit_events_for_cost"]
+    position_changes = execution["position_changes"]
+    transaction_costs = costs["transaction_costs"]
+    commission_costs = costs["commission_costs"]
+    slippage_costs = costs["slippage_costs"]
+    entry_transaction_costs = costs["entry_transaction_costs"]
+    exit_transaction_costs = costs["exit_transaction_costs"]
 
-        if opened:
-            entry_idx = idx
-        if closed and entry_idx is not None:
-            gross_trade_return = float(np.prod(1.0 + realized_returns[entry_idx:idx]) - 1.0)
-            net_trade_return = float(np.prod(1.0 + net_strategy_returns[entry_idx:idx]) - 1.0)
-            trade_rows.append({
-                "Model": model_name,
-                "Fold": fold_id_arr[entry_idx],
-                "Entry_Prediction_Date": prediction_dates[entry_idx],
-                "Entry_Date": dates[entry_idx],
-                "Exit_Prediction_Date": prediction_dates[idx],
-                "Exit_Date": dates[idx],
-                "Entry_Price": float(prev_close[entry_idx]),
-                "Exit_Price": float(prev_close[idx]),
-                "Gross_Return": gross_trade_return,
-                "Net_Return": net_trade_return,
-                "Holding_Period": int(idx - entry_idx),
-                "Entry_Reason": _signal_value(signal_frame, entry_idx, "Signal_Reason"),
-                "Exit_Reason": _signal_value(signal_frame, idx, "Signal_Reason"),
-            })
-            entry_idx = None
+    trade_rows = _trade_rows(
+        n=n,
+        model_name=model_name,
+        fold_id_arr=fold_id_arr,
+        dates=dates,
+        prediction_dates=prediction_dates,
+        prev_close=prev_close,
+        prices=prices,
+        realized_returns=realized_returns,
+        net_strategy_returns=net_strategy_returns,
+        execution_positions=execution_positions,
+        signal_frame=signal_frame,
+    )
 
-    if entry_idx is not None:
-        gross_trade_return = float(np.prod(1.0 + realized_returns[entry_idx:]) - 1.0)
-        net_trade_return = float(np.prod(1.0 + net_strategy_returns[entry_idx:]) - 1.0)
-        trade_rows.append({
-            "Model": model_name,
-            "Fold": fold_id_arr[entry_idx],
-            "Entry_Prediction_Date": prediction_dates[entry_idx],
-            "Entry_Date": dates[entry_idx],
-            "Exit_Prediction_Date": prediction_dates[-1],
-            "Exit_Date": dates[-1],
-            "Entry_Price": float(prev_close[entry_idx]),
-            "Exit_Price": float(prices[-1]),
-            "Gross_Return": gross_trade_return,
-            "Net_Return": net_trade_return,
-            "Holding_Period": int((n - 1) - entry_idx),
-            "Entry_Reason": _signal_value(signal_frame, entry_idx, "Signal_Reason"),
-            "Exit_Reason": "Test donemi sonunda acik pozisyon kapatildi.",
-        })
+    equity_curve = _build_equity_curve(
+        prediction_dates=prediction_dates,
+        dates=dates,
+        equity=equity,
+        buy_hold_equity=buy_hold_equity,
+        execution_positions=execution_positions,
+        decision_positions=decision_positions,
+        signals=signals,
+        gross_strategy_returns=gross_strategy_returns,
+        net_strategy_returns=net_strategy_returns,
+        transaction_costs=transaction_costs,
+        commission_costs=commission_costs,
+        slippage_costs=slippage_costs,
+        entry_transaction_costs=entry_transaction_costs,
+        exit_transaction_costs=exit_transaction_costs,
+        entry_events=entry_events,
+        exit_events_for_cost=exit_events_for_cost,
+        realized_returns=realized_returns,
+        observed_returns=observed_returns,
+        pred_price=pred_price,
+        prices=prices,
+        prev_close=prev_close,
+        fold_id_arr=fold_id_arr,
+        pred_target_arr=pred_target_arr,
+        signal_frame=signal_frame,
+    )
 
-    equity_curve = pd.DataFrame({
-        "Prediction_Date": prediction_dates,
-        "Date": dates,
-        "Execution_Date": dates,
-        "Realized_Return_Date": dates,
-        "Equity": equity,
-        "BuyHold_Equity": buy_hold_equity,
-        "Position": execution_positions,
-        "Desired_Position": decision_positions,
-        "Signal": signals,
-        "Gross_Return": gross_strategy_returns,
-        "Net_Return": net_strategy_returns,
-        "Transaction_Cost": transaction_costs,
-        "Commission_Cost": commission_costs,
-        "Slippage_Cost": slippage_costs,
-        "Entry_Transaction_Cost": entry_transaction_costs,
-        "Exit_Transaction_Cost": exit_transaction_costs,
-        "Entry_Event": entry_events,
-        "Exit_Event": exit_events_for_cost,
-        "Realized_Return": realized_returns,
-        "Observed_Return_At_Decision": observed_returns,
-        "Predicted_Price": pred_price,
-        "Actual_Price": prices,
-        "Prev_Close": prev_close,
-        "Fold": fold_id_arr,
-    })
-    if pred_target_arr is not None:
-        equity_curve["Predicted_Target"] = pred_target_arr
-
-    for column in [
-        "Decision",
-        "Recommendation",
-        "Recommendation_TR",
-        "Expected_Return",
-        "Base_Entry_Threshold",
-        "Entry_Threshold",
-        "Exit_Threshold",
-        "Signal_Strength",
-        "Quality_Gate_Mode",
-        "Quality_Threshold_Multiplier",
-        "Quality_Gate_Reason",
-        "Market_Regime_SMA200",
-        "Regime_Threshold_Multiplier",
-        "Volatility_Regime",
-        "Volatility_Threshold_Multiplier",
-        "Final_Threshold_Multiplier",
-        "Rolling_Volatility",
-        "Holding_Bars",
-        "Trade_Return",
-        "Take_Profit_Return",
-        "Stop_Loss_Return",
-        "Cooldown_Remaining",
-        "Risk_State",
-        "Signal_Reason",
-    ]:
-        if column in signal_frame.columns:
-            equity_curve[column] = signal_frame[column].to_numpy()
+    _attach_executable_orders(
+        equity_curve,
+        previous_execution_positions=previous_execution_positions,
+        execution_positions=execution_positions,
+        entry_events=entry_events,
+        exit_events=exit_events,
+    )
 
     return {
         "model_name": model_name,
@@ -276,6 +197,281 @@ def run_backtest(
             "signal_frame": signal_frame,
         },
     }
+
+
+def _build_equity_curve(
+    *,
+    prediction_dates: pd.Index,
+    dates: pd.Index,
+    equity: np.ndarray,
+    buy_hold_equity: np.ndarray,
+    execution_positions: np.ndarray,
+    decision_positions: np.ndarray,
+    signals: np.ndarray,
+    gross_strategy_returns: np.ndarray,
+    net_strategy_returns: np.ndarray,
+    transaction_costs: np.ndarray,
+    commission_costs: np.ndarray,
+    slippage_costs: np.ndarray,
+    entry_transaction_costs: np.ndarray,
+    exit_transaction_costs: np.ndarray,
+    entry_events: np.ndarray,
+    exit_events_for_cost: np.ndarray,
+    realized_returns: np.ndarray,
+    observed_returns: np.ndarray,
+    pred_price: np.ndarray,
+    prices: np.ndarray,
+    prev_close: np.ndarray,
+    fold_id_arr: np.ndarray,
+    pred_target_arr: np.ndarray | None,
+    signal_frame: pd.DataFrame,
+) -> pd.DataFrame:
+    return equity_helpers.build_equity_curve(
+        prediction_dates=prediction_dates,
+        dates=dates,
+        equity=equity,
+        buy_hold_equity=buy_hold_equity,
+        execution_positions=execution_positions,
+        decision_positions=decision_positions,
+        signals=signals,
+        gross_strategy_returns=gross_strategy_returns,
+        net_strategy_returns=net_strategy_returns,
+        transaction_costs=transaction_costs,
+        commission_costs=commission_costs,
+        slippage_costs=slippage_costs,
+        entry_transaction_costs=entry_transaction_costs,
+        exit_transaction_costs=exit_transaction_costs,
+        entry_events=entry_events,
+        exit_events_for_cost=exit_events_for_cost,
+        realized_returns=realized_returns,
+        observed_returns=observed_returns,
+        pred_price=pred_price,
+        prices=prices,
+        prev_close=prev_close,
+        fold_id_arr=fold_id_arr,
+        pred_target_arr=pred_target_arr,
+        signal_frame=signal_frame,
+    )
+
+
+def _attach_signal_columns(equity_curve: pd.DataFrame, signal_frame: pd.DataFrame) -> None:
+    equity_helpers.attach_signal_columns(equity_curve, signal_frame)
+
+
+def _execution_arrays(decision_positions: np.ndarray) -> Dict[str, np.ndarray]:
+    return execution_helpers.execution_arrays(decision_positions)
+
+
+def _cost_arrays(
+    *,
+    entry_events: np.ndarray,
+    exit_events_for_cost: np.ndarray,
+    commission_bps: float,
+    slippage_bps: float,
+) -> Dict[str, np.ndarray]:
+    return execution_helpers.cost_arrays(
+        entry_events=entry_events,
+        exit_events_for_cost=exit_events_for_cost,
+        commission_bps=commission_bps,
+        slippage_bps=slippage_bps,
+    )
+
+
+def _trade_rows(
+    *,
+    n: int,
+    model_name: str,
+    fold_id_arr: np.ndarray,
+    dates: pd.Index,
+    prediction_dates: pd.Index,
+    prev_close: np.ndarray,
+    prices: np.ndarray,
+    realized_returns: np.ndarray,
+    net_strategy_returns: np.ndarray,
+    execution_positions: np.ndarray,
+    signal_frame: pd.DataFrame,
+) -> list[Dict[str, Any]]:
+    return trade_helpers.trade_rows(
+        n=n,
+        model_name=model_name,
+        fold_id_arr=fold_id_arr,
+        dates=dates,
+        prediction_dates=prediction_dates,
+        prev_close=prev_close,
+        prices=prices,
+        realized_returns=realized_returns,
+        net_strategy_returns=net_strategy_returns,
+        execution_positions=execution_positions,
+        signal_frame=signal_frame,
+    )
+
+
+def _closed_trade_row(
+    *,
+    model_name: str,
+    fold_id: object,
+    entry_idx: int,
+    exit_idx: int,
+    dates: pd.Index,
+    prediction_dates: pd.Index,
+    prev_close: np.ndarray,
+    realized_returns: np.ndarray,
+    net_strategy_returns: np.ndarray,
+    signal_frame: pd.DataFrame,
+) -> Dict[str, Any]:
+    return trade_helpers.closed_trade_row(
+        model_name=model_name,
+        fold_id=fold_id,
+        entry_idx=entry_idx,
+        exit_idx=exit_idx,
+        dates=dates,
+        prediction_dates=prediction_dates,
+        prev_close=prev_close,
+        realized_returns=realized_returns,
+        net_strategy_returns=net_strategy_returns,
+        signal_frame=signal_frame,
+    )
+
+
+def _terminal_trade_row(
+    *,
+    model_name: str,
+    fold_id: object,
+    entry_idx: int,
+    n: int,
+    dates: pd.Index,
+    prediction_dates: pd.Index,
+    prev_close: np.ndarray,
+    prices: np.ndarray,
+    realized_returns: np.ndarray,
+    net_strategy_returns: np.ndarray,
+    signal_frame: pd.DataFrame,
+) -> Dict[str, Any]:
+    return trade_helpers.terminal_trade_row(
+        model_name=model_name,
+        fold_id=fold_id,
+        entry_idx=entry_idx,
+        n=n,
+        dates=dates,
+        prediction_dates=prediction_dates,
+        prev_close=prev_close,
+        prices=prices,
+        realized_returns=realized_returns,
+        net_strategy_returns=net_strategy_returns,
+        signal_frame=signal_frame,
+    )
+
+
+def _build_signal_frame(
+    *,
+    signal_mode: str,
+    n: int,
+    pred_target_arr: np.ndarray | None,
+    pred_price: np.ndarray,
+    prev_close: np.ndarray,
+    target_mode: str,
+    observed_returns: np.ndarray,
+    market_regime_arr: np.ndarray,
+    commission_bps: float,
+    slippage_bps: float,
+    signal_config: SignalConfig | None,
+    model_name: str,
+    model_metrics: Dict[str, Any],
+) -> tuple[str, pd.DataFrame, np.ndarray, np.ndarray]:
+    normalized_mode = signal_mode.lower()
+    if normalized_mode == "simple":
+        signal_frame = generate_simple_signals(
+            pred_target=pred_target_arr,
+            pred_price=pred_price,
+            prev_close=prev_close,
+            target_mode=target_mode,
+            config=signal_config,
+        ).reset_index(drop=True)
+        decision_positions = signal_frame["Position"].to_numpy(dtype=float)
+        signals = (decision_positions > 0.0).astype(float)
+        return normalized_mode, signal_frame, decision_positions, signals
+
+    if normalized_mode == "legacy":
+        signals = generate_long_flat_signals(
+            pred_target=pred_target_arr,
+            pred_price=pred_price,
+            prev_close=prev_close,
+            target_mode=target_mode,
+        )
+        decision_positions = signals.copy()
+        signal_frame = _legacy_signal_frame(signals, n)
+        return normalized_mode, signal_frame, decision_positions, signals
+
+    if normalized_mode == "professional":
+        signal_frame = _professional_signal_frame(
+            n=n,
+            pred_target_arr=pred_target_arr,
+            pred_price=pred_price,
+            prev_close=prev_close,
+            target_mode=target_mode,
+            observed_returns=observed_returns,
+            market_regime_arr=market_regime_arr,
+            commission_bps=commission_bps,
+            slippage_bps=slippage_bps,
+            signal_config=signal_config,
+            model_name=model_name,
+            model_metrics=model_metrics,
+        )
+        decision_positions = signal_frame["Position"].to_numpy(dtype=float)
+        signals = signal_frame["Decision"].isin(["BUY", "HOLD"]).to_numpy(dtype=float)
+        return normalized_mode, signal_frame, decision_positions, signals
+
+    if normalized_mode in {"rejected_no_trade", "no_trade"}:
+        signal_frame = _blocked_signal_frame(
+            n,
+            "Walk-forward OOS confirmation gate rejected this model; no production trade is allowed.",
+            "rejected_no_trade",
+        )
+        decision_positions = signal_frame["Position"].to_numpy(dtype=float)
+        signals = np.zeros(n, dtype=float)
+        return normalized_mode, signal_frame, decision_positions, signals
+
+    raise ValueError(
+        f"Desteklenmeyen signal_mode: {signal_mode}. "
+        "Beklenen: simple, legacy, professional, rejected_no_trade"
+    )
+
+
+def _professional_signal_frame(
+    *,
+    n: int,
+    pred_target_arr: np.ndarray | None,
+    pred_price: np.ndarray,
+    prev_close: np.ndarray,
+    target_mode: str,
+    observed_returns: np.ndarray,
+    market_regime_arr: np.ndarray,
+    commission_bps: float,
+    slippage_bps: float,
+    signal_config: SignalConfig | None,
+    model_name: str,
+    model_metrics: Dict[str, Any],
+) -> pd.DataFrame:
+    cfg = signal_config or SignalConfig()
+    block_reason, block_state = _professional_trade_block(model_name, model_metrics, cfg)
+    if block_reason:
+        return _blocked_signal_frame(n, block_reason, block_state)
+
+    cfg, quality_reason = _apply_soft_quality_gate(model_metrics, cfg)
+    signal_frame = generate_professional_signals(
+        pred_target=pred_target_arr,
+        pred_price=pred_price,
+        prev_close=prev_close,
+        target_mode=target_mode,
+        observed_returns=observed_returns,
+        market_regime=market_regime_arr,
+        commission_bps=commission_bps,
+        slippage_bps=slippage_bps,
+        config=cfg,
+    ).reset_index(drop=True)
+    if quality_reason:
+        signal_frame["Quality_Gate_Reason"] = quality_reason
+    return signal_frame
 
 
 def _legacy_signal_frame(signals: np.ndarray, n: int) -> pd.DataFrame:
@@ -299,6 +495,23 @@ def _legacy_signal_frame(signals: np.ndarray, n: int) -> pd.DataFrame:
             "Legacy mod: tahmin pozitif olmadigi icin pozisyon yok.",
         ),
     })
+
+
+def _attach_executable_orders(
+    equity_curve: pd.DataFrame,
+    *,
+    previous_execution_positions: np.ndarray,
+    execution_positions: np.ndarray,
+    entry_events: np.ndarray,
+    exit_events: np.ndarray,
+) -> None:
+    execution_helpers.attach_executable_orders(
+        equity_curve,
+        previous_execution_positions=previous_execution_positions,
+        execution_positions=execution_positions,
+        entry_events=entry_events,
+        exit_events=exit_events,
+    )
 
 
 def _blocked_signal_frame(n: int, reason: str, risk_state: str) -> pd.DataFrame:
@@ -427,6 +640,4 @@ def _metric_float(value: Any) -> float:
 
 
 def _signal_value(signal_frame: pd.DataFrame, idx: int, column: str) -> object:
-    if column not in signal_frame.columns or idx < 0 or idx >= len(signal_frame):
-        return ""
-    return signal_frame.iloc[idx][column]
+    return trade_helpers.signal_value(signal_frame, idx, column)
