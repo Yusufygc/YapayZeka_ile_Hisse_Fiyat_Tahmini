@@ -186,7 +186,6 @@ Tüm modeller `BaseModel` arayüzünden türer ve `train()`, `predict()`, `save(
 |---|---|---|
 | `DLinearSequenceModel` | `linear_sequence_model.py` | 3D diziler üzerinde hafif lineer |
 | `NLinearSequenceModel` | `linear_sequence_model.py` | Normalize edilmiş lineer (son değer çıkarılır) |
-| `PatchTSTExperimentalModel` | `linear_sequence_model.py` | Patch tabanlı; değerlendirme hazır, üretim değil |
 
 ---
 
@@ -194,18 +193,25 @@ Tüm modeller `BaseModel` arayüzünden türer ve `train()`, `predict()`, `save(
 
 ### 5.1 Sinyal Üretimi
 
-İki sinyal modu desteklenir:
+Üç sinyal modu desteklenir:
 
-**`professional` (varsayılan):** Yön doğruluğu ve volatilite kapıları devreye girer. Kapı eşiklerini (`min_directional_accuracy`, `max_rmse_vs_benchmark`, `min_composite_score`) geçemeyen modeller sinyal üretmez. Bu, düşük kaliteli tahminlerin otomatik alım-satım kararına dönüşmesini engeller.
+**`simple` (varsayılan):** Maliyetsiz long/flat AL/SAT/TUT modu. Beklenen getiri
+`buy_threshold` üstündeyse ve pozisyon yoksa AL, beklenen getiri
+`-sell_threshold` altındaysa ve pozisyon varsa SAT, diğer durumlarda TUT
+üretilir. Varsayılan eşikler `0.0` ve komisyon/slippage `0.0`'dır.
 
-**`legacy`:** Basit long/flat sinyal üretimi. Geriye dönük karşılaştırma için.
+**`professional` (opt-in araştırma modu):** Yön doğruluğu, kalite kapıları,
+volatilite, holding period, take-profit ve stop-loss mantığı devreye girer.
+
+**`legacy`:** Tarihsel direction-only long/flat karşılaştırma modu.
 
 ### 5.2 Backtest Motoru
 
 `src/backtesting/engine.py` — `run_backtest()` fonksiyonu:
 
-- Sinyalden pozisyon boyutu hesaplar
-- Her işlemde komisyon (`commission_bps`) ve kayma (`slippage_bps`) maliyetleri düşer
+- Sinyalden long/flat pozisyon durumunu hesaplar
+- Varsayılan basit modda komisyon (`commission_bps`) ve kayma (`slippage_bps`) 0 kalır
+- İstenirse non-zero komisyon/kayma parametreleriyle maliyetli senaryo çalıştırabilir
 - Günlük P&L, drawdown ve kümülatif getiri dizisi üretir
 
 **Neden BPS (baz puan)?** BIST'te işlem komisyonları küçük görünse de yüksek frekanslı stratejilerde kümülatif maliyetler getiriyi ciddi erozya yaratır. BPS cinsinden parametrik tanım, gerçekçi simülasyon sağlar.
@@ -225,6 +231,9 @@ Standart Sharpe Ratio ve Max Drawdown'ın ötesinde:
 
 `src/backtesting/monte_carlo.py` — `bootstrap_backtest()` fonksiyonu:
 
+> Not: Bu modül aktif pipeline akışına bağlı değildir; bağımsız araştırma
+> yardımcısı olarak korunur.
+
 Gerçek sinyal vektörü 1000 kez karıştırılarak rastgele bir strateji dağılımı oluşturulur. Gerçek stratejinin bu dağılımın kaçıncı yüzdeliğinde olduğu ve p-değeri raporlanır.
 
 **Neden?** Yüksek Sharpe Ratio elde etmek şansla da mümkündür; özellikle kısa test dönemlerinde. Monte Carlo, "bu sonuç rastgele olabilir mi?" sorusunu istatistiksel olarak test eder. `p_value < 0.05` ise strateji %95 güven düzeyinde şansın ötesinde performans gösteriyor demektir.
@@ -232,6 +241,10 @@ Gerçek sinyal vektörü 1000 kez karıştırılarak rastgele bir strateji dağ�
 ### 5.5 Kelly Kriterli Pozisyon Boyutlandırma
 
 `src/backtesting/position_sizing.py`:
+
+> Not: Bu modül aktif pipeline akışına bağlı değildir. Mevcut varsayılan ürün
+> kapsamı kaldıraçsız long/flat AL/SAT/TUT olduğu için pozisyon boyutlandırma
+> üretim sinyalinde kullanılmaz.
 
 ```
 f* = (p × b − q) / b     [tam Kelly]
@@ -266,6 +279,9 @@ Sinyal eşikleri yalnızca walk-forward fold eğitim verisi üzerinde kalibre ed
 
 `src/evaluation/permutation_test.py`:
 
+> Not: Bu modül aktif pipeline akışına bağlı değildir; bağımsız model analiz
+> yardımcısı olarak korunur.
+
 Her özellik için değerler karıştırılır ve model RMSE'si ölçülür. `Önem = Permüte_RMSE − Orijinal_RMSE`. Önem sıfıra yakınsa özellik modele katkı sağlamıyor demektir.
 
 **Neden?** SHAP değerleri model-spesifiktir ve yorumlanması zor olabilir. Permütasyon önem testi model-agnostiktir: herhangi bir modele uygulanabilir, sezgiseldir. BIST bağlamında "Hangi özellikler gerçekten tahmin gücü katıyor?" sorusunun güvenilir cevabıdır.
@@ -293,7 +309,7 @@ Bu proje, deneysel bir prototipten başlayarak altı faz boyunca sistematik olar
 
 **Yapılanlar:**
 - Lineer modeller eklendi: `RidgeReturnModel`, `ElasticNetReturnModel`
-- Deneysel sequence baseline'ları: `DLinearSequenceModel`, `NLinearSequenceModel`, `PatchTSTExperimentalModel`
+- Deneysel sequence baseline'ları: `DLinearSequenceModel`, `NLinearSequenceModel`
 - Tüm modeller `BaseModel` arayüzüne bağlandı; herhangi bir model eklenebilir/çıkarılabilir.
 - Opsiyonel bağımlılıklar sessizce atlanır (LightGBM, Prophet, TF, PyTorch olmadığında pipeline çalışmaya devam eder).
 
@@ -343,11 +359,11 @@ Bu proje, deneysel bir prototipten başlayarak altı faz boyunca sistematik olar
 **Problem:** "Model iyi tahmin ediyor" ile "strateji gerçekten para kazandırıyor" arasındaki boşluğu kapatmak gerekiyordu. Sharpe Ratio tek başına yeterli değildi.
 
 **Yapılanlar:**
-- Monte Carlo Bootstrap (`src/backtesting/monte_carlo.py`)
-- Kelly Kriterli Pozisyon Boyutlandırma (`src/backtesting/position_sizing.py`)
+- Monte Carlo Bootstrap (`src/backtesting/monte_carlo.py`, aktif pipeline dışı araştırma yardımcısı)
+- Kelly Kriterli Pozisyon Boyutlandırma (`src/backtesting/position_sizing.py`, aktif pipeline dışı)
 - Dinamik Risksiz Oran (`src/utils/risk_free_rate.py`)
 - Gelişmiş Backtest Metrikleri: Omega Ratio, Recovery Factor, Max Consecutive Loss, Information Ratio
-- Permütasyon Önem Testi (`src/evaluation/permutation_test.py`)
+- Permütasyon Önem Testi (`src/evaluation/permutation_test.py`, aktif pipeline dışı analiz yardımcısı)
 - Sinyal kalibrasyon kilit mekanizması (`calibration_scope`, `_assert_wf_train_scope`)
 
 **Bu işe ne yarar?** Bir stratejiyi değerlendirirken artık şu soruların tamamına yanıt alınabilir:
@@ -586,9 +602,9 @@ Tüm konfigürasyon `PipelineConfig` dataclass hiyerarşisi üzerinden yönetili
 |---|---|---|
 | `backtest_enabled` | `True` | Backtest çalıştırılsın mı? |
 | `initial_capital` | `100,000` | Başlangıç sermayesi (TL) |
-| `commission_bps` | `10.0` | Komisyon (baz puan) |
-| `slippage_bps` | `5.0` | Kayma maliyeti (baz puan) |
-| `signal_mode` | `professional` | `professional` veya `legacy` |
+| `commission_bps` | `0.0` | Varsayılan basit modda komisyon kapalı |
+| `slippage_bps` | `0.0` | Varsayılan basit modda kayma maliyeti kapalı |
+| `signal_mode` | `simple` | `simple`, `professional` veya `legacy` |
 | `calibration_scope` | `wf_train` | **Değiştirme:** Sızıntı koruma kilidi |
 
 ---

@@ -3,6 +3,10 @@
 /models
 /docs/*
 !/docs/glossary.md
+.codex
+graphify-out
+_make_report.py
+rapor.docx
 
 /stock_models.db
 /data/stock_models.db
@@ -27,6 +31,7 @@ batch_summary_*.json
 # AI asistan talimat dosyaları (proje dökümantasyonu değil)
 CLAUDE.md
 AGENTS.md
+RULES.md
 
 # Python
 __pycache__/
