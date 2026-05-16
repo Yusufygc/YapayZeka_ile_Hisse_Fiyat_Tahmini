@@ -90,9 +90,9 @@ class ExecutionConfig:
     """Backtest, maliyetler ve sinyal uretim ayarlari."""
     backtest_enabled: bool = True
     initial_capital: float = 100000.0
-    commission_bps: float = 10.0
-    slippage_bps: float = 5.0
-    signal_mode: str = "professional"  # "legacy" veya "professional"
+    commission_bps: float = 0.0
+    slippage_bps: float = 0.0
+    signal_mode: str = "simple"  # "simple", "legacy" veya "professional"
     signal_config: SignalConfig = field(default_factory=SignalConfig)
     # Leakage korumasi (Faz 2.5):
     # "wf_train" → kalibrasyon yalnizca WF fold verisi kullanir; final holdout ASLA.
@@ -100,7 +100,7 @@ class ExecutionConfig:
     calibration_scope: str = "wf_train"
     signal_calibration_train_ratio: float = 0.70
     min_signal_evaluation_folds: int = 3
-    enable_signal_execution_calibration: bool = True
+    enable_signal_execution_calibration: bool = False
     enable_gate_diagnostics: bool = False
     enable_shadow_backtests: bool = False
     signal_calibration_max_trials: int = 64

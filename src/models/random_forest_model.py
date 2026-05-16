@@ -27,8 +27,16 @@ class RandomForestModel(BaseModel):
         min_samples_leaf: int = 1,
         max_features: float | str = 1.0,
         random_state: int = 42,
+        *,
+        tune_on_fit: bool = False,
+        tune_n_trials: int = 30,
+        tune_n_splits: int = 3,
         **rf_kwargs,
     ):
+        self._tune_on_fit = bool(tune_on_fit)
+        self._tune_n_trials = int(tune_n_trials)
+        self._tune_n_splits = int(tune_n_splits)
+        self._random_state = random_state
         self.model = RandomForestRegressor(
             n_estimators=n_estimators,
             max_depth=max_depth,
@@ -45,11 +53,22 @@ class RandomForestModel(BaseModel):
         """
         Random Forest modelini eğitir.
 
+        tune_on_fit=True ise Optuna ile hiperparametre optimizasyonu çalışır.
+
         Parameters
         ----------
         X_train : np.ndarray  (samples, features)
         y_train : np.ndarray  (samples,) veya (samples, 1)
         """
+        if self._tune_on_fit:
+            self.tune_and_train(
+                X_train,
+                y_train,
+                n_trials=self._tune_n_trials,
+                n_splits=self._tune_n_splits,
+                random_state=self._random_state,
+            )
+            return
         self.model.fit(X_train, y_train.ravel())
         print("[OK] Random Forest modeli eğitildi.")
 

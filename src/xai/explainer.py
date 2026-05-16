@@ -299,6 +299,10 @@ class XAIExplainer:
             "weak_signal": "zayiflayan tahmin sinyali",
             "entry_ok": "alis esigi gecildi",
             "in_position": "pozisyon korunuyor",
+            "simple_entry": "basit mod al sinyali",
+            "simple_exit": "basit mod sat sinyali",
+            "simple_hold": "basit mod pozisyonu koruma",
+            "simple_flat": "basit mod nakitte bekleme",
         }
         return mapping.get(risk_state, risk_state or "sinyal karari")
 

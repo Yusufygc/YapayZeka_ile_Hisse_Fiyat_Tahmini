@@ -81,6 +81,7 @@ class _BaseLinearSequenceModel(BaseModel):
         return {}
 
     def _load_extra_state(self, state: dict) -> None:
+        _ = state
         return None
 
     def train(self, X_train: np.ndarray, y_train: np.ndarray, **kwargs) -> None:

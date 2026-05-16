@@ -10,8 +10,11 @@ import numpy as np
 import pandas as pd
 
 try:
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
-except ImportError:  # pragma: no cover - plotting is skipped in minimal runtimes
+except Exception:  # pragma: no cover - plotting is skipped in minimal/headless runtimes
     plt = None
 
 from src.utils.reporting_utils import (

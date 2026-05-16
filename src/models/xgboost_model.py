@@ -28,35 +28,68 @@ class XGBoostModel(BaseModel):
         subsample: float = 0.8,
         colsample_bytree: float = 0.8,
         random_state: int = 42,
+        *,
+        tune_on_fit: bool = False,
+        tune_n_trials: int = 30,
+        tune_n_splits: int = 3,
+        early_stopping_rounds: int = 50,
         **xgb_kwargs,
     ):
-        self.model = XGBRegressor(
+        self._tune_on_fit = bool(tune_on_fit)
+        self._tune_n_trials = int(tune_n_trials)
+        self._tune_n_splits = int(tune_n_splits)
+        self._early_stopping_rounds = int(early_stopping_rounds)
+        self._random_state = random_state
+        self._init_kwargs = dict(
             n_estimators=n_estimators,
             max_depth=max_depth,
             learning_rate=learning_rate,
             subsample=subsample,
             colsample_bytree=colsample_bytree,
             random_state=random_state,
+        )
+        self._xgb_kwargs = dict(xgb_kwargs)
+        self.model = XGBRegressor(
+            **self._init_kwargs,
             objective="reg:squarederror",
-            **xgb_kwargs,
+            **self._xgb_kwargs,
         )
         self.best_params: dict | None = None
+
+    def _fit_with_early_stop(self, X: np.ndarray, y: np.ndarray) -> None:
+        n = len(y)
+        split = max(1, int(n * 0.85))
+        X_tr, X_val = X[:split], X[split:]
+        y_tr, y_val = y[:split], y[split:]
+        if len(y_val) >= 10:
+            self.model.set_params(early_stopping_rounds=self._early_stopping_rounds)
+            self.model.fit(X_tr, y_tr, eval_set=[(X_val, y_val)], verbose=False)
+        else:
+            self.model.fit(X, y, eval_set=[(X, y)], verbose=False)
 
     def train(self, X_train: np.ndarray, y_train: np.ndarray, **kwargs) -> None:
         """
         XGBoost modelini eğitir.
+
+        tune_on_fit=True ise Optuna ile hiperparametre optimizasyonu çalışır,
+        aksi takdirde varsayılan parametrelerle holdout early-stopping uygulanır.
 
         Parameters
         ----------
         X_train : np.ndarray  (samples, features)
         y_train : np.ndarray  (samples,) veya (samples, 1)
         """
-        self.model.fit(
-            X_train,
-            y_train.ravel(),
-            eval_set=[(X_train, y_train.ravel())],
-            verbose=False,
-        )
+        if self._tune_on_fit:
+            self.tune_and_train(
+                X_train,
+                y_train,
+                n_trials=self._tune_n_trials,
+                n_splits=self._tune_n_splits,
+                random_state=self._random_state,
+            )
+            return
+
+        self._fit_with_early_stop(X_train, y_train.ravel())
         print("[OK] XGBoost modeli eğitildi.")
 
     def tune_and_train(
@@ -157,13 +190,12 @@ class XGBoostModel(BaseModel):
             random_state=random_state,
             objective="reg:squarederror",
         )
-        self.model.fit(
-            X_train,
-            y_flat,
-            eval_set=[(X_train, y_flat)],
-            verbose=False,
-        )
-        print("[OK] XGBoost modeli (Optuna-tuned) eğitildi.")
+        self._fit_with_early_stop(X_train, y_flat)
+        best_iter = getattr(self.model, "best_iteration", None)
+        if best_iter is not None:
+            print(f"[OK] XGBoost modeli (Optuna-tuned) eğitildi. best_iteration={best_iter}")
+        else:
+            print("[OK] XGBoost modeli (Optuna-tuned) eğitildi.")
         return self.best_params
 
     def predict(self, X_test: np.ndarray, **kwargs) -> np.ndarray:

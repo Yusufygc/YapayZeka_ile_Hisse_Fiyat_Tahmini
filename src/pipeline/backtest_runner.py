@@ -22,6 +22,7 @@ from src.backtesting import run_backtest, summarize_backtest
 from src.backtesting.reporting import (
     plot_equity_curves,
     save_backtest_report,
+    save_order_report,
     save_trade_logs,
 )
 
@@ -79,11 +80,14 @@ class _BacktestRunnerMixin:
         if not backtest_inputs:
             return {}
 
-        scenarios = [
+        scenarios = []
+        if str(getattr(self, "signal_mode", "professional")).lower() == "simple":
+            scenarios.append(("simple_current", "simple", self.signal_config, False))
+        scenarios.extend([
             ("professional_current", "professional", replace(self.signal_config, quality_gate_mode="hard"), True),
             ("professional_soft_gate", "professional", replace(self.signal_config, quality_gate_mode="soft"), True),
             ("legacy_directional", "legacy", self.signal_config, False),
-        ]
+        ])
 
         rows = []
         trade_frames = []
@@ -214,9 +218,12 @@ class _BacktestRunnerMixin:
             rmse_vs_benchmark = self._diagnostic_float(model_metrics.get("RMSE_vs_benchmark"))
             composite_score = self._diagnostic_float(model_metrics.get("Composite_Score"))
 
+            probe_signal_mode = str(getattr(self, "signal_mode", "professional")).lower()
+            if probe_signal_mode not in {"simple", "legacy", "professional"}:
+                probe_signal_mode = "professional"
             probe_status = "skipped_benchmark_only"
             probe_curve = pd.DataFrame()
-            if model_name not in self.signal_config.benchmark_only_models:
+            if probe_signal_mode != "professional" or model_name not in self.signal_config.benchmark_only_models:
                 try:
                     probe_result = run_backtest(
                         dates=payload.get("dates"),
@@ -232,7 +239,7 @@ class _BacktestRunnerMixin:
                         target_mode=target_mode,
                         commission_bps=self.commission_bps,
                         slippage_bps=self.slippage_bps,
-                        signal_mode="professional",
+                        signal_mode=probe_signal_mode,
                         signal_config=self.signal_config,
                         model_metrics={},
                     )
@@ -267,7 +274,11 @@ class _BacktestRunnerMixin:
                 "Primary_Blocked_By_RMSE": int((current_states == "quality_rmse").sum()),
                 "Primary_Blocked_By_Composite": int((current_states == "quality_composite").sum()),
                 "Blocked_By_BenchmarkOnly": int((current_states == "benchmark_only").sum()),
-                "Below_Entry_Threshold": int((probe_curve.get("Risk_State", pd.Series(dtype=str)).astype(str) == "below_threshold").sum()) if isinstance(probe_curve, pd.DataFrame) else 0,
+                "Below_Entry_Threshold": int(
+                    probe_curve.get("Risk_State", pd.Series(dtype=str)).astype(str).isin(
+                        ["below_threshold", "simple_flat"]
+                    ).sum()
+                ) if isinstance(probe_curve, pd.DataFrame) else 0,
                 "Trade_Count": self._diagnostic_float(bt_metrics.get("Trade_Count")),
                 "Exposure": self._diagnostic_float(bt_metrics.get("Exposure")),
                 "Net_Return": self._diagnostic_float(bt_metrics.get("Net_Return")),
@@ -360,33 +371,26 @@ class _BacktestRunnerMixin:
 
             metrics["Signal_Diagnosis"] = ",".join(dict.fromkeys(labels)) if labels else "ok"
 
-    # ------------------------------------------------------------------ #
-    #  Main backtest runner                                               #
-    # ------------------------------------------------------------------ #
-
-    def _run_backtests(
+    def _execute_backtest_batch(
         self,
+        *,
         backtest_inputs: Dict[str, Dict[str, Any]],
         suffix: str,
-        model_metrics_by_model: Optional[Dict[str, Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        if not self.backtest_enabled or not backtest_inputs:
-            return {}
-
-        results = {}
-        metrics_by_model = {}
-        trades_by_model = {}
-        equity_curves = {}
-        target_mode = self.dataset_metadata.get("target_mode", "log_return")
+        target_mode: str,
+        model_metrics_by_model: Dict[str, Dict[str, Any]],
+    ) -> tuple[
+        Dict[str, Dict[str, Any]],
+        Dict[str, Dict[str, Any]],
+        Dict[str, pd.DataFrame],
+        Dict[str, pd.DataFrame],
+    ]:
+        results: Dict[str, Dict[str, Any]] = {}
+        metrics_by_model: Dict[str, Dict[str, Any]] = {}
+        trades_by_model: Dict[str, pd.DataFrame] = {}
+        equity_curves: Dict[str, pd.DataFrame] = {}
 
         for model_name, payload in backtest_inputs.items():
             try:
-                effective_signal_mode = self.signal_mode
-                if (
-                    getattr(self, "signal_threshold_source", "") == "walk_forward_signal_rejected"
-                    and str(getattr(self, "signal_calibration_reject_behavior", "no_trade")).lower() == "no_trade"
-                ):
-                    effective_signal_mode = "rejected_no_trade"
                 result = run_backtest(
                     dates=payload.get("dates"),
                     prediction_dates=payload.get("prediction_dates"),
@@ -401,34 +405,59 @@ class _BacktestRunnerMixin:
                     target_mode=target_mode,
                     commission_bps=self.commission_bps,
                     slippage_bps=self.slippage_bps,
-                    signal_mode=effective_signal_mode,
+                    signal_mode=self._effective_signal_mode(),
                     signal_config=self.signal_config,
-                    model_metrics=(model_metrics_by_model or {}).get(model_name, {}),
+                    model_metrics=model_metrics_by_model.get(model_name, {}),
                 )
-                results[model_name] = result
-                metrics_by_model[model_name] = summarize_backtest(
-                    result,
-                    initial_capital=self.initial_capital,
-                    trial_count=max(1, len(backtest_inputs)),
-                )
-                metrics_by_model[model_name].update({
-                    "Target_Semantics": self.dataset_metadata.get("target_semantics", ""),
-                    "Execution_Lag": self.dataset_metadata.get("execution_lag", ""),
-                    "Macro_Release_Lag": str(self.dataset_metadata.get("macro_release_lag", {})),
-                    "Transaction_Costs": f"commission_bps={self.commission_bps}; slippage_bps={self.slippage_bps}",
-                    "Validation_Protocol": str(self.dataset_metadata.get("validation_config", {})),
-                    "Threshold_Config": str(self.dataset_metadata.get("signal_threshold_config", {})),
-                })
-                trades_by_model[model_name] = result["trades"]
-                equity_curves[model_name] = result["equity_curve"]
             except Exception as exc:
                 print(f"  [WARN] {model_name} backtest basarisiz, atlaniyor: {exc}")
+                continue
 
-        if not metrics_by_model:
-            return {}
+            results[model_name] = result
+            metrics_by_model[model_name] = self._summarize_backtest_result(result, len(backtest_inputs))
+            trades_by_model[model_name] = result["trades"]
+            equity_curves[model_name] = result["equity_curve"]
 
-        self.latest_backtest_results[suffix] = results
-        self.latest_backtest_metrics[suffix] = metrics_by_model
+        return results, metrics_by_model, trades_by_model, equity_curves
+
+    def _effective_signal_mode(self) -> str:
+        if (
+            getattr(self, "signal_threshold_source", "") == "walk_forward_signal_rejected"
+            and str(getattr(self, "signal_calibration_reject_behavior", "no_trade")).lower() == "no_trade"
+        ):
+            return "rejected_no_trade"
+        return self.signal_mode
+
+    def _summarize_backtest_result(
+        self,
+        result: Dict[str, Any],
+        backtest_count: int,
+    ) -> Dict[str, Any]:
+        summary = summarize_backtest(
+            result,
+            initial_capital=self.initial_capital,
+            trial_count=max(1, backtest_count),
+        )
+        summary.update({
+            "Target_Semantics": self.dataset_metadata.get("target_semantics", ""),
+            "Execution_Lag": self.dataset_metadata.get("execution_lag", ""),
+            "Macro_Release_Lag": str(self.dataset_metadata.get("macro_release_lag", {})),
+            "Transaction_Costs": f"commission_bps={self.commission_bps}; slippage_bps={self.slippage_bps}",
+            "Validation_Protocol": str(self.dataset_metadata.get("validation_config", {})),
+            "Threshold_Config": str(self.dataset_metadata.get("signal_threshold_config", {})),
+        })
+        return summary
+
+    def _run_backtest_diagnostics(
+        self,
+        *,
+        backtest_inputs: Dict[str, Dict[str, Any]],
+        results: Dict[str, Dict[str, Any]],
+        metrics_by_model: Dict[str, Dict[str, Any]],
+        model_metrics_by_model: Dict[str, Dict[str, Any]],
+        suffix: str,
+        target_mode: str,
+    ) -> tuple[pd.DataFrame | Dict[str, str], Dict[str, Any]]:
         auto_diagnostics = bool(getattr(self, "auto_signal_diagnostics", True)) and suffix in {"wf", "final_holdout"}
 
         if bool(getattr(self, "enable_gate_diagnostics", False)) or auto_diagnostics:
@@ -436,7 +465,7 @@ class _BacktestRunnerMixin:
                 backtest_inputs=backtest_inputs,
                 backtest_results=results,
                 backtest_metrics=metrics_by_model,
-                model_metrics_by_model=model_metrics_by_model or {},
+                model_metrics_by_model=model_metrics_by_model,
                 suffix=suffix,
                 target_mode=target_mode,
             )
@@ -447,35 +476,97 @@ class _BacktestRunnerMixin:
         if bool(getattr(self, "enable_shadow_backtests", False)) or auto_diagnostics:
             shadow_results = self._get_shadow_backtests(
                 backtest_inputs=backtest_inputs,
-                model_metrics_by_model=model_metrics_by_model or {},
+                model_metrics_by_model=model_metrics_by_model,
                 suffix=suffix,
                 target_mode=target_mode,
             )
             self._write_shadow_backtest_reports(shadow_results, suffix)
         else:
             shadow_results = {"status": "disabled"}
+
+        return gate_diagnostics, shadow_results
+
+    def _write_backtest_tables(
+        self,
+        *,
+        outputs_dir: str,
+        suffix: str,
+        metrics_by_model: Dict[str, Dict[str, Any]],
+        equity_curves: Dict[str, pd.DataFrame],
+        trades_by_model: Dict[str, pd.DataFrame],
+    ) -> None:
+        if metrics_by_model:
+            save_backtest_report(
+                metrics_by_model,
+                save_path=os.path.join(outputs_dir, f"backtest_report_{suffix}.csv"),
+            )
+        if equity_curves:
+            save_order_report(
+                equity_curves,
+                save_path=os.path.join(outputs_dir, f"backtest_orders_{suffix}.csv"),
+            )
+        if trades_by_model and bool(getattr(self, "write_trade_logs", False)):
+            save_trade_logs(
+                trades_by_model,
+                save_path=os.path.join(outputs_dir, f"backtest_trades_{suffix}.csv"),
+            )
+
+    # ------------------------------------------------------------------ #
+    #  Main backtest runner                                               #
+    # ------------------------------------------------------------------ #
+
+    def _run_backtests(
+        self,
+        backtest_inputs: Dict[str, Dict[str, Any]],
+        suffix: str,
+        model_metrics_by_model: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        if not self.backtest_enabled or not backtest_inputs:
+            return {}
+
+        target_mode = self.dataset_metadata.get("target_mode", "log_return")
+        results, metrics_by_model, trades_by_model, equity_curves = self._execute_backtest_batch(
+            backtest_inputs=backtest_inputs,
+            suffix=suffix,
+            target_mode=target_mode,
+            model_metrics_by_model=model_metrics_by_model or {},
+        )
+
+        if not metrics_by_model:
+            return {}
+
+        self.latest_backtest_results[suffix] = results
+        self.latest_backtest_metrics[suffix] = metrics_by_model
+        gate_diagnostics, shadow_results = self._run_backtest_diagnostics(
+            backtest_inputs=backtest_inputs,
+            results=results,
+            metrics_by_model=metrics_by_model,
+            model_metrics_by_model=model_metrics_by_model or {},
+            suffix=suffix,
+            target_mode=target_mode,
+        )
         self._attach_signal_diagnosis(metrics_by_model=metrics_by_model, shadow_results=shadow_results)
 
         # ── Grafik ve rapor kayıtları ──────────────────────────────
         try:
-            import os as _os
-            _out = getattr(self, 'outputs_dir', '')
+            _out = getattr(self, "outputs_dir", "")
             if _out and equity_curves:
-                plot_equity_curves(
-                    equity_curves,
-                    save_path=_os.path.join(_out, f'backtest_equity_{suffix}.png'),
-                    title=f'{getattr(self, "stock_symbol", "")} Equity Curves ({suffix})',
-                    selected_models=set(metrics_by_model),
-                )
-            if _out and metrics_by_model:
-                save_backtest_report(
-                    metrics_by_model,
-                    save_path=_os.path.join(_out, f'backtest_report_{suffix}.csv'),
-                )
-            if _out and trades_by_model and bool(getattr(self, "write_trade_logs", False)):
-                save_trade_logs(
-                    trades_by_model,
-                    save_path=_os.path.join(_out, f'backtest_trades_{suffix}.csv'),
+                try:
+                    plot_equity_curves(
+                        equity_curves,
+                        save_path=os.path.join(_out, f'backtest_equity_{suffix}.png'),
+                        title=f'{getattr(self, "stock_symbol", "")} Equity Curves ({suffix})',
+                        selected_models=set(metrics_by_model),
+                    )
+                except Exception as _plot_exc:
+                    print(f"  [WARN] Backtest equity grafigi kaydedilemedi: {_plot_exc}")
+            if _out:
+                self._write_backtest_tables(
+                    outputs_dir=_out,
+                    suffix=suffix,
+                    metrics_by_model=metrics_by_model,
+                    equity_curves=equity_curves,
+                    trades_by_model=trades_by_model,
                 )
         except Exception as _save_exc:
             print(f'  [WARN] Backtest grafik/rapor kaydı başarısız: {_save_exc}')

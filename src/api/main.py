@@ -37,7 +37,6 @@ if _PROJECT_ROOT not in sys.path:
 try:
     from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import JSONResponse
     from pydantic import BaseModel as PydanticModel
 except ImportError as exc:
     raise ImportError(

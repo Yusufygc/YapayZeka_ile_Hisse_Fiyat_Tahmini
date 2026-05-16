@@ -3,36 +3,32 @@
 model_trainer.py - Model Egitim Orkestratoru
 """
 
+import os
+
 import numpy as np
 
 from src.experiments.experiment_tracker import ExperimentTracker
-from src.models.arima_model import ARIMAModel
-from src.models.gradient_boosting_model import LightGBMReturnModel
-from src.models.linear_model import ElasticNetReturnModel, RidgeReturnModel
-from src.models.linear_sequence_model import DLinearSequenceModel, NLinearSequenceModel
-from src.models.lstm_model import AttentionLSTMModel
-from src.models.naive_model import NaiveDriftModel, NaiveLastValueModel, NaiveZeroReturnModel
-from src.models.random_forest_model import RandomForestModel
-from src.models.tft_v2 import TFTModel   # v2: A4 quantile crossing fix
-from src.models.xgboost_model import XGBoostModel
-from src.pipeline.model_scope import BENCHMARK_MODELS, DEFAULT_CANDIDATE_MODELS, normalize_candidate_models
+from src.pipeline import model_factory
+from src.pipeline.model_scope import normalize_candidate_models
 from src.validation.walk_forward import WalkForwardValidator
 
 # Aktif üretim modelleri — pipeline menüsünde gösterilir
-_ALL_MODELS = list(DEFAULT_CANDIDATE_MODELS)
+_ALL_MODELS = model_factory.ALL_MODELS
 
 # Kabul görmüş literatüre göre isteğe bağlı; yüksek hesaplama maliyeti veya
 # sınırlı ek değer sunar; yalnızca karşılaştırma amacıyla kullanılır
-_OPTIONAL_MODELS = ["Random Forest", "LightGBM Return"]
+_OPTIONAL_MODELS = model_factory.OPTIONAL_MODELS
 
 # Üretim kullanımı önerilmez (literatür temelli):
 #   ARIMA  — X_train'i yok sayar, yalnızca y_train kullanır (Fama 1970/1991)
 #   Prophet — walk-forward desteği yok; yalnızca single-split (Taylor & Letham 2018)
-_LEGACY_MODELS = ["ARIMA", "Prophet"]
+_LEGACY_MODELS = model_factory.LEGACY_MODELS
 
-_BENCHMARK_MODELS = set(BENCHMARK_MODELS)
-_TREE_MODELS = {"XGBoost", "Random Forest", "Ridge Return", "ElasticNet Return", "LightGBM Return"}
-_SEQ_MODELS = {"LSTM", "TFT", "DLinear", "NLinear"}
+_BENCHMARK_MODELS = model_factory.BENCHMARK_MODEL_SET
+_TREE_MODELS = model_factory.TREE_MODELS
+_SEQ_MODELS = model_factory.SEQ_MODELS
+XGBoostModel = model_factory.XGBoostModel
+RandomForestModel = model_factory.RandomForestModel
 
 
 class ModelTrainer:
@@ -51,7 +47,7 @@ class ModelTrainer:
         self.feature_names = feature_names
         self.selected_models = normalize_candidate_models(selected_models)
         self.candidate_models = set(self.selected_models)
-        self.benchmark_models = set(BENCHMARK_MODELS)
+        self.benchmark_models = set(_BENCHMARK_MODELS)
         self.dataset_hash = dataset_hash
         self.dataset_metadata = dataset_metadata or {}
         self.model_config = model_config or self.dataset_metadata.get("model_config", {})
@@ -68,84 +64,22 @@ class ModelTrainer:
 
     @staticmethod
     def _build_deep_config(config: dict) -> dict:
-        default = {
-            "min_sequence_samples": 64,
-            "validation_ratio": 0.1,
-            "min_validation_samples": 32,
-            "lstm": {
-                "epochs_single": 80,
-                "epochs_wf": 50,
-                "epochs_final": 50,
-                "patience": 15,
-                "lr_patience": 5,
-                "dropout": 0.2,
-                "batch_size": 32,
-            },
-            "tft": {
-                "epochs_single": 80,
-                "epochs_wf": 50,
-                "epochs_final": 50,
-                "patience_single": 15,
-                "patience_wf": 12,
-                "patience_final": 12,
-                "lr_patience": 5,
-                "dropout": 0.3,
-                "batch_size": 32,
-            },
-        }
-        merged = dict(default)
-        merged.update({key: value for key, value in config.items() if key not in {"lstm", "tft"}})
-        for section in ("lstm", "tft"):
-            section_cfg = dict(default[section])
-            section_cfg.update(config.get(section, {}))
-            merged[section] = section_cfg
-        return merged
+        return model_factory.build_deep_config(config)
 
     def _arima_config(self) -> dict:
-        return self.model_config.get("arima", {})
+        return model_factory.arima_config(self.model_config)
 
     def _make_prophet(self):
-        from src.models.prophet_model import ProphetModel  # geç import — isteğe bağlı bağımlılık
-        cfg = self.model_config.get("prophet", {})
-        return ProphetModel(
-            yearly_seasonality=True,
-            weekly_seasonality=True,
-            use_regressors=bool(cfg.get("use_regressors", False)),
-            regressor_names=cfg.get("regressor_names"),
-            feature_names=self.feature_names,
-        )
+        return model_factory.make_prophet(self.model_config, self.feature_names)
 
-    def _make_arima(self) -> ARIMAModel:
-        cfg = self._arima_config()
-        return ARIMAModel(
-            order=tuple(cfg.get("order", (1, 0, 0))),
-            auto_order=bool(cfg.get("auto_order", False)),
-            candidate_orders=[tuple(order) for order in cfg.get("candidate_orders", [])] or None,
-        )
+    def _make_arima(self):
+        return model_factory.make_arima(self.model_config)
 
-    def _make_lstm(self, stage: str) -> AttentionLSTMModel:
-        cfg = self.deep_config["lstm"]
-        return AttentionLSTMModel(
-            epochs=int(cfg.get(f"epochs_{stage}", cfg.get("epochs_single", 80))),
-            patience=int(cfg.get("patience", 15)),
-            dropout_rate=float(cfg.get("dropout", 0.2)),
-            batch_size=int(cfg.get("batch_size", 32)),
-            lr_patience=int(cfg.get("lr_patience", 5)),
-            validation_ratio=float(self.deep_config.get("validation_ratio", 0.1)),
-            min_val_samples=int(self.deep_config.get("min_validation_samples", 32)),
-        )
+    def _make_lstm(self, stage: str):
+        return model_factory.make_lstm(self.deep_config, stage)
 
-    def _make_tft(self, stage: str) -> TFTModel:
-        cfg = self.deep_config["tft"]
-        return TFTModel(
-            epochs=int(cfg.get(f"epochs_{stage}", cfg.get("epochs_single", 80))),
-            patience=int(cfg.get(f"patience_{stage}", cfg.get("patience_single", 15))),
-            dropout=float(cfg.get("dropout", 0.3)),
-            batch_size=int(cfg.get("batch_size", 32)),
-            lr_patience=int(cfg.get("lr_patience", 5)),
-            validation_ratio=float(self.deep_config.get("validation_ratio", 0.1)),
-            min_val_samples=int(self.deep_config.get("min_validation_samples", 32)),
-        )
+    def _make_tft(self, stage: str):
+        return model_factory.make_tft(self.deep_config, stage)
 
     def _has_min_sequences(self, count: int, model_name: str, context: str) -> bool:
         min_seq = int(self.deep_config.get("min_sequence_samples", 64))
@@ -202,53 +136,23 @@ class ModelTrainer:
 
     def _benchmark_specs(self):
         target_mode = self.dataset_metadata.get("target_mode", "log_return")
-        specs = [
-            ("Naive Last Value", NaiveLastValueModel),
-            ("Naive Drift", NaiveDriftModel),
-        ]
-        if target_mode in {"return", "log_return"}:
-            specs.insert(1, ("Naive Zero Return", NaiveZeroReturnModel))
-        return specs
+        return model_factory.benchmark_specs(target_mode)
 
     def _baseline_specs(self):
         return self._benchmark_specs()
 
     def _linear_baseline_specs(self):
-        return [
-            ("Ridge Return", RidgeReturnModel),
-            ("ElasticNet Return", ElasticNetReturnModel),
-        ]
+        return model_factory.linear_baseline_specs()
 
     def _boosting_baseline_specs(self):
-        return [("LightGBM Return", LightGBMReturnModel)]
+        return model_factory.boosting_baseline_specs()
 
     def _sequence_baseline_specs(self):
-        return [
-            ("DLinear", DLinearSequenceModel),
-            ("NLinear", NLinearSequenceModel),
-        ]
+        return model_factory.sequence_baseline_specs()
 
     def _model_class_for_name(self, model_name: str):
-        mapping = {name: cls for name, cls in self._benchmark_specs()}
-        mapping["ARIMA"] = self._make_arima
-        mapping.update({name: cls for name, cls in self._linear_baseline_specs()})
-        mapping.update({name: cls for name, cls in self._boosting_baseline_specs()})
-        mapping.update({name: cls for name, cls in self._sequence_baseline_specs()})
-        mapping.update({
-            "XGBoost": XGBoostModel,
-            "Random Forest": RandomForestModel,
-            "LSTM": AttentionLSTMModel,
-            "TFT": TFTModel,
-        })
-        # Legacy modeller (doğrudan model_class_for_name üzerinden erişilemez)
-        try:
-            from src.models.prophet_model import ProphetModel  # isteğe bağlı
-            mapping["Prophet"] = ProphetModel
-        except ImportError:
-            pass
-        if model_name not in mapping:
-            raise KeyError(f"Bilinmeyen model adi: {model_name}")
-        return mapping[model_name]
+        target_mode = self.dataset_metadata.get("target_mode", "log_return")
+        return model_factory.model_class_for_name(model_name, self.model_config, target_mode)
 
     def train_final_holdout_model(self, model_name: str, data_manager):
         if data_manager.selection_df is None or data_manager.final_holdout_df is None:
@@ -334,7 +238,7 @@ class ModelTrainer:
             xgb = XGBoostModel()
             xgb.tune_and_train(
                 tensors["X_train_s"], tensors["y_train_s"],
-                n_trials=5, n_splits=3,
+                n_trials=30, n_splits=3,
                 study_storage=_optuna_storage,
                 study_name=f"xgb_{self.stock_symbol}",
             )
@@ -344,7 +248,7 @@ class ModelTrainer:
             rf = RandomForestModel()
             rf.tune_and_train(
                 tensors["X_train_s"], tensors["y_train_s"],
-                n_trials=5, n_splits=3,
+                n_trials=30, n_splits=3,
                 study_storage=_optuna_storage,
                 study_name=f"rf_{self.stock_symbol}",
             )
@@ -405,13 +309,23 @@ class ModelTrainer:
                 t.get("market_regime_test", []),
             )
 
-        if "Prophet" in self.selected_models:
-            print("  [WARN] Prophet, walk-forward modunda desteklenmiyor. Atlaniyor.")
-
         validators = {}
 
         for name, cls in self._baseline_specs():
             self._wf_run(name, cls, preprocessor_baseline, wf_splits, validators)
+
+        if not self._skip("Prophet"):
+            try:
+                self._wf_run(
+                    "Prophet",
+                    self._make_prophet,
+                    preprocessor_baseline,
+                    wf_splits,
+                    validators,
+                    skip_import_err=True,
+                )
+            except Exception as exc:
+                print(f"  [WARN] Prophet walk-forward calistirilamadi: {exc}")
 
         if not self._skip("ARIMA"):
             self._wf_run("ARIMA", self._make_arima, preprocessor_baseline, wf_splits, validators)
@@ -433,10 +347,31 @@ class ModelTrainer:
                 self._wf_run(name, cls, preprocessor_seq, wf_splits, validators)
 
         if not self._skip("XGBoost"):
-            self._wf_run("XGBoost", XGBoostModel, preprocessor_tree, wf_splits, validators)
+            self._wf_run(
+                "XGBoost",
+                lambda: XGBoostModel(
+                    tune_on_fit=True,
+                    tune_n_trials=30,
+                    tune_n_splits=3,
+                    early_stopping_rounds=50,
+                ),
+                preprocessor_tree,
+                wf_splits,
+                validators,
+            )
 
         if not self._skip("Random Forest"):
-            self._wf_run("Random Forest", RandomForestModel, preprocessor_tree, wf_splits, validators)
+            self._wf_run(
+                "Random Forest",
+                lambda: RandomForestModel(
+                    tune_on_fit=True,
+                    tune_n_trials=30,
+                    tune_n_splits=3,
+                ),
+                preprocessor_tree,
+                wf_splits,
+                validators,
+            )
 
         if not self._skip("LSTM"):
             if self._wf_has_min_sequences(wf_splits, data_manager, "LSTM"):
@@ -482,6 +417,8 @@ class ModelTrainer:
                 "y_true_target": np.asarray(all_true_target, dtype=float),
             }
 
+        self._dump_feature_importances(validators)
+
         for model_name, metrics in self.wf_results.items():
             metrics["Threshold_Config"] = str(self.dataset_metadata.get("signal_threshold_config", {}))
             self.tracker.log_run(
@@ -493,3 +430,23 @@ class ModelTrainer:
                 self.dataset_metadata,
             )
             # registry.register kaldırıldı (Faz 1.3)
+
+    def _dump_feature_importances(self, validators: dict) -> None:
+        import csv as _csv
+        run_dir = os.path.dirname(self.tracker.log_dir)
+        xai_dir = os.path.join(run_dir, "xai")
+        os.makedirs(xai_dir, exist_ok=True)
+        for model_name, validator in validators.items():
+            fi = getattr(validator, "mean_feature_importance", None)
+            if fi is None:
+                continue
+            if not self.feature_names or len(fi) != len(self.feature_names):
+                continue
+            safe_name = model_name.replace(" ", "_")
+            out_path = os.path.join(xai_dir, f"feature_importance_{safe_name}_wf.csv")
+            rows = sorted(zip(self.feature_names, fi.tolist()), key=lambda r: r[1], reverse=True)
+            with open(out_path, "w", newline="", encoding="utf-8") as fh:
+                writer = _csv.writer(fh)
+                writer.writerow(["Feature", "Mean_Importance_WF"])
+                writer.writerows(rows)
+            print(f"  [OK] Feature importance kaydedildi -> {out_path}")

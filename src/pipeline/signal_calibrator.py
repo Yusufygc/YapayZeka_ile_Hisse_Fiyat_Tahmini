@@ -31,6 +31,8 @@ import pandas as pd
 
 from src.backtesting import run_backtest, summarize_backtest
 from src.backtesting.signals import SignalConfig
+from src.pipeline.signal_calibration import grid as calibration_grid
+from src.pipeline.signal_calibration import selection as calibration_selection
 from src.utils.reporting_utils import route_output_path, write_csv_and_aligned_view
 
 _VALID_CALIBRATION_SCOPES = ("wf_train",)
@@ -77,11 +79,7 @@ SIGNAL_CALIBRATION_REPORT_COLUMNS = [
 
 
 def _safe_float(value: Any, default: float) -> float:
-    try:
-        result = float(value)
-    except (TypeError, ValueError):
-        return default
-    return result if np.isfinite(result) else default
+    return calibration_selection.safe_float(value, default)
 
 
 def _risk_adjusted_score(
@@ -90,13 +88,11 @@ def _risk_adjusted_score(
     mean_sharpe: float,
     mean_max_drawdown: float,
 ) -> float:
-    sharpe_normalized = float(np.clip(mean_sharpe / 3.0, -1.0, 1.0))
-    drawdown_score = 1.0 + mean_max_drawdown
-    return float(
-        0.35 * mean_net_return
-        + 0.25 * mean_excess_return
-        + 0.25 * sharpe_normalized
-        + 0.15 * drawdown_score
+    return calibration_selection.risk_adjusted_score(
+        mean_net_return=mean_net_return,
+        mean_excess_return=mean_excess_return,
+        mean_sharpe=mean_sharpe,
+        mean_max_drawdown=mean_max_drawdown,
     )
 
 
@@ -213,7 +209,8 @@ class _SignalCalibratorMixin:
         if not rmse_values.empty:
             max_rmse_vs_benchmark = min(max_rmse_vs_benchmark, float(rmse_values.quantile(0.75)))
         if not composite_values.empty:
-            min_composite_score = max(min_composite_score, float(composite_values.quantile(0.25)))
+            HARD_FLOOR = 30.0
+            min_composite_score = max(HARD_FLOOR, float(composite_values.quantile(0.25)))
 
         self.signal_config = replace(
             self.signal_config,
@@ -276,88 +273,189 @@ class _SignalCalibratorMixin:
         grid, grid_metadata = self._apply_signal_calibration_trial_policy(full_grid)
         trial_count_for_metrics = max(1, len(candidates) * int(grid_metadata["executed_trials"]))
 
-        def run_trials(selected_grid: list[Dict[str, float | int]]) -> None:
-            for params in selected_grid:
-                trial_idx = len(rows) + 1
-                cfg = replace(base_cfg, quality_gate_mode="soft", **params)
-                config_by_trial[trial_idx] = cfg
-                summaries = []
-                for model_name in candidates:
-                    payload = wf_backtest_inputs[model_name]
-                    try:
-                        result = run_backtest(
-                            dates=payload.get("dates"),
-                            prediction_dates=payload.get("prediction_dates"),
-                            y_true_price=payload["y_true_price"],
-                            pred_price=payload["pred_price"],
-                            prev_close=payload["prev_close"],
-                            fold_ids=payload.get("fold_ids"),
-                            market_regime=payload.get("market_regime"),
-                            pred_target=payload.get("pred_target"),
-                            model_name=model_name,
-                            validation_mode="walk_forward_signal_calibration",
-                            target_mode=target_mode,
-                            commission_bps=self.commission_bps,
-                            slippage_bps=self.slippage_bps,
-                            signal_mode="professional",
-                            signal_config=cfg,
-                            model_metrics=model_metrics_by_model.get(model_name, {}),
-                        )
-                        summaries.append(summarize_backtest(
-                            result,
-                            initial_capital=self.initial_capital,
-                            trial_count=trial_count_for_metrics,
-                        ))
-                    except Exception as exc:
-                        summaries.append({
-                            "Model": model_name,
-                            "Net_Return": np.nan,
-                            "BuyHold_Return": np.nan,
-                            "Max_Drawdown": np.nan,
-                            "Trade_Count": 0,
-                            "Sharpe": np.nan,
-                            "Calibration_Error": str(exc),
-                        })
+        self._append_signal_calibration_trials(
+            rows=rows,
+            config_by_trial=config_by_trial,
+            selected_grid=grid,
+            base_cfg=base_cfg,
+            wf_backtest_inputs=wf_backtest_inputs,
+            candidates=candidates,
+            model_metrics_by_model=model_metrics_by_model,
+            target_mode=target_mode,
+            trial_count_for_metrics=trial_count_for_metrics,
+            min_trade_count=min_trade_count,
+        )
+        grid = self._maybe_expand_signal_calibration_trials(
+            rows=rows,
+            config_by_trial=config_by_trial,
+            full_grid=full_grid,
+            selected_grid=grid,
+            grid_metadata=grid_metadata,
+            base_cfg=base_cfg,
+            wf_backtest_inputs=wf_backtest_inputs,
+            candidates=candidates,
+            model_metrics_by_model=model_metrics_by_model,
+            target_mode=target_mode,
+            trial_count_for_metrics=trial_count_for_metrics,
+            min_trade_count=min_trade_count,
+        )
 
-                trial_row = self._summarize_signal_calibration_trial(
-                    trial_idx=trial_idx,
-                    params=params,
-                    summaries=summaries,
-                    min_trade_count=min_trade_count,
-                )
-                rows.append(trial_row)
+        require_oos = bool(getattr(self, "signal_calibration_require_oos_confirmation", True))
+        oos_status = self._apply_oos_confirmation_to_signal_rows(
+            rows=rows,
+            require_oos=require_oos,
+            wf_evaluation_backtest_inputs=wf_evaluation_backtest_inputs,
+            config_by_trial=config_by_trial,
+            base_cfg=base_cfg,
+            candidates=candidates,
+            model_metrics_by_model=model_metrics_by_model,
+            target_mode=target_mode,
+            trial_count_for_metrics=trial_count_for_metrics,
+            min_trade_count=min_trade_count,
+        )
 
-        run_trials(grid)
+        best_row = self._select_signal_calibration_row(rows)
+        selected_row = self._select_confirmed_signal_calibration_row(rows) if require_oos and oos_status == "applied" else best_row
+        rejection_active = bool(require_oos and oos_status == "applied" and selected_row is None)
+        active_row = selected_row if selected_row is not None else best_row
+        best_config = (
+            config_by_trial.get(int(active_row["Trial"]), base_cfg)
+            if active_row is not None and active_row.get("Trial") is not None
+            else base_cfg
+        )
+        calibration_df, active_row = self._build_signal_calibration_report_frame(
+            rows=rows,
+            grid_metadata=grid_metadata,
+            active_row=active_row,
+            rejection_active=rejection_active,
+        )
+
+        self.signal_config = best_config
+        self.signal_threshold_source = "walk_forward_signal_rejected" if rejection_active else "walk_forward_signal_calibration"
+        no_trade_trials = int(sum(int(row.get("Total_Trade_Count", 0) or 0) == 0 for row in rows))
+        self._update_signal_execution_calibration_summary(
+            rows=rows,
+            grid_metadata=grid_metadata,
+            oos_status=oos_status,
+            require_oos=require_oos,
+            candidates=candidates,
+            min_trade_count=min_trade_count,
+            active_row=active_row,
+            rejection_active=rejection_active,
+            no_trade_trials=no_trade_trials,
+        )
+        self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
+
+        decision_md = self._get_signal_calibration_decision_md(active_row)
+        self._write_signal_calibration_reports(calibration_df, decision_md, suffix=suffix)
+
+        return {
+            "calibration_df": calibration_df,
+            "decision_md": decision_md,
+            "best_row": active_row,
+            "rejected": rejection_active,
+        }
+
+    def _append_signal_calibration_trials(
+        self,
+        *,
+        rows: list[Dict[str, Any]],
+        config_by_trial: Dict[int, SignalConfig],
+        selected_grid: list[Dict[str, float | int]],
+        base_cfg: SignalConfig,
+        wf_backtest_inputs: Dict[str, Dict[str, Any]],
+        candidates: list[str],
+        model_metrics_by_model: Dict[str, Dict[str, Any]],
+        target_mode: str,
+        trial_count_for_metrics: int,
+        min_trade_count: int,
+    ) -> None:
+        for params in selected_grid:
+            trial_idx = len(rows) + 1
+            cfg = replace(base_cfg, quality_gate_mode="soft", **params)
+            config_by_trial[trial_idx] = cfg
+            summaries = self._evaluate_signal_config_on_backtest_inputs(
+                backtest_inputs=wf_backtest_inputs,
+                model_names=candidates,
+                model_metrics_by_model=model_metrics_by_model,
+                target_mode=target_mode,
+                cfg=cfg,
+                trial_count=trial_count_for_metrics,
+                validation_mode="walk_forward_signal_calibration",
+            )
+            rows.append(self._summarize_signal_calibration_trial(
+                trial_idx=trial_idx,
+                params=params,
+                summaries=summaries,
+                min_trade_count=min_trade_count,
+            ))
+
+    def _maybe_expand_signal_calibration_trials(
+        self,
+        *,
+        rows: list[Dict[str, Any]],
+        config_by_trial: Dict[int, SignalConfig],
+        full_grid: list[Dict[str, float | int]],
+        selected_grid: list[Dict[str, float | int]],
+        grid_metadata: Dict[str, Any],
+        base_cfg: SignalConfig,
+        wf_backtest_inputs: Dict[str, Dict[str, Any]],
+        candidates: list[str],
+        model_metrics_by_model: Dict[str, Dict[str, Any]],
+        target_mode: str,
+        trial_count_for_metrics: int,
+        min_trade_count: int,
+    ) -> list[Dict[str, float | int]]:
         initial_best_row = self._select_signal_calibration_row(rows)
-        initial_coverage = self._signal_calibration_coverage_status(full_grid, grid)
+        initial_coverage = self._signal_calibration_coverage_status(full_grid, selected_grid)
         adaptive_expanded = False
         if self._should_expand_signal_calibration(
             rows,
             initial_best_row,
             coverage_status=initial_coverage,
         ):
-            used_keys = {self._grid_param_key(params) for params in grid}
-            second_cap = min(len(full_grid), max(int(grid_metadata["executed_trials"]) * 2, 128))
-            remaining_cap = max(0, second_cap - len(grid))
-            if remaining_cap:
-                extra_grid = self._sample_signal_calibration_grid(
-                    full_grid,
-                    cap=remaining_cap,
-                    seed=int(grid_metadata["seed"]) + 1,
-                    exclude_keys=used_keys,
+            extra_grid = self._signal_calibration_expansion_grid(
+                full_grid=full_grid,
+                selected_grid=selected_grid,
+                executed_trials=int(grid_metadata["executed_trials"]),
+                seed=int(grid_metadata["seed"]),
+            )
+            if extra_grid:
+                adaptive_expanded = True
+                selected_grid.extend(extra_grid)
+                grid_metadata["executed_trials"] = int(len(selected_grid))
+                self._append_signal_calibration_trials(
+                    rows=rows,
+                    config_by_trial=config_by_trial,
+                    selected_grid=extra_grid,
+                    base_cfg=base_cfg,
+                    wf_backtest_inputs=wf_backtest_inputs,
+                    candidates=candidates,
+                    model_metrics_by_model=model_metrics_by_model,
+                    target_mode=target_mode,
+                    trial_count_for_metrics=trial_count_for_metrics,
+                    min_trade_count=min_trade_count,
                 )
-                if extra_grid:
-                    adaptive_expanded = True
-                    grid.extend(extra_grid)
-                    grid_metadata["executed_trials"] = int(len(grid))
-                    run_trials(extra_grid)
 
         grid_metadata["adaptive_expanded"] = bool(adaptive_expanded)
-        grid_metadata["coverage_status"] = self._signal_calibration_coverage_status(full_grid, grid)
-        require_oos = bool(getattr(self, "signal_calibration_require_oos_confirmation", True))
-        oos_status = "not_required"
+        grid_metadata["coverage_status"] = self._signal_calibration_coverage_status(full_grid, selected_grid)
+        return selected_grid
+
+    def _apply_oos_confirmation_to_signal_rows(
+        self,
+        *,
+        rows: list[Dict[str, Any]],
+        require_oos: bool,
+        wf_evaluation_backtest_inputs: Optional[Dict[str, Dict[str, Any]]],
+        config_by_trial: Dict[int, SignalConfig],
+        base_cfg: SignalConfig,
+        candidates: list[str],
+        model_metrics_by_model: Dict[str, Dict[str, Any]],
+        target_mode: str,
+        trial_count_for_metrics: int,
+        min_trade_count: int,
+    ) -> str:
         if require_oos and wf_evaluation_backtest_inputs:
-            oos_status = "applied"
             for row in rows:
                 trial = int(row.get("Trial", 0) or 0)
                 cfg = config_by_trial.get(trial, base_cfg)
@@ -374,71 +472,118 @@ class _SignalCalibratorMixin:
                     summaries=eval_summaries,
                     min_trade_count=min_trade_count,
                 ))
-        elif require_oos:
-            oos_status = "skipped_no_evaluation_inputs"
+            return "applied"
+
+        if require_oos:
             for row in rows:
                 row.update(self._empty_oos_confirmation("oos_skipped_no_evaluation_inputs"))
-        else:
-            for row in rows:
-                row.update(self._empty_oos_confirmation("oos_not_required", passed=True, active=True))
+            return "skipped_no_evaluation_inputs"
 
+        for row in rows:
+            row.update(self._empty_oos_confirmation("oos_not_required", passed=True, active=True))
+        return "not_required"
+
+    def _build_signal_calibration_report_frame(
+        self,
+        *,
+        rows: list[Dict[str, Any]],
+        grid_metadata: Dict[str, Any],
+        active_row: Dict[str, Any] | None,
+        rejection_active: bool,
+    ) -> tuple[pd.DataFrame, Dict[str, Any] | None]:
         calibration_df = pd.DataFrame(rows)
-        best_row = self._select_signal_calibration_row(rows)
-        selected_row = self._select_confirmed_signal_calibration_row(rows) if require_oos and oos_status == "applied" else best_row
-        rejection_active = bool(require_oos and oos_status == "applied" and selected_row is None)
-        active_row = selected_row if selected_row is not None else best_row
-        best_config = (
-            config_by_trial.get(int(active_row["Trial"]), base_cfg)
-            if active_row is not None and active_row.get("Trial") is not None
-            else base_cfg
-        )
-        if not calibration_df.empty:
-            calibration_df["Sampler"] = grid_metadata["sampler"]
-            calibration_df["Seed"] = grid_metadata["seed"]
-            calibration_df["Grid_Size"] = int(grid_metadata["grid_size"])
-            calibration_df["Executed_Trials"] = int(grid_metadata["executed_trials"])
-            calibration_df["Adaptive_Expanded"] = bool(grid_metadata["adaptive_expanded"])
-            calibration_df["Coverage_Status"] = grid_metadata["coverage_status"]
-            if rejection_active:
-                calibration_df["Active_For_Execution"] = False
-            elif active_row is not None and "Trial" in calibration_df.columns:
-                calibration_df["Active_For_Execution"] = calibration_df["Trial"] == active_row.get("Trial")
-            calibration_df["_sort_key"] = calibration_df.apply(
-                lambda row: self._signal_calibration_sort_key(row.to_dict()),
-                axis=1,
-            )
-            calibration_df.sort_values(
-                by=[
-                    "Meets_Min_Trade_Count",
-                    "Risk_Adjusted_Score",
-                    "Mean_Excess_Return",
-                    "Mean_Net_Return",
-                    "Mean_Max_Drawdown",
-                    "Total_Trade_Count",
-                ],
-                ascending=[False, False, False, False, False, False],
-                inplace=True,
-            )
-            calibration_df.drop(columns=["_sort_key"], inplace=True, errors="ignore")
-            calibration_df["Selection_Rank"] = np.arange(1, len(calibration_df) + 1)
-            if active_row is not None and "Trial" in calibration_df.columns:
-                rank_match = calibration_df.loc[calibration_df["Trial"] == active_row.get("Trial"), "Selection_Rank"]
-                if not rank_match.empty:
-                    active_row = dict(active_row)
-                    active_row["Selection_Rank"] = int(rank_match.iloc[0])
-                    active_row["Sampler"] = grid_metadata["sampler"]
-                    active_row["Seed"] = grid_metadata["seed"]
-                    active_row["Grid_Size"] = int(grid_metadata["grid_size"])
-                    active_row["Executed_Trials"] = int(grid_metadata["executed_trials"])
-                    active_row["Adaptive_Expanded"] = bool(grid_metadata["adaptive_expanded"])
-                    active_row["Coverage_Status"] = grid_metadata["coverage_status"]
-                    active_row["Active_For_Execution"] = not rejection_active
-                    if rejection_active:
-                        active_row["Reject_Reason"] = "rejected_no_valid_oos_trial"
+        if calibration_df.empty:
+            return calibration_df, active_row
 
-        self.signal_config = best_config
-        self.signal_threshold_source = "walk_forward_signal_rejected" if rejection_active else "walk_forward_signal_calibration"
-        no_trade_trials = int(sum(int(row.get("Total_Trade_Count", 0) or 0) == 0 for row in rows))
+        self._apply_signal_calibration_metadata_columns(calibration_df, grid_metadata)
+        if rejection_active:
+            calibration_df["Active_For_Execution"] = False
+        elif active_row is not None and "Trial" in calibration_df.columns:
+            calibration_df["Active_For_Execution"] = calibration_df["Trial"] == active_row.get("Trial")
+        self._rank_signal_calibration_frame(calibration_df)
+        active_row = self._copy_ranked_active_signal_row(
+            calibration_df=calibration_df,
+            active_row=active_row,
+            grid_metadata=grid_metadata,
+            rejection_active=rejection_active,
+        )
+        return calibration_df, active_row
+
+    @staticmethod
+    def _apply_signal_calibration_metadata_columns(
+        calibration_df: pd.DataFrame,
+        grid_metadata: Dict[str, Any],
+    ) -> None:
+        calibration_df["Sampler"] = grid_metadata["sampler"]
+        calibration_df["Seed"] = grid_metadata["seed"]
+        calibration_df["Grid_Size"] = int(grid_metadata["grid_size"])
+        calibration_df["Executed_Trials"] = int(grid_metadata["executed_trials"])
+        calibration_df["Adaptive_Expanded"] = bool(grid_metadata["adaptive_expanded"])
+        calibration_df["Coverage_Status"] = grid_metadata["coverage_status"]
+
+    def _rank_signal_calibration_frame(self, calibration_df: pd.DataFrame) -> None:
+        calibration_df["_sort_key"] = calibration_df.apply(
+            lambda row: self._signal_calibration_sort_key(row.to_dict()),
+            axis=1,
+        )
+        calibration_df.sort_values(
+            by=[
+                "Meets_Min_Trade_Count",
+                "Risk_Adjusted_Score",
+                "Mean_Excess_Return",
+                "Mean_Net_Return",
+                "Mean_Max_Drawdown",
+                "Total_Trade_Count",
+            ],
+            ascending=[False, False, False, False, False, False],
+            inplace=True,
+        )
+        calibration_df.drop(columns=["_sort_key"], inplace=True, errors="ignore")
+        calibration_df["Selection_Rank"] = np.arange(1, len(calibration_df) + 1)
+
+    @staticmethod
+    def _copy_ranked_active_signal_row(
+        *,
+        calibration_df: pd.DataFrame,
+        active_row: Dict[str, Any] | None,
+        grid_metadata: Dict[str, Any],
+        rejection_active: bool,
+    ) -> Dict[str, Any] | None:
+        if active_row is None or "Trial" not in calibration_df.columns:
+            return active_row
+        rank_match = calibration_df.loc[
+            calibration_df["Trial"] == active_row.get("Trial"),
+            "Selection_Rank",
+        ]
+        if rank_match.empty:
+            return active_row
+
+        ranked_row = dict(active_row)
+        ranked_row["Selection_Rank"] = int(rank_match.iloc[0])
+        ranked_row["Sampler"] = grid_metadata["sampler"]
+        ranked_row["Seed"] = grid_metadata["seed"]
+        ranked_row["Grid_Size"] = int(grid_metadata["grid_size"])
+        ranked_row["Executed_Trials"] = int(grid_metadata["executed_trials"])
+        ranked_row["Adaptive_Expanded"] = bool(grid_metadata["adaptive_expanded"])
+        ranked_row["Coverage_Status"] = grid_metadata["coverage_status"]
+        ranked_row["Active_For_Execution"] = not rejection_active
+        if rejection_active:
+            ranked_row["Reject_Reason"] = "rejected_no_valid_oos_trial"
+        return ranked_row
+
+    def _update_signal_execution_calibration_summary(
+        self,
+        *,
+        rows: list[Dict[str, Any]],
+        grid_metadata: Dict[str, Any],
+        oos_status: str,
+        require_oos: bool,
+        candidates: list[str],
+        min_trade_count: int,
+        active_row: Dict[str, Any] | None,
+        rejection_active: bool,
+        no_trade_trials: int,
+    ) -> None:
         self.signal_threshold_calibration_summary.update({
             "execution_calibration_status": "rejected_no_valid_oos_trial" if rejection_active else "applied",
             "execution_calibration_trials": int(len(rows)),
@@ -466,28 +611,20 @@ class _SignalCalibratorMixin:
             "selected_total_trade_count": int(active_row.get("Total_Trade_Count", 0) or 0) if active_row else 0,
             "active_for_execution": bool(active_row and not rejection_active),
             "reject_reason": "rejected_no_valid_oos_trial" if rejection_active else "",
-            "selected_execution_params": {
-                "min_directional_accuracy": self.signal_config.min_directional_accuracy,
-                "volatility_multiplier": self.signal_config.volatility_multiplier,
-                "entry_cost_multiplier": self.signal_config.entry_cost_multiplier,
-                "min_entry_threshold": self.signal_config.min_entry_threshold,
-                "max_holding_bars": self.signal_config.max_holding_bars,
-                "take_profit_vol_multiplier": self.signal_config.take_profit_vol_multiplier,
-                "stop_loss_vol_multiplier": self.signal_config.stop_loss_vol_multiplier,
-                "quality_gate_mode": self.signal_config.quality_gate_mode,
-            },
+            "selected_execution_params": self._selected_execution_params_snapshot(),
             "selected_execution_result": active_row or {},
         })
-        self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
 
-        decision_md = self._get_signal_calibration_decision_md(active_row)
-        self._write_signal_calibration_reports(calibration_df, decision_md, suffix=suffix)
-
+    def _selected_execution_params_snapshot(self) -> Dict[str, Any]:
         return {
-            "calibration_df": calibration_df,
-            "decision_md": decision_md,
-            "best_row": active_row,
-            "rejected": rejection_active,
+            "min_directional_accuracy": self.signal_config.min_directional_accuracy,
+            "volatility_multiplier": self.signal_config.volatility_multiplier,
+            "entry_cost_multiplier": self.signal_config.entry_cost_multiplier,
+            "min_entry_threshold": self.signal_config.min_entry_threshold,
+            "max_holding_bars": self.signal_config.max_holding_bars,
+            "take_profit_vol_multiplier": self.signal_config.take_profit_vol_multiplier,
+            "stop_loss_vol_multiplier": self.signal_config.stop_loss_vol_multiplier,
+            "quality_gate_mode": self.signal_config.quality_gate_mode,
         }
 
     # ------------------------------------------------------------------ #
@@ -496,81 +633,21 @@ class _SignalCalibratorMixin:
 
     @staticmethod
     def _signal_calibration_grid(base_cfg: SignalConfig) -> list[Dict[str, float | int]]:
-        min_dir_values = sorted({48.0, 50.0, float(base_cfg.min_directional_accuracy)})
-        vol_values = sorted({0.10, 0.15, 0.20, 0.25, 0.30, float(base_cfg.volatility_multiplier)})
-        entry_cost_values = sorted({1.5, 2.0, 2.5, float(base_cfg.entry_cost_multiplier)})
-        min_entry_values = sorted({0.0, 0.001, 0.002, float(base_cfg.min_entry_threshold)})
-        max_hold_values = sorted({10, 15, 20, int(base_cfg.max_holding_bars)})
-        take_profit_values = sorted({1.0, 1.5, 2.0, float(base_cfg.take_profit_vol_multiplier)})
-        stop_loss_values = sorted({0.75, 1.0, 1.25, float(base_cfg.stop_loss_vol_multiplier)})
-
-        grid = []
-        for min_dir in min_dir_values:
-            for vol in vol_values:
-                for entry_cost in entry_cost_values:
-                    for min_entry in min_entry_values:
-                        for max_hold in max_hold_values:
-                            for take_profit in take_profit_values:
-                                for stop_loss in stop_loss_values:
-                                    grid.append({
-                                        "min_directional_accuracy": round(float(min_dir), 2),
-                                        "volatility_multiplier": round(float(vol), 4),
-                                        "entry_cost_multiplier": round(float(entry_cost), 4),
-                                        "min_entry_threshold": round(float(min_entry), 6),
-                                        "max_holding_bars": int(max_hold),
-                                        "take_profit_vol_multiplier": round(float(take_profit), 4),
-                                        "stop_loss_vol_multiplier": round(float(stop_loss), 4),
-                                    })
-        return grid
+        return calibration_grid.signal_calibration_grid(base_cfg)
 
     def _apply_signal_calibration_trial_policy(
         self,
         grid: list[Dict[str, float | int]],
     ) -> tuple[list[Dict[str, float | int]], Dict[str, Any]]:
-        profile = str(getattr(self, "signal_calibration_profile", "production") or "production").lower()
-        if profile not in {"production", "research"}:
-            profile = "production"
-        sampler = str(getattr(self, "signal_calibration_sampler", "adaptive_stratified") or "adaptive_stratified").lower()
-        seed = int(getattr(self, "signal_calibration_seed", 42) or 42)
-        trial_cap = getattr(self, "signal_calibration_max_trials", 64)
-        trial_cap = None if trial_cap is None else max(1, int(trial_cap))
-        if profile == "research":
-            selected_grid = list(grid)
-            effective_cap = None
-            sampler = "full_grid"
-        elif sampler in {"adaptive_stratified", "stratified"}:
-            effective_cap = trial_cap
-            selected_grid = self._sample_signal_calibration_grid(
-                grid,
-                cap=effective_cap if effective_cap is not None else len(grid),
-                seed=seed,
-            )
-        else:
-            effective_cap = trial_cap
-            selected_grid = list(grid[:effective_cap]) if effective_cap is not None else list(grid)
-            sampler = "prefix"
-        return selected_grid, {
-            "grid_size": int(len(grid)),
-            "executed_trials": int(len(selected_grid)),
-            "trial_cap": effective_cap,
-            "calibration_profile": profile,
-            "sampler": sampler,
-            "seed": seed,
-            "adaptive_expanded": False,
-            "coverage_status": self._signal_calibration_coverage_status(grid, selected_grid),
-        }
+        return calibration_grid.apply_trial_policy(self, grid)
 
     @staticmethod
     def _grid_param_key(params: Dict[str, float | int]) -> tuple:
-        return tuple(sorted(params.items()))
+        return calibration_grid.grid_param_key(params)
 
     @staticmethod
     def _signal_calibration_param_values(grid: list[Dict[str, float | int]]) -> Dict[str, set]:
-        values: Dict[str, set] = {}
-        for params in grid:
-            for key, value in params.items():
-                values.setdefault(key, set()).add(value)
-        return values
+        return calibration_grid.param_values(grid)
 
     @classmethod
     def _signal_calibration_coverage_status(
@@ -578,16 +655,22 @@ class _SignalCalibratorMixin:
         full_grid: list[Dict[str, float | int]],
         selected_grid: list[Dict[str, float | int]],
     ) -> str:
-        if not full_grid:
-            return "empty_grid"
-        full_values = cls._signal_calibration_param_values(full_grid)
-        selected_values = cls._signal_calibration_param_values(selected_grid)
-        missing = []
-        for key, values in sorted(full_values.items()):
-            uncovered = sorted(values - selected_values.get(key, set()))
-            if uncovered:
-                missing.append(f"{key}={uncovered}")
-        return "complete" if not missing else "missing:" + "; ".join(missing)
+        return calibration_grid.coverage_status(full_grid, selected_grid)
+
+    def _signal_calibration_expansion_grid(
+        self,
+        *,
+        full_grid: list[Dict[str, float | int]],
+        selected_grid: list[Dict[str, float | int]],
+        executed_trials: int,
+        seed: int,
+    ) -> list[Dict[str, float | int]]:
+        return calibration_grid.expansion_grid(
+            full_grid=full_grid,
+            selected_grid=selected_grid,
+            executed_trials=executed_trials,
+            seed=seed,
+        )
 
     @classmethod
     def _sample_signal_calibration_grid(
@@ -598,57 +681,60 @@ class _SignalCalibratorMixin:
         seed: int,
         exclude_keys: Optional[set[tuple]] = None,
     ) -> list[Dict[str, float | int]]:
-        if cap <= 0 or not grid:
-            return []
-        exclude_keys = exclude_keys or set()
-        available = [
-            (idx, params)
-            for idx, params in enumerate(grid)
-            if cls._grid_param_key(params) not in exclude_keys
-        ]
-        if not available:
-            return []
-        if cap >= len(available):
-            return [dict(params) for _, params in available]
+        return calibration_grid.sample_signal_calibration_grid(
+            grid,
+            cap=cap,
+            seed=seed,
+            exclude_keys=exclude_keys,
+        )
 
-        rng = np.random.default_rng(seed)
-        full_values = cls._signal_calibration_param_values([params for _, params in available])
-        required = {(key, value) for key, values in full_values.items() for value in values}
-        selected_indices: list[int] = []
-        selected_keys: set[tuple] = set()
-        covered: set[tuple] = set()
+    @classmethod
+    def _select_coverage_grid_indices(
+        cls,
+        *,
+        available: list[tuple[int, Dict[str, float | int]]],
+        cap: int,
+        rng: np.random.Generator,
+    ) -> tuple[list[int], set[tuple]]:
+        return calibration_grid.select_coverage_grid_indices(
+            available=available,
+            cap=cap,
+            rng=rng,
+        )
 
-        while required - covered and len(selected_indices) < cap:
-            best = None
-            for idx, params in available:
-                key = cls._grid_param_key(params)
-                if key in selected_keys:
-                    continue
-                gained = {(name, value) for name, value in params.items()} - covered
-                score = (len(gained), float(rng.random()))
-                if best is None or score > best[0]:
-                    best = (score, idx, params)
-            if best is None or best[0][0] == 0:
-                break
-            _, idx, params = best
-            selected_indices.append(idx)
-            selected_keys.add(cls._grid_param_key(params))
-            covered.update((name, value) for name, value in params.items())
+    @classmethod
+    def _best_grid_coverage_candidate(
+        cls,
+        *,
+        available: list[tuple[int, Dict[str, float | int]]],
+        selected_keys: set[tuple],
+        covered: set[tuple],
+        rng: np.random.Generator,
+    ) -> tuple[tuple[int, float], int, Dict[str, float | int]] | None:
+        return calibration_grid.best_grid_coverage_candidate(
+            available=available,
+            selected_keys=selected_keys,
+            covered=covered,
+            rng=rng,
+        )
 
-        remaining = [
-            (idx, params)
-            for idx, params in available
-            if cls._grid_param_key(params) not in selected_keys
-        ]
-        if len(selected_indices) < cap and remaining:
-            order = rng.permutation(len(remaining))
-            for pos in order[: cap - len(selected_indices)]:
-                idx, params = remaining[int(pos)]
-                selected_indices.append(idx)
-                selected_keys.add(cls._grid_param_key(params))
-
-        index_to_params = {idx: params for idx, params in available}
-        return [dict(index_to_params[idx]) for idx in selected_indices[:cap]]
+    @classmethod
+    def _append_random_grid_indices(
+        cls,
+        *,
+        available: list[tuple[int, Dict[str, float | int]]],
+        cap: int,
+        rng: np.random.Generator,
+        selected_indices: list[int],
+        selected_keys: set[tuple],
+    ) -> None:
+        calibration_grid.append_random_grid_indices(
+            available=available,
+            cap=cap,
+            rng=rng,
+            selected_indices=selected_indices,
+            selected_keys=selected_keys,
+        )
 
     @staticmethod
     def _should_expand_signal_calibration(
@@ -786,33 +872,14 @@ class _SignalCalibratorMixin:
 
     @staticmethod
     def _calibration_constraint_passed(row: Dict[str, Any]) -> bool:
-        return (
-            bool(row.get("Meets_Min_Trade_Count", False))
-            and _safe_float(row.get("Mean_Excess_Return"), -1.0) > 0.0
-        )
+        return calibration_selection.calibration_constraint_passed(row)
 
     @classmethod
     def _select_confirmed_signal_calibration_row(
         cls,
         rows: list[Dict[str, Any]],
     ) -> Dict[str, Any] | None:
-        candidates = [
-            row
-            for row in rows
-            if cls._calibration_constraint_passed(row)
-            and bool(row.get("OOS_Constraint_Passed", False))
-        ]
-        if not candidates:
-            return None
-        return max(
-            candidates,
-            key=lambda row: (
-                _safe_float(row.get("Risk_Adjusted_Score"), -1e9),
-                _safe_float(row.get("Eval_Excess_Return"), -1e9),
-                _safe_float(row.get("Eval_Sharpe"), -1e9),
-                _safe_float(row.get("Mean_Max_Drawdown"), -1.0),
-            ),
-        )
+        return calibration_selection.select_confirmed_row(rows)
 
     @staticmethod
     def _summarize_signal_calibration_trial(
@@ -822,113 +889,20 @@ class _SignalCalibratorMixin:
         summaries: list[Dict[str, Any]],
         min_trade_count: int,
     ) -> Dict[str, Any]:
-        valid = [row for row in summaries if np.isfinite(float(row.get("Net_Return", np.nan)))]
-        if not valid:
-            return {
-                "Trial": trial_idx,
-                **params,
-                "Model_Count": 0,
-                "Mean_Net_Return": np.nan,
-                "Mean_BuyHold_Return": np.nan,
-                "Mean_Excess_Return": np.nan,
-                "Risk_Adjusted_Score": np.nan,
-                "Beats_BuyHold_Count": 0,
-                "Median_Net_Return": np.nan,
-                "Mean_Max_Drawdown": np.nan,
-                "Total_Trade_Count": 0,
-                "Meets_Min_Trade_Count": False,
-                "Mean_Sharpe": np.nan,
-                "Mean_Calmar": np.nan,
-                "Selection_Rank": None,
-                "Positive_Net_Return": False,
-                "Status": "failed_all_models",
-            }
-
-        net_returns = np.asarray([float(row.get("Net_Return", 0.0)) for row in valid], dtype=float)
-        buy_hold_returns = np.asarray([float(row.get("BuyHold_Return", 0.0)) for row in valid], dtype=float)
-        excess_returns = net_returns - buy_hold_returns
-        drawdowns = np.asarray([float(row.get("Max_Drawdown", 0.0)) for row in valid], dtype=float)
-        sharpes = np.asarray([float(row.get("Sharpe", 0.0)) for row in valid], dtype=float)
-        calmars = np.asarray([_safe_float(row.get("Calmar"), 0.0) for row in valid], dtype=float)
-        trade_count = int(sum(int(float(row.get("Trade_Count", 0) or 0)) for row in valid))
-        beats_buy_hold_count = int(sum(bool(row.get("Beats_BuyHold_NetReturn", False)) for row in valid))
-        mean_net = float(np.nanmean(net_returns))
-        mean_buy_hold = float(np.nanmean(buy_hold_returns))
-        mean_excess = float(np.nanmean(excess_returns))
-        mean_drawdown = float(np.nanmean(drawdowns))
-        mean_sharpe = float(np.nanmean(sharpes))
-        risk_score = _risk_adjusted_score(
-            mean_net_return=mean_net,
-            mean_excess_return=mean_excess,
-            mean_sharpe=mean_sharpe,
-            mean_max_drawdown=mean_drawdown,
+        return calibration_selection.summarize_trial(
+            trial_idx=trial_idx,
+            params=params,
+            summaries=summaries,
+            min_trade_count=min_trade_count,
         )
-        return {
-            "Trial": trial_idx,
-            **params,
-            "Model_Count": int(len(valid)),
-            "Mean_Net_Return": round(mean_net, 6),
-            "Mean_BuyHold_Return": round(mean_buy_hold, 6),
-            "Mean_Excess_Return": round(mean_excess, 6),
-            "Risk_Adjusted_Score": round(risk_score, 6),
-            "Beats_BuyHold_Count": beats_buy_hold_count,
-            "Median_Net_Return": round(float(np.nanmedian(net_returns)), 6),
-            "Mean_Max_Drawdown": round(mean_drawdown, 6),
-            "Total_Trade_Count": trade_count,
-            "Min_Trade_Count": int(min_trade_count),
-            "Meets_Min_Trade_Count": bool(trade_count >= min_trade_count),
-            "Mean_Sharpe": round(mean_sharpe, 6),
-            "Mean_Calmar": round(float(np.nanmean(calmars)), 6),
-            "Selection_Rank": None,
-            "Positive_Net_Return": bool(mean_net > 0.0),
-            "Status": "ok",
-        }
 
     @staticmethod
     def _signal_calibration_sort_key(row: Dict[str, Any]) -> tuple:
-        mean_net = _safe_float(row.get("Mean_Net_Return"), -1e9)
-        mean_excess = _safe_float(row.get("Mean_Excess_Return"), mean_net)
-        risk_score = _safe_float(
-            row.get("Risk_Adjusted_Score"),
-            _risk_adjusted_score(
-                mean_net_return=mean_net,
-                mean_excess_return=mean_excess,
-                mean_sharpe=_safe_float(row.get("Mean_Sharpe"), 0.0),
-                mean_max_drawdown=_safe_float(row.get("Mean_Max_Drawdown"), -1.0),
-            ),
-        )
-        mean_drawdown = _safe_float(row.get("Mean_Max_Drawdown"), -1.0)
-        trade_count = int(row.get("Total_Trade_Count", 0) or 0)
-        return (
-            bool(row.get("Meets_Min_Trade_Count", False)),
-            risk_score,
-            mean_excess,
-            mean_net,
-            mean_drawdown,
-            trade_count,
-        )
+        return calibration_selection.sort_key(row)
 
     @classmethod
     def _select_signal_calibration_row(cls, rows: list[Dict[str, Any]]) -> Dict[str, Any] | None:
-        if not rows:
-            return None
-        meeting = [row for row in rows if bool(row.get("Meets_Min_Trade_Count", False))]
-        if meeting:
-            return max(meeting, key=cls._signal_calibration_sort_key)
-
-        traded = [row for row in rows if int(row.get("Total_Trade_Count", 0) or 0) > 0]
-        if traded:
-            return max(
-                traded,
-                key=lambda row: (
-                    int(row.get("Total_Trade_Count", 0) or 0),
-                    _safe_float(row.get("Risk_Adjusted_Score"), -1e9),
-                    _safe_float(row.get("Mean_Excess_Return"), -1e9),
-                    _safe_float(row.get("Mean_Net_Return"), -1e9),
-                    _safe_float(row.get("Mean_Max_Drawdown"), -1.0),
-                ),
-            )
-        return max(rows, key=cls._signal_calibration_sort_key)
+        return calibration_selection.select_row(rows)
 
     def _write_signal_calibration_reports(
         self,

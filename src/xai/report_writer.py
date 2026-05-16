@@ -8,9 +8,16 @@ from __future__ import annotations
 import os
 from typing import Dict
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
+try:
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+except Exception:  # pragma: no cover - plotting is skipped in minimal/headless runtimes
+    plt = None
 
 from src.utils.reporting_utils import route_output_path, with_output_extension, write_csv_and_aligned_view
 
@@ -116,7 +123,7 @@ class XAIReportWriter:
 
     def _plot_group_importance(self, group_importance: pd.DataFrame, save_path: str) -> None:
         save_path = route_output_path(save_path)
-        if group_importance.empty:
+        if plt is None or group_importance.empty:
             return
         plot_df = (
             group_importance.groupby("Feature_Group", as_index=False)["Importance"]
@@ -135,6 +142,8 @@ class XAIReportWriter:
 
     def _plot_importance(self, top_reasons: pd.DataFrame, save_path: str) -> None:
         save_path = route_output_path(save_path)
+        if plt is None:
+            return
         plot_df = (
             top_reasons.groupby(["Feature", "Readable_Feature"], as_index=False)["Importance"]
             .mean()
@@ -158,6 +167,8 @@ class XAIReportWriter:
 
     def _plot_signal_timeline(self, signal_reasons: pd.DataFrame, save_path: str) -> None:
         save_path = route_output_path(save_path)
+        if plt is None:
+            return
         plot_df = signal_reasons.copy()
         if plot_df.empty or "Decision" not in plot_df.columns:
             return
@@ -181,6 +192,8 @@ class XAIReportWriter:
 
     def _plot_threshold_diagnostics(self, signal_reasons: pd.DataFrame, save_path: str) -> None:
         save_path = route_output_path(save_path)
+        if plt is None:
+            return
         needed = {"Expected_Return", "Entry_Threshold", "Exit_Threshold"}
         if signal_reasons.empty or not needed.issubset(signal_reasons.columns):
             return

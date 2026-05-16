@@ -36,6 +36,8 @@ INTEGER_COLUMNS = {
     "Grid_Size",
     "Executed_Trials",
     "Eval_Trade_Count",
+    "Previous_Position",
+    "New_Position",
 }
 BOOLEAN_COLUMNS = {
     "Beats_Benchmark_RMSE",
@@ -113,6 +115,9 @@ FLOAT_DIGITS_BY_COLUMN = {
     "Market_Regime_SMA200": 0,
     "Base_Entry_Threshold": 6,
     "Entry_Threshold": 6,
+    "Exit_Threshold": 6,
+    "Expected_Return": 6,
+    "Realized_Return": 6,
     "Mean_Net_Return": 6,
     "Mean_BuyHold_Return": 6,
     "Mean_Excess_Return": 6,

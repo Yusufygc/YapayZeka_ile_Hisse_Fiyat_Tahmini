@@ -23,6 +23,8 @@ class WalkForwardValidator:
         self.target_mode = target_mode
         self.results = []
         self.aggregated_metrics = {}
+        self.feature_importances: List[np.ndarray] = []
+        self.mean_feature_importance: np.ndarray | None = None
 
     def _target_to_price(self, preds_target: np.ndarray, prev_close: np.ndarray) -> np.ndarray:
         if self.target_mode == "log_return":
@@ -71,6 +73,11 @@ class WalkForwardValidator:
             dates_test_raw = test_df["Date"].values if "Date" in test_df.columns else None
             preds = model.predict(X_test, dates_test=dates_test_raw)
 
+            inner = getattr(model, "model", model)
+            fi = getattr(inner, "feature_importances_", None)
+            if fi is not None:
+                self.feature_importances.append(np.asarray(fi, dtype=float))
+
             if scaler_y is not None and np.asarray(preds).ndim > 0:
                 preds_target = scaler_y.inverse_transform(np.asarray(preds).reshape(-1, 1)).ravel()
             else:
@@ -118,6 +125,11 @@ class WalkForwardValidator:
                 "y_true": y_true_final.tolist(),
                 "y_pred": preds_final.tolist(),
             })
+
+        if self.feature_importances:
+            shapes = {arr.shape[0] for arr in self.feature_importances}
+            if len(shapes) == 1:
+                self.mean_feature_importance = np.vstack(self.feature_importances).mean(axis=0)
 
         if all_metrics:
             avg_metrics = {key: float(np.mean([metric[key] for metric in all_metrics])) for key in all_metrics[0].keys()}
