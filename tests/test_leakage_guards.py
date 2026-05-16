@@ -181,6 +181,63 @@ class LeakageGuardTests(unittest.TestCase):
         self.assertEqual(curve["Position"].tolist(), [1.0, 0.0, 1.0])
         np.testing.assert_allclose(curve["Net_Return"].to_numpy(), np.array([0.10, 0.0, 0.10]))
 
+    def test_simple_signal_generates_buy_sell_buy_orders_without_costs(self):
+        dates = pd.date_range("2024-01-01", periods=3, freq="D")
+        prev_close = np.full(3, 100.0)
+        pred_target = np.array([0.02, -0.02, 0.03])
+
+        result = run_backtest(
+            dates=dates,
+            prediction_dates=dates - pd.Timedelta(days=1),
+            y_true_price=np.array([105.0, 95.0, 110.0]),
+            pred_price=prev_close * np.exp(pred_target),
+            prev_close=prev_close,
+            pred_target=pred_target,
+            model_name="Simple",
+            validation_mode="test",
+            target_mode="log_return",
+            signal_mode="simple",
+        )
+
+        curve = result["equity_curve"]
+        self.assertEqual(curve["Executable_Order_TR"].tolist(), ["AL", "SAT", "AL"])
+        self.assertEqual(curve["Decision"].tolist(), ["BUY", "EXIT", "BUY"])
+        self.assertEqual(curve["Position"].tolist(), [1.0, 0.0, 1.0])
+        self.assertAlmostEqual(float(curve["Transaction_Cost"].sum()), 0.0)
+        self.assertAlmostEqual(float(curve["Commission_Cost"].sum()), 0.0)
+        self.assertAlmostEqual(float(curve["Slippage_Cost"].sum()), 0.0)
+        np.testing.assert_allclose(curve["Net_Return"].to_numpy(), np.array([0.05, 0.0, 0.10]))
+
+    def test_simple_signal_holds_after_initial_buy_and_stays_flat_on_negative_start(self):
+        dates = pd.date_range("2024-01-01", periods=3, freq="D")
+        prev_close = np.full(3, 100.0)
+
+        positive = run_backtest(
+            dates=dates,
+            y_true_price=np.full(3, 101.0),
+            pred_price=np.full(3, 102.0),
+            prev_close=prev_close,
+            model_name="Simple",
+            validation_mode="test",
+            target_mode="price",
+            signal_mode="simple",
+        )["equity_curve"]
+        self.assertEqual(positive["Executable_Order_TR"].tolist(), ["AL", "TUT", "TUT"])
+        self.assertEqual(positive["Decision"].tolist(), ["BUY", "HOLD", "HOLD"])
+
+        negative = run_backtest(
+            dates=dates,
+            y_true_price=np.full(3, 99.0),
+            pred_price=np.full(3, 98.0),
+            prev_close=prev_close,
+            model_name="Simple",
+            validation_mode="test",
+            target_mode="price",
+            signal_mode="simple",
+        )["equity_curve"]
+        self.assertEqual(negative["Executable_Order_TR"].tolist(), ["TUT", "TUT", "TUT"])
+        self.assertEqual(negative["Position"].tolist(), [0.0, 0.0, 0.0])
+
     def test_professional_recommendation_marks_flat_negative_signal_as_sat_without_short(self):
         pred_target = np.array([-0.03, 0.03, -0.03])
         prev_close = np.full(3, 100.0)
@@ -224,6 +281,7 @@ class LeakageGuardTests(unittest.TestCase):
         self.assertAlmostEqual(curve["Exit_Transaction_Cost"].sum(), 0.0015)
         self.assertAlmostEqual(curve["Commission_Cost"].sum(), 0.0020)
         self.assertAlmostEqual(curve["Slippage_Cost"].sum(), 0.0010)
+        self.assertAlmostEqual(result["trades"]["Net_Return"].iloc[0], curve["Equity"].iloc[1] - 1.0)
 
     def test_macro_release_lag_shifts_monthly_features(self):
         raw = pd.DataFrame({

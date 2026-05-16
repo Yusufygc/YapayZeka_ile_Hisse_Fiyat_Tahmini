@@ -76,12 +76,17 @@ def _run_single_stock(args_dict: Dict[str, Any]) -> Dict[str, Any]:
             return result
 
         from src.pipeline.orchestrator import ForecastingPipeline
-
-        pipeline = ForecastingPipeline(
-            data_file=data_file,
-            validation_mode=mode,
-            selected_models=selected_models,
+        from src.pipeline.config import (
+            PipelineConfig, DataConfig, ValidationConfig, ModelConfig, ExecutionConfig,
         )
+
+        pipeline_cfg = PipelineConfig(
+            data=DataConfig(data_file=data_file),
+            validation=ValidationConfig(validation_mode=mode),
+            models=ModelConfig(selected_models=selected_models),
+            execution=ExecutionConfig(),
+        )
+        pipeline = ForecastingPipeline(cfg=pipeline_cfg)
         pipeline.run_all()
 
         # En iyi model metriklerini topla

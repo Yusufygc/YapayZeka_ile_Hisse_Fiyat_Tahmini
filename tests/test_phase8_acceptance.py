@@ -237,6 +237,47 @@ class Phase8AcceptanceTests(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "shadow_backtest_comparison_v1_default_diag.csv")))
 
     @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    def test_run_backtests_writes_simple_order_report(self):
+        manager = EvaluationManager.__new__(EvaluationManager)
+        manager.outputs_dir = self.tmp
+        manager.backtest_enabled = True
+        manager.auto_signal_diagnostics = False
+        manager.enable_gate_diagnostics = False
+        manager.enable_shadow_backtests = False
+        manager.dataset_metadata = {"target_mode": "price"}
+        manager.signal_mode = "simple"
+        manager.signal_config = SignalConfig()
+        manager.commission_bps = 0.0
+        manager.slippage_bps = 0.0
+        manager.initial_capital = 100000.0
+        manager.latest_backtest_results = {}
+        manager.latest_backtest_metrics = {}
+
+        dates = pd.date_range("2024-01-01", periods=3, freq="B")
+        payload = {
+            "dates": dates,
+            "prediction_dates": dates - pd.Timedelta(days=1),
+            "y_true_price": np.array([101.0, 99.0, 102.0]),
+            "pred_price": np.array([102.0, 98.0, 103.0]),
+            "prev_close": np.full(3, 100.0),
+            "market_regime": np.zeros(3),
+        }
+        result = EvaluationManager._run_backtests(
+            manager,
+            {"Candidate": payload},
+            suffix="simple_orders",
+            model_metrics_by_model={"Candidate": {"Dir_Acc": 50.0}},
+        )
+
+        orders_path = os.path.join(self.tmp, "csv", "backtest_orders_simple_orders.csv")
+        self.assertTrue(os.path.exists(orders_path))
+        orders = pd.read_csv(orders_path, sep=";")
+        self.assertIn("Prediction_Date", orders.columns)
+        self.assertIn("Execution_Date", orders.columns)
+        self.assertEqual(orders["Executable_Order_TR"].tolist(), ["AL", "SAT", "AL"])
+        self.assertEqual(float(result["metrics"]["Candidate"]["Cost_Drag"]), 0.0)
+
+    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_run_backtests_writes_gate_and_shadow_when_enabled(self):
         manager = EvaluationManager.__new__(EvaluationManager)
         manager.outputs_dir = self.tmp
@@ -431,6 +472,30 @@ class Phase8AcceptanceTests(unittest.TestCase):
             "stop_loss_vol_multiplier",
         ]:
             self.assertGreater(selected_df[column].nunique(), 1)
+
+    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    def test_signal_calibration_sampler_respects_exclusions_and_keeps_coverage(self):
+        manager = EvaluationManager.__new__(EvaluationManager)
+        manager.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=6)
+        grid = EvaluationManager._signal_calibration_grid(manager.signal_config)
+        from src.pipeline.evaluation_services import SignalCalibrationService
+
+        first_batch = SignalCalibrationService._sample_signal_calibration_grid(grid, cap=32, seed=42)
+        excluded = {SignalCalibrationService._grid_param_key(params) for params in first_batch}
+
+        second_batch = SignalCalibrationService._sample_signal_calibration_grid(
+            grid,
+            cap=64,
+            seed=43,
+            exclude_keys=excluded,
+        )
+
+        self.assertEqual(len(second_batch), 64)
+        self.assertTrue(all(SignalCalibrationService._grid_param_key(params) not in excluded for params in second_batch))
+        self.assertEqual(
+            SignalCalibrationService._signal_calibration_coverage_status(grid, first_batch + second_batch),
+            "complete",
+        )
 
     @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_signal_calibration_adaptive_expands_when_selected_sharpe_is_weak(self):
