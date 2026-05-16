@@ -51,8 +51,9 @@ import warnings
 from datetime import datetime, timedelta
 from typing import Optional
 
-import numpy as np
 import pandas as pd
+
+from src.features import macro_feature_engineering, macro_transforms
 
 try:
     import requests
@@ -439,41 +440,26 @@ class MacroPipeline:
             pd.DataFrame  — Date sütunu + tüm makro özellikler.
                             Boş döner → feature_pipeline makroyu atlar.
         """
-        buf_daily   = (pd.to_datetime(start_date) - timedelta(days=90)).strftime("%Y-%m-%d")
+        window = self._macro_date_window(start_date, end_date)
+        self._refresh_daily_caches(window["buf_daily_str"])
+        usdtry_df, bist100_df = self._load_required_daily_frames()
+        buf_daily = window["buf_daily_str"]
         # CPI_YoY için 12 aylık geriye bakış gerekir; aylık veriler daha erken başlamalı
-        buf_monthly = (pd.to_datetime(start_date) - timedelta(days=395)).strftime("%Y-%m-%d")
+        buf_monthly = window["buf_monthly_str"]
 
         # ── Günlük veriler (yfinance) ─────────────────────────────────────────
-        for key in _YFINANCE_TICKERS:
-            if self._is_stale(key, _STALE_DAYS_DAILY):
-                self._update_daily_cache(key, buf_daily)
-
-        usdtry_df  = self._load_cache("USDTRY")
-        bist100_df = self._load_cache("BIST100")
-
         if usdtry_df is None or bist100_df is None:
             print("  [MACRO] Döviz/endeks verisi yüklenemedi, makro özellikler atlanacak.")
             return pd.DataFrame()
 
         # ── Tarih filtreleri ───────────────────────────────────────────────────
-        s   = pd.to_datetime(start_date)
-        e   = pd.to_datetime(end_date)
-        buf = pd.to_datetime(buf_daily)
-        buf_m = pd.to_datetime(buf_monthly)
+        s = window["start"]
+        e = window["end"]
+        buf = window["buf_daily"]
+        buf_m = window["buf_monthly"]
 
-        def _filter_daily(df):
-            if df is None or df.empty:
-                return df
-            return df[(df["Date"] >= buf) & (df["Date"] <= e)].copy()
-
-        def _filter_monthly(df):
-            # Aylık veriler için daha geniş buffer (CPI_YoY 12 ay geriye bakar)
-            if df is None or df.empty:
-                return df
-            return df[(df["Date"] >= buf_m) & (df["Date"] <= e)].copy()
-
-        usdtry_df  = _filter_daily(usdtry_df)
-        bist100_df = _filter_daily(bist100_df)
+        usdtry_df = self._filter_macro_frame(usdtry_df, buf, e)
+        bist100_df = self._filter_macro_frame(bist100_df, buf, e)
 
         # Faz 4.1: Genişletilmiş global göstergeler (try/except — her biri opsiyonel)
         _global_keys = ["EURTRY", "VIX", "GOLD_USD", "OIL_USD", "DXY", "US10Y"]
@@ -484,85 +470,42 @@ class MacroPipeline:
                     self._update_daily_cache(_gkey, buf_daily)
                 _gdf = self._load_cache(_gkey)
                 if _gdf is not None and not _gdf.empty:
-                    _global_dfs[_gkey] = _filter_daily(_gdf)
+                    _global_dfs[_gkey] = self._filter_macro_frame(_gdf, buf, e)
             except Exception as _exc:
                 print(f"  [MACRO] {_gkey} atlanıyor: {_exc}")
 
         # ── Aylık veriler (EVDS/FRED) ─────────────────────────────────────────
-        for key in _MONTHLY_SERIES_KEYS:
-            if self._is_stale(key, _STALE_DAYS_MONTHLY):
-                self._update_monthly_cache(key, buf_monthly)
+        self._refresh_monthly_caches(buf_monthly)
 
         interest_df = self._load_cache("INTEREST_RATE")
         cpi_df      = self._load_cache("CPI")
-        interest_df = _filter_monthly(interest_df) if interest_df is not None else None
-        cpi_df      = _filter_monthly(cpi_df)      if cpi_df      is not None else None
+        interest_df = self._filter_macro_frame(interest_df, buf_m, e)
+        cpi_df      = self._filter_macro_frame(cpi_df, buf_m, e)
 
         # ══════════════════════════════════════════════════════════════════════
         # ADIM 1: Aylık feature'ları kendi frekansında hesapla (ffill'den ÖNCE)
         # ══════════════════════════════════════════════════════════════════════
-        monthly_rate_feats = None
-        if interest_df is not None and not interest_df.empty:
-            monthly_rate_feats = self._engineer_monthly_rate(interest_df)
-            monthly_rate_feats["Rate_Raw_Date"] = monthly_rate_feats["Date"]
-            monthly_rate_feats["Date"] = monthly_rate_feats["Date"] + pd.to_timedelta(
-                self.rate_release_lag_days,
-                unit="D",
-            )
-
-        monthly_cpi_feats = None
-        if cpi_df is not None and not cpi_df.empty:
-            monthly_cpi_feats = self._engineer_monthly_cpi(cpi_df)
-            monthly_cpi_feats["CPI_Raw_Date"] = monthly_cpi_feats["Date"]
-            monthly_cpi_feats["Date"] = monthly_cpi_feats["Date"] + pd.to_timedelta(
-                self.cpi_release_lag_days,
-                unit="D",
-            )
+        monthly_rate_feats, monthly_cpi_feats = self._build_lagged_monthly_features(
+            interest_df=interest_df,
+            cpi_df=cpi_df,
+        )
 
         # ══════════════════════════════════════════════════════════════════════
         # ADIM 2: Günlük takvim kur (USD/TRY + BIST100 outer join)
         # ══════════════════════════════════════════════════════════════════════
-        macro = pd.merge(usdtry_df, bist100_df, on="Date", how="outer")
-        macro.sort_values("Date", inplace=True)
-        macro.ffill(inplace=True)
+        macro = self._build_base_daily_macro(usdtry_df, bist100_df)
 
         # Faz 4.1: Global göstergeleri left-merge ile ekle (yoksa sütun oluşmaz)
-        for _gkey, _gdf in _global_dfs.items():
-            try:
-                macro = pd.merge(macro, _gdf, on="Date", how="left")
-                # Boşlukları önceki gün değeriyle doldur (tatil vb.)
-                close_col = _gdf.columns[-1]
-                if close_col in macro.columns:
-                    macro[close_col] = macro[close_col].ffill()
-            except Exception as _exc:
-                print(f"  [MACRO] {_gkey} merge atlandı: {_exc}")
+        macro = self._merge_global_daily_frames(macro, _global_dfs)
 
         # ══════════════════════════════════════════════════════════════════════
         # ADIM 3: Aylık feature dataframe'lerini günlük takvime ffill ile taşı
         # ══════════════════════════════════════════════════════════════════════
-        if monthly_rate_feats is not None:
-            # Left merge: aylık güne denk gelen satıra değer yazar, diğerleri NaN
-            macro = pd.merge(macro, monthly_rate_feats, on="Date", how="left")
-            # ffill: her günlük satır son bilinen aylık değeri taşır
-            for col in ["Rate_Level", "Rate_Change"]:
-                if col in macro.columns:
-                    macro[col] = macro[col].ffill()
-
-        if monthly_cpi_feats is not None:
-            macro = pd.merge(macro, monthly_cpi_feats, on="Date", how="left")
-            for col in ["CPI_MoM", "CPI_YoY"]:
-                if col in macro.columns:
-                    macro[col] = macro[col].ffill()
-
-        # Real_Rate: her iki sütun ffill'den geçtikten sonra basit çıkarma
-        if "Rate_Level" in macro.columns and "CPI_YoY" in macro.columns:
-            macro["Real_Rate"] = macro["Rate_Level"] - macro["CPI_YoY"]
-
-        raw_date_cols = [c for c in macro.columns if c.endswith("_Raw_Date")]
-        if raw_date_cols:
-            macro.drop(columns=raw_date_cols, inplace=True)
-
-        macro.reset_index(drop=True, inplace=True)
+        macro = self._merge_monthly_feature_frames(
+            macro,
+            monthly_rate_feats=monthly_rate_feats,
+            monthly_cpi_feats=monthly_cpi_feats,
+        )
 
         # ══════════════════════════════════════════════════════════════════════
         # ADIM 4: Günlük USD/TRY & BIST100 feature'larını türet
@@ -574,123 +517,121 @@ class MacroPipeline:
 
         return macro
 
+    @staticmethod
+    def _macro_date_window(start_date: str, end_date: str) -> dict[str, pd.Timestamp | str]:
+        return macro_transforms.macro_date_window(start_date, end_date)
+
+    def _refresh_daily_caches(self, buffer_start: str) -> None:
+        for key in _YFINANCE_TICKERS:
+            if self._is_stale(key, _STALE_DAYS_DAILY):
+                self._update_daily_cache(key, buffer_start)
+
+    def _refresh_monthly_caches(self, buffer_start: str) -> None:
+        for key in _MONTHLY_SERIES_KEYS:
+            if self._is_stale(key, _STALE_DAYS_MONTHLY):
+                self._update_monthly_cache(key, buffer_start)
+
+    def _load_required_daily_frames(self) -> tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+        return self._load_cache("USDTRY"), self._load_cache("BIST100")
+
+    @staticmethod
+    def _filter_macro_frame(
+        df: Optional[pd.DataFrame],
+        start: pd.Timestamp,
+        end: pd.Timestamp,
+    ) -> Optional[pd.DataFrame]:
+        return macro_transforms.filter_macro_frame(df, start, end)
+
+    def _build_lagged_monthly_features(
+        self,
+        *,
+        interest_df: Optional[pd.DataFrame],
+        cpi_df: Optional[pd.DataFrame],
+    ) -> tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+        return (
+            self._lag_monthly_rate_features(interest_df),
+            self._lag_monthly_cpi_features(cpi_df),
+        )
+
+    def _lag_monthly_rate_features(
+        self,
+        interest_df: Optional[pd.DataFrame],
+    ) -> Optional[pd.DataFrame]:
+        if interest_df is None or interest_df.empty:
+            return None
+        monthly_rate_feats = self._engineer_monthly_rate(interest_df)
+        return macro_transforms.lag_monthly_features(
+            monthly_rate_feats,
+            lag_days=self.rate_release_lag_days,
+            raw_date_column="Rate_Raw_Date",
+        )
+
+    def _lag_monthly_cpi_features(
+        self,
+        cpi_df: Optional[pd.DataFrame],
+    ) -> Optional[pd.DataFrame]:
+        if cpi_df is None or cpi_df.empty:
+            return None
+        monthly_cpi_feats = self._engineer_monthly_cpi(cpi_df)
+        return macro_transforms.lag_monthly_features(
+            monthly_cpi_feats,
+            lag_days=self.cpi_release_lag_days,
+            raw_date_column="CPI_Raw_Date",
+        )
+
+    @staticmethod
+    def _build_base_daily_macro(
+        usdtry_df: pd.DataFrame,
+        bist100_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        return macro_transforms.build_base_daily_macro(usdtry_df, bist100_df)
+
+    @staticmethod
+    def _merge_global_daily_frames(
+        macro: pd.DataFrame,
+        global_dfs: dict[str, pd.DataFrame],
+    ) -> pd.DataFrame:
+        return macro_transforms.merge_global_daily_frames(macro, global_dfs)
+
+    def _merge_monthly_feature_frames(
+        self,
+        macro: pd.DataFrame,
+        *,
+        monthly_rate_feats: Optional[pd.DataFrame],
+        monthly_cpi_feats: Optional[pd.DataFrame],
+    ) -> pd.DataFrame:
+        return macro_transforms.merge_monthly_feature_frames(
+            macro,
+            monthly_rate_feats=monthly_rate_feats,
+            monthly_cpi_feats=monthly_cpi_feats,
+        )
+
+    @staticmethod
+    def _merge_ffill_monthly_features(
+        macro: pd.DataFrame,
+        monthly_feats: Optional[pd.DataFrame],
+        *,
+        columns: list[str],
+    ) -> pd.DataFrame:
+        return macro_transforms.merge_ffill_monthly_features(
+            macro,
+            monthly_feats,
+            columns=columns,
+        )
+
     # ── Özellik Mühendisliği ──────────────────────────────────────────────────
 
     @staticmethod
     def _engineer_monthly_rate(df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Faiz feature'larını AYLLIK seri üzerinde hesaplar.
-
-        Günlük takvime ffill'den ÖNCE çağrılmalıdır; bu sayede
-        Rate_Change, ay içinde ffill edilmiş 0'lar değil, gerçek
-        aylık faiz değişimini temsil eder.
-
-        Giriş  : Date + INTEREST_RATE sütunları olan aylık DataFrame.
-        Çıkış  : Date + Rate_Level + Rate_Change
-        """
-        df = df.copy().sort_values("Date").reset_index(drop=True)
-        rate_col = "INTEREST_RATE" if "INTEREST_RATE" in df.columns else "Rate"
-        df["Rate_Level"]  = df[rate_col]
-        df["Rate_Change"] = df[rate_col].diff()   # gerçek aylık fark (ör. 42 → 45 → +3)
-        df.drop(columns=[rate_col], inplace=True)
-        return df[["Date", "Rate_Level", "Rate_Change"]]
+        return macro_feature_engineering.engineer_monthly_rate(df)
 
     @staticmethod
     def _engineer_monthly_cpi(df: pd.DataFrame) -> pd.DataFrame:
-        """
-        CPI feature'larını AYLLIK seri üzerinde hesaplar.
-
-        Günlük takvime ffill'den ÖNCE çağrılmalıdır; bu sayede:
-          • CPI_MoM = pct_change(1)  → gerçek aylık enflasyon değişimi
-          • CPI_YoY = pct_change(12) → gerçek yıllık enflasyon (12 ay öncesiyle kıyaslama)
-
-        Günlük ffill sonrasında bu hesaplar yapılsaydı:
-          • pct_change(1)  → günlük fark (anlamsız, ay içinde hep 0)
-          • pct_change(12) → 12 günlük fark (yıllık değil, ~2 haftalık değişim)
-
-        Giriş  : Date + CPI sütunları olan aylık DataFrame.
-        Çıkış  : Date + CPI_MoM + CPI_YoY
-        Önkoşul: CPI_YoY için en az 13 aylık veri bulunmalıdır.
-        """
-        df = df.copy().sort_values("Date").reset_index(drop=True)
-        df["CPI_MoM"] = df["CPI"].pct_change(periods=1)  * 100   # gerçek aylık değişim %
-        df["CPI_YoY"] = df["CPI"].pct_change(periods=12) * 100   # gerçek yıllık değişim %
-        df.drop(columns=["CPI"], inplace=True)
-        return df[["Date", "CPI_MoM", "CPI_YoY"]]
+        return macro_feature_engineering.engineer_monthly_cpi(df)
 
     @staticmethod
     def _engineer_daily(df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Günlük USD/TRY ve BIST100 feature'larını türetir.
-
-        Bu metod, aylık feature'lar zaten ffill ile günlük takvime
-        taşındıktan SONRA çağrılır; yalnızca günlük frekansa özgü
-        hesaplamalar (pct_change, rolling) burada yapılır.
-
-        Giriş  : USDTRY, BIST100 sütunlarını içeren günlük DataFrame.
-                 Rate_Level, Rate_Change, CPI_MoM, CPI_YoY, Real_Rate
-                 sütunları zaten mevcut olabilir (dokunulmaz).
-        Çıkış  : Ham USDTRY/BIST100 sütunları kaldırılmış, feature sütunları eklenmiş DataFrame.
-        """
-        df = df.copy()
-
-        # ── USD/TRY ───────────────────────────────────────────────────────────
-        if "USDTRY" in df.columns:
-            df["USDTRY_Return"]      = df["USDTRY"].pct_change()
-            df["USDTRY_MA7"]         = df["USDTRY"].rolling(7).mean()
-            df["USDTRY_Volatility7"] = df["USDTRY_Return"].rolling(7).std()
-            df.drop(columns=["USDTRY"], inplace=True)
-
-        # ── BIST100 ───────────────────────────────────────────────────────────
-        if "BIST100" in df.columns:
-            first_bist = df["BIST100"].iloc[0] if df["BIST100"].iloc[0] != 0 else 1.0
-            df["BIST100_Norm"]   = df["BIST100"] / first_bist
-            df["BIST100_Return"] = df["BIST100"].pct_change()
-            df["BIST100_MA7"]    = df["BIST100_Norm"].rolling(7).mean()
-            df.drop(columns=["BIST100"], inplace=True)
-
-        # ── EUR/TRY ───────────────────────────────────────────────────────────
-        if "EURTRY" in df.columns:
-            df["EURTRY_Return"]      = df["EURTRY"].pct_change()
-            df["EURTRY_Volatility7"] = df["EURTRY_Return"].rolling(7).std()
-            df.drop(columns=["EURTRY"], inplace=True)
-
-        # ── VIX (küresel risk iştahı) ─────────────────────────────────────────
-        if "VIX" in df.columns:
-            df["VIX_Level"]   = df["VIX"]
-            df["VIX_Change"]  = df["VIX"].diff()
-            df.drop(columns=["VIX"], inplace=True)
-
-        # ── Altın (TRY getirisi için USDTRY ile çarp) ────────────────────────
-        if "GOLD_USD" in df.columns:
-            df["Gold_USD_Return"] = df["GOLD_USD"].pct_change()
-            # Altın/TRY = Altın/USD * USD/TRY
-            if "USDTRY_Return" in df.columns:
-                df["Gold_TRY_Return"] = (
-                    (1 + df["Gold_USD_Return"]) * (1 + df["USDTRY_Return"]) - 1
-                )
-            df.drop(columns=["GOLD_USD"], inplace=True)
-
-        # ── Brent Petrol ──────────────────────────────────────────────────────
-        if "OIL_USD" in df.columns:
-            df["Oil_USD_Return"] = df["OIL_USD"].pct_change()
-            df.drop(columns=["OIL_USD"], inplace=True)
-
-        # ── DXY (Dolar Endeksi) ───────────────────────────────────────────────
-        if "DXY" in df.columns:
-            df["DXY_Return"]      = df["DXY"].pct_change()
-            df["DXY_Volatility7"] = df["DXY_Return"].rolling(7).std()
-            df.drop(columns=["DXY"], inplace=True)
-
-        # ── ABD 10Y Faizi ─────────────────────────────────────────────────────
-        if "US10Y" in df.columns:
-            df["US10Y_Level"]  = df["US10Y"]
-            df["US10Y_Change"] = df["US10Y"].diff()
-            df.drop(columns=["US10Y"], inplace=True)
-
-        df.dropna(inplace=True)
-        df.reset_index(drop=True, inplace=True)
-        return df
+        return macro_feature_engineering.engineer_daily(df)
 
     # ── Özellik İsimleri ──────────────────────────────────────────────────────
     @staticmethod

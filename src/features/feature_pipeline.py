@@ -25,6 +25,7 @@ import numpy as np
 import ta
 from typing import Optional
 
+from src.features.correlation_pruning import prune_correlated_features
 from src.xai.feature_dictionary import feature_group
 
 
@@ -118,74 +119,17 @@ class FeaturePipeline:
         return df
 
     def _prune_correlated(self, df: pd.DataFrame, feature_names: list[str]) -> tuple[pd.DataFrame, list[str]]:
-        numeric_features = [name for name in feature_names if pd.api.types.is_numeric_dtype(df[name])]
-        if len(numeric_features) < 2:
-            return df, feature_names
-
-        corr = df[numeric_features].corr().abs()
-        feature_order = {name: idx for idx, name in enumerate(feature_names)}
-        adjacency = {name: set() for name in numeric_features}
-        for idx, left in enumerate(numeric_features):
-            for right in numeric_features[idx + 1:]:
-                value = corr.loc[left, right]
-                if pd.notna(value) and value > self.correlation_threshold:
-                    adjacency[left].add(right)
-                    adjacency[right].add(left)
-
-        dropped = []
-        visited = set()
-        for feature in numeric_features:
-            if feature in visited:
-                continue
-            stack = [feature]
-            component = []
-            visited.add(feature)
-            while stack:
-                current = stack.pop()
-                component.append(current)
-                for neighbor in adjacency[current]:
-                    if neighbor not in visited:
-                        visited.add(neighbor)
-                        stack.append(neighbor)
-
-            if len(component) < 2:
-                continue
-
-            component = sorted(component, key=lambda name: feature_order.get(name, 10**9))
-            mean_corr = {
-                name: float(corr.loc[name, [other for other in component if other != name]].mean())
-                for name in component
-            }
-            kept = min(component, key=lambda name: (mean_corr[name], feature_order.get(name, 10**9)))
-            for name in component:
-                if name == kept:
-                    continue
-                peers = [other for other in component if other != name]
-                correlated_with = max(peers, key=lambda other: float(corr.loc[name, other]))
-                dropped.append({
-                    "feature": name,
-                    "kept_feature": kept,
-                    "correlated_with": str(correlated_with),
-                    "abs_corr": float(corr.loc[name, correlated_with]),
-                    "mean_abs_corr": mean_corr[name],
-                    "kept_mean_abs_corr": mean_corr[kept],
-                    "method": "mean_abs_correlation_cluster",
-                })
-
-        drop_names = [item["feature"] for item in dropped]
+        df, feature_names, self.pruning_report = prune_correlated_features(
+            df,
+            feature_names,
+            threshold=self.correlation_threshold,
+        )
+        drop_names = [item["feature"] for item in self.pruning_report["dropped_features"]]
         if drop_names:
-            df = df.drop(columns=drop_names)
-            feature_names = [name for name in feature_names if name not in drop_names]
             print(
                 "  [FEATURE] Korelasyon pruning uygulandi: "
                 f"{len(drop_names)} feature dusuruldu (threshold={self.correlation_threshold})."
             )
-        self.pruning_report = {
-            "enabled": True,
-            "threshold": self.correlation_threshold,
-            "method": "mean_abs_correlation_cluster",
-            "dropped_features": dropped,
-        }
         return df, feature_names
 
     # ── Teknik Göstergeler ────────────────────────────────────────────────────
