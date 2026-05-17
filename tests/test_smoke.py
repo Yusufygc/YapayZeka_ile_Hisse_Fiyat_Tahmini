@@ -161,7 +161,10 @@ class TestModelTrainerSmoke(unittest.TestCase):
 
             self.assertEqual(len(FakeTunedModel.calls), len(selected))
             for call in FakeTunedModel.calls:
-                self.assertEqual(call.get("study_storage"), "sqlite:///optuna_studies_TEST.db")
+                expected = os.path.abspath(
+                    os.path.join(os.getcwd(), "data", "optuna", "optuna_studies_TEST.db")
+                ).replace(os.sep, "/")
+                self.assertEqual(call.get("study_storage"), f"sqlite:///{expected}")
 
 
 # ── 3. DataManager Smoke ──────────────────────────────────────────────────────
