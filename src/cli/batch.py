@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-run_batch.py - Multi-Stock Batch Pipeline (Faz 5.3)
+src.cli.batch - Multi-Stock Batch Pipeline.
 
 Tek hisselik interaktif CLI'dan çok hisseli otomatik batch moda geçiş.
 
 Kullanım:
     # Tek hisse (test):
-    python run_batch.py --stocks TUPRS
+    python -m src.cli.batch --stocks TUPRS
 
     # Çoklu hisse, paralel 2 worker:
-    python run_batch.py --stocks TUPRS,ASELS,THYAO --mode walk_forward --workers 2
+    python -m src.cli.batch --stocks TUPRS,ASELS,THYAO --mode walk_forward --workers 2
 
     # Universe dosyasından tüm hisseler:
-    python run_batch.py --universe data/bist_universe.csv --mode walk_forward --workers 4
+    python -m src.cli.batch --universe data/bist_universe.csv --mode walk_forward --workers 4
 
     # Sonuçları özel dizine yaz:
-    python run_batch.py --stocks TUPRS,SISE --output-dir my_outputs/
+    python -m src.cli.batch --stocks TUPRS,SISE --output-dir my_outputs/
 
 Çıktı:
     - Her hisse için outputs/{SYMBOL}/ altında model dosyaları ve raporlar
@@ -37,8 +37,9 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 # Proje kökünü path'e ekle
-_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, _PROJECT_ROOT)
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -211,8 +212,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--output-dir",
         type=str,
-        default=_PROJECT_ROOT,
-        help="batch_summary CSV/JSON'un yazılacağı dizin (varsayılan: proje kökü)",
+        default=os.path.join(_PROJECT_ROOT, "outputs", "batch_summaries"),
+        help="batch_summary CSV/JSON'un yazılacağı dizin (varsayılan: outputs/batch_summaries/)",
     )
     p.add_argument(
         "--dry-run",

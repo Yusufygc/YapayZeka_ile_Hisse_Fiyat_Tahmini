@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-run_forecast.py - BIST-compliant forward forecast command.
+src.cli.forecast - BIST-compliant forward forecast command.
 
 Example:
-    python run_forecast.py --stocks TUPRS,ASELS --horizon-days 5
-    python run_forecast.py --stocks TUPRS --model Ridge\ Return
-    python run_forecast.py --stocks TUPRS --use-macro
+    python -m src.cli.forecast --stocks TUPRS,ASELS --horizon-days 5
+    python -m src.cli.forecast --stocks TUPRS --model Ridge\ Return
+    python -m src.cli.forecast --stocks TUPRS --use-macro
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import os
 import sys
 from typing import List
 
-_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 

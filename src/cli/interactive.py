@@ -1,13 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-main_pipeline.py — İnteraktif Orkestrasyon Girişi
+src.cli.interactive - Interactive orchestration entrypoint.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Başlamadan önce bir menü sunarak hisse, validasyon modu ve
 eğitilecek modellerin seçilmesine olanak tanır.
 """
 
 import os
+import sys
 import glob
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from src.pipeline.orchestrator import ForecastingPipeline
 from src.pipeline.config import (
     PipelineConfig, 
@@ -17,7 +23,6 @@ from src.pipeline.config import (
     ExecutionConfig
 )
 
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 META_CSV_STEMS = {"bist_universe", "bist_calendar"}
 
