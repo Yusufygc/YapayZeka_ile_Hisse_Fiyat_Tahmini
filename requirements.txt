@@ -15,11 +15,5 @@ yfinance>=0.2.36
 requests>=2.31.0
 pandas-datareader>=0.10.0   # FRED API -> CPI verisi; faiz TCMB EVDS'den alinir
 
-# ── PyTorch (TFT için) ─────────────────────────────────────────────────────
-# CPU için:
-#   pip install torch
-# CUDA 12.8 (RTX serileri) için:
-#   pip install torch --index-url https://download.pytorch.org/whl/cu128
-torch>=2.0.0
 statsmodels>=0.14.0
 shap>=0.45.0

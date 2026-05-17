@@ -2,7 +2,7 @@
 """
 linear_sequence_model.py — DLinear / NLinear hafif sequence baseline'ları.
 
-Kasıtlı olarak düşük parametreli sanity-check baseline'larıdır. LSTM/TFT ile
+Kasıtlı olarak düşük parametreli sanity-check baseline'larıdır. LSTM ile
 aynı 3D sequence tensörlerini tüketir; hızlı lineer regresörler çalıştırır.
 
 Referans: Zeng et al. (2022) "Are Transformers Effective for Time Series
@@ -150,8 +150,6 @@ class NLinearSequenceModel(_BaseLinearSequenceModel):
 
 
 # PatchTSTExperimentalModel kaldırıldı (Faz 6 Optimizasyon).
-# Gerçek PatchTST implementasyonu Faz 6 Eksen A kapsamında TFT ile birlikte
-# ele alınacaktır (Nie et al., ICLR 2023 — Transformer tabanlı mimari).
 
 
 # --- Registry tescili (Faz 1) -------------------------------------------

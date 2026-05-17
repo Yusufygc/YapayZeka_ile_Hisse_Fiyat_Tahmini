@@ -46,7 +46,6 @@ class EvaluationState:
     predictions: Dict[str, np.ndarray] = field(default_factory=dict)
     prediction_targets: Dict[str, np.ndarray] = field(default_factory=dict)
     quantile_predictions: Dict[str, np.ndarray] = field(default_factory=dict)
-    multihorizon_predictions: Dict[str, Dict[str, np.ndarray]] = field(default_factory=dict)
     single_backtest_inputs: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     latest_tensors: Dict[str, Any] = field(default_factory=dict)
     latest_backtest_results: Dict[str, Any] = field(default_factory=dict)

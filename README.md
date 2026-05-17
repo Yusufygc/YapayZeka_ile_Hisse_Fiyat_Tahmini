@@ -52,7 +52,6 @@ ForecastingPipeline          â† src/pipeline/orchestrator.py  (Facade)
 │
 ├── ModelTrainer             â† src/pipeline/model_trainer.py
 │   ├── 11 Model Sınıfı      â† src/models/
-│   ├── TFT v2 Mimarisi      â† src/models/tft_v2/
 │   ├── Ensemble Modeli      â† src/models/ensemble.py
 │   └── WalkForwardCV        â† src/validation/walk_forward.py
 │
@@ -102,7 +101,7 @@ Pipelinedaki her adımın neden bu sırayla yapıldığı, veri sızıntısını
    ├─ X: RobustScaler (aykırı değerlere dayanıklı)
    └─ y: StandardScaler + klipleme (log-getiri hedefi için)
 
-5. 3D Diziler Oluştur  â† LSTM/TFT/sequence modeller için
+5. 3D Diziler Oluştur  â† LSTM/sequence modeller için
    └─ [örnekler, TIME_STEPS=30, özellik_sayısı]
 
 6. Model Eğitimi
@@ -165,12 +164,9 @@ Tüm modeller `BaseModel` arayüzünden türer ve `train()`, `predict()`, `save(
 | Sınıf | Dosya | Açıklama |
 |---|---|---|
 | `LSTMModel` / `AttentionLSTMModel` | `lstm_model.py` | Çift yönlü LSTM + dikkat mekanizması (Keras/TensorFlow) |
-| `TFTModel` | `tft_model.py` | Temporal Fusion Transformer; kantil tahmini (PyTorch) |
-| `TFTModelV2` | `tft_v2/model.py` | Modüler blok mimarisine sahip yeni nesil Temporal Fusion Transformer |
 
 **Neden LSTM'de `clipnorm=1.0`?** BIST verisi, yüksek volatilite dönemlerinde (seçimler, kur krizleri) ani gradient patlamalarına yol açabilir. `Adam(clipnorm=1.0)` ile gradients normalize edilerek eğitim kararsızlığı önlenir.
 
-**Neden TFT ve TFT v2?** TFT, nokta tahmini değil kantil tahmini (P10/P50/P90) üretir. Bu sayede "fiyat ne olacak?" sorusuna ek olarak "belirsizlik aralığı nedir?" sorusunu da yanıtlar. Yeni eklenen **TFT v2** mimarisi ise statik eşdeğişken kodlayıcılar, değişken seçim ağları ve Gated Residual Network (GRN) bloklarını birbirinden ayırarak çok daha esnek, bakımı kolay ve genişletilebilir bir altyapı sunar.
 
 ### Topluluk (Ensemble) Modelleri
 
@@ -368,14 +364,13 @@ Bu proje, deneysel bir prototipten başlayarak altı faz boyunca sistematik olar
 
 ### Faz 6 — Modülerizasyon ve Temiz Mimari (İleri Mimariler)
 
-**Problem:** Veri yükleme, ön işleme gibi araçların kök dizine yayılması kod okunabilirliğini zorlaştırıyor ve derin öğrenme modelleri (TFT) yeni özellik eklemek için çok monolitik (tek parça) kalıyordu. 
+**Problem:** Veri yükleme, ön işleme gibi araçların kök dizine yayılması kod okunabilirliğini zorlaştırıyordu.
 
 **Yapılanlar:**
 - **Veri Araçları Ayrıştırıldı:** `data_loader.py` ve `preprocessor.py` gibi araçlar `src/data/` modülüne taşınarak sorumluluklar netleştirildi.
-- **TFT v2 Mimarisi:** PyTorch tabanlı Temporal Fusion Transformer modeli, bloklarına (Encoder, Decoder, Multi-Head Attention, GLU, GRN) ayrıştırılarak "modüler" hale getirildi. Artık mimarinin içine yeni bir bileşen takmak çok daha kolay.
 - **Ensemble (Topluluk) Modeli:** En iyi modellerin tahminlerini Ridge regresyonu ile dinamik ağırlıklandıran Ensemble yapısı `src/models/ensemble.py` olarak standart modele dahil edildi.
 
-**Bu işe ne yarar?** Sistemin bakım maliyeti (maintenance cost) ciddi oranda düştü. İleride makine öğrenimi mühendisleri, TFT'nin sadece Gated Residual Network bloklarında veya veri yükleyicinin sadece tek bir API çağrısında değişiklik yaparak tüm sistemi bozmadan çalışabilecek.
+**Bu işe ne yarar?** Sistemin bakım maliyeti (maintenance cost) ciddi oranda düştü.
 
 ---
 
@@ -384,19 +379,13 @@ Bu proje, deneysel bir prototipten başlayarak altı faz boyunca sistematik olar
 ### Gereksinimler
 
 - Python 3.10+
-- (Opsiyonel) CUDA 12.8 uyumlu GPU (TFT/LSTM hızlandırma için)
+- (Opsiyonel) CUDA 12.8 uyumlu GPU (LSTM hızlandırma için)
 
 ### Temel Kurulum
 
 ```bash
 # Bağımlılıkları kur
 pip install -r requirements.txt
-
-# PyTorch (TFT için) — CPU:
-pip install torch
-
-# PyTorch — CUDA 12.8 (RTX serileri):
-pip install torch --index-url https://download.pytorch.org/whl/cu128
 
 # Opsiyonel: LightGBM
 pip install lightgbm
@@ -533,7 +522,7 @@ Tüm konfigürasyon `PipelineConfig` dataclass hiyerarşisi üzerinden yönetili
 |---|---|---|
 | `data_file` | — | Hisse CSV dosyası yolu |
 | `test_ratio` | `0.20` | Test seti oranı (kronolojik) |
-| `time_steps` | `30` | LSTM/TFT için dizi uzunluğu |
+| `time_steps` | `30` | LSTM için dizi uzunluğu |
 | `target_mode` | `log_return` | Hedef: log-getiri (tercih) veya fiyat |
 | `feature_mode` | `stationary_features` | Özellik seti tipi |
 | `scaling_mode` | `robust_x_standard_y_clip` | Ölçekleme stratejisi |
@@ -577,7 +566,6 @@ outputs/{SYMBOL}/
 ├── models/
 │   ├── xgboost_model.pkl
 │   ├── lstm_model.keras
-│   ├── tft_model.pt
 │   └── {model}_final_holdout_model.{ext}
 ├── experiments/
 │   └── experiment_log_{timestamp}.csv
@@ -660,7 +648,7 @@ Sisteme kendi algoritmanızı (örneğin yeni bir PyTorch tabanlı Transformer v
 | Sorun | Neden ve Çözüm |
 |---|---|
 | **yfinance 429 Too Many Requests** | *Neden:* Çok fazla hisse verisi aynı anda istendi. *Çözüm:* `python -m src.cli.batch` içindeki `--workers` sayısını düşürün veya farklı bir IP adresi/VPN kullanın. |
-| **CUDA OOM (Out of Memory)** | *Neden:* TFT v2 veya LSTM eğitilirken ekran kartı belleği doldu. *Çözüm:* `PipelineConfig` altındaki `time_steps` değerini küçültün veya model batch size değerini azaltın. |
+| **CUDA OOM (Out of Memory)** | *Neden:* LSTM eğitilirken ekran kartı belleği doldu. *Çözüm:* `PipelineConfig` altındaki `time_steps` değerini küçültün veya model batch size değerini azaltın. |
 | **Missing Macro Data (FRED/Yahoo)** | *Neden:* İnternet bağlantısı koptu veya API değişti. *Çözüm:* `src/data/data_updater.py`'yi tekrar çalıştırın; veriler önbellekten okunmak yerine sıfırdan indirilir. |
 | **SQLite database is locked** | *Neden:* Optuna warm-start kullanırken çok fazla worker aynı DB dosyasına yazmaya çalıştı. *Çözüm:* Worker sayısını düşürün (`--workers 2` veya `1`). |
 

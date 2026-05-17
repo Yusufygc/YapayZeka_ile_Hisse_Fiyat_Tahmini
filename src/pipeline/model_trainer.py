@@ -100,9 +100,6 @@ class ModelTrainer:
     def _make_lstm(self, stage: str):
         return model_factory.make_lstm(self.deep_config, stage)
 
-    def _make_tft(self, stage: str):
-        return model_factory.make_tft(self.deep_config, stage)
-
     def _has_min_sequences(self, count: int, model_name: str, context: str) -> bool:
         min_seq = int(self.deep_config.get("min_sequence_samples", 64))
         if count < min_seq:

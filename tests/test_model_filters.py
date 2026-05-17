@@ -63,7 +63,7 @@ def test_resolve_candidates_filters_disabled():
 def test_resolve_candidates_default_when_no_selected():
     """selected boşsa default candidate kümesi döner."""
     result = resolve_candidates(selected=None, disabled=[])
-    assert result == {"XGBoost", "LSTM", "TFT", "DLinear", "NLinear"}
+    assert result == {"XGBoost", "LSTM", "DLinear", "NLinear"}
 
 
 def test_resolve_candidates_disabled_overrides_default():
@@ -76,9 +76,9 @@ def test_resolve_candidates_disabled_overrides_default():
 
 def test_resolve_candidates_require_available_drops_missing_deps():
     """require_available=True ile optional dep eksik modeller düşer."""
-    # Tüm candidate kümesinden TFT/LSTM (torch/tensorflow gerektirir) optional.
+    # Tüm candidate kümesinden LSTM (tensorflow gerektirir) optional.
     result = resolve_candidates(
-        selected=["DLinear", "NLinear", "Random Forest", "XGBoost", "LSTM", "TFT"],
+        selected=["DLinear", "NLinear", "Random Forest", "XGBoost", "LSTM"],
         disabled=[],
         require_available=True,
     )
@@ -91,7 +91,7 @@ def test_list_models_table_contains_all_models():
     for required in (
         "Random Forest", "DLinear", "NLinear", "Ridge Return",
         "ElasticNet Return", "Naive Zero Return", "XGBoost",
-        "LightGBM Return", "ARIMA", "LSTM", "TFT", "Prophet",
+        "LightGBM Return", "ARIMA", "LSTM", "Prophet",
     ):
         assert required in out, f"{required} listede yok"
     # Başlıklar görünmeli.

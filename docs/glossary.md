@@ -77,7 +77,7 @@ Her satir su mantikla okunmalidir: terim nedir, ne ise yarar, bu projede nerede 
 | `StandardScaler` | Olcekleme | Ortalama ve standart sapmaya dayali olcekleme yontemi. | Hedef degerleri ortalama sifir ve birim varyans civarina getirir. | Y hedefi icin kullanilir. | Train disinda fit edilirse leakage olusur. |
 | Clip | Olcekleme | Asiri uc degerleri belirli sinirlara kisma islemi. | Modelin ekstrem hedeflerden bozulmasini azaltir. | `robust_x_standard_y_clip` modu. | Fazla agresif clipping gercek piyasa kuyruk riskini bastirabilir. |
 | Inverse transform | Donusum | Olceklenmis tahmini eski birimine geri cevirme islemi. | Metrikleri fiyat veya getiri uzayinda anlamli hesaplamayi saglar. | `scaler_y.inverse_transform()` ve fiyat rekonstruksiyon fonksiyonlari. | Tahmin, hedef modu ve onceki kapanis dizisi ayni hizaya getirilmeli. |
-| Sequence | Veri sekli | Zaman adimlari iceren 3 boyutlu model girdisi. | LSTM ve TFT gibi sequence modellerinin gecmis pencereyi gormesini saglar. | `[samples, time_steps, features]`. | `time_steps` arttikca ilk gozlemler kaybolur ve minimum ornek ihtiyaci artar. |
+| Sequence | Veri sekli | Zaman adimlari iceren 3 boyutlu model girdisi. | LSTM gibi sequence modellerinin gecmis pencereyi gormesini saglar. | `[samples, time_steps, features]`. | `time_steps` arttikca ilk gozlemler kaybolur ve minimum ornek ihtiyaci artar. |
 | `time_steps` | Veri sekli | Sequence modellerinin kac gecmis gunu girdi olarak alacagini belirler. | Modelin gecmis baglam uzunlugunu ayarlar. | `DataConfig.time_steps`, varsayilan 30. | Walk-forward embargo varsayilani bu degerle iliskilidir. |
 
 ## Validasyon ve Test Protokolleri
@@ -107,12 +107,11 @@ Her satir su mantikla okunmalidir: terim nedir, ne ise yarar, bu projede nerede 
 | Ridge | Model | L2 regularizasyonlu lineer regresyon. | Fazla karmasik olmayan, stabil bir return modeli saglar. | `RidgeReturnModel`. | Nonlineer iliskileri yakalamaz ama guclu baseline olabilir. |
 | ElasticNet | Model | L1 ve L2 regularizasyonu birlestiren lineer model. | Hem stabilite hem seyrek ozellik secimi etkisi saglar. | `ElasticNetReturnModel`. | L1 etkisi bazi ozellik katsayilarini sifirlayabilir. |
 | LSTM | Model | Uzun kisa sureli hafiza hucreleriyle sequence ogrenebilen derin ogrenme modeli. | Gecmis zaman penceresindeki ardisik yapilari yakalar. | `LSTMModel` ve attention destekli varyantlar. | Veri azsa veya volatility yuksekse overfitting ve egitim kararsizligi riski vardir. |
-| TFT | Model | Temporal Fusion Transformer, sequence ve kantil tahmini odakli derin model. | Belirsizlik araligi ve zaman baglamli tahmin uretir. | `TFTModel`, `TFTModelV2`. | Kantil ciktilari metrik ve rapor tarafinda ayrica ele alinmali. |
 | DLinear | Model | Sequence girdileri uzerinde hafif lineer baseline. | Derin modele gore daha basit ama sequence-aware karsilastirma saglar. | `DLinearSequenceModel`. | Deneysel baseline olarak degerlendirilmeli. |
 | NLinear | Model | Son degeri normalize ederek calisan lineer sequence baseline. | Kisa vadeli normalize hareketleri yakalamaya calisir. | `NLinearSequenceModel`. | Normalizasyon varsayimi piyasa rejimine gore degisebilir. |
 | Ensemble | Model | Birden fazla model tahminini birlestiren topluluk yaklasimi. | Tek model riskini azaltir ve tahmini yumusatabilir. | `EnsembleModel`, equal ve inverse RMSE agirliklari. | Ensemble sadece uyumlu uzunluk ve hedef semantigi olan tahminlerle kurulmali. |
 | Candidate model | Model secimi | Uretim veya lider secimi icin aday kabul edilen model. | Raporlarda hangi modellerin asil yarista oldugunu ayirir. | `CANDIDATE_MODELS`, `DEFAULT_CANDIDATE_MODELS`. | Benchmark modeller candidate gibi secilmemeli. |
-| Optional dependency | Bagimlilik | Kurulu degilse ilgili modelin atlanabildigi paket. | Hafif ortamda testlerin ve diger modellerin calismasini saglar. | Prophet, LightGBM, TensorFlow, PyTorch gibi paketler. | Import hatalari tum pipeline'i bozmayacak sekilde izole edilmeli. |
+| Optional dependency | Bagimlilik | Kurulu degilse ilgili modelin atlanabildigi paket. | Hafif ortamda testlerin ve diger modellerin calismasini saglar. | Prophet, LightGBM, TensorFlow gibi paketler. | Import hatalari tum pipeline'i bozmayacak sekilde izole edilmeli. |
 
 ## Metrikler ve Model Degerlendirme
 
@@ -130,7 +129,6 @@ Her satir su mantikla okunmalidir: terim nedir, ne ise yarar, bu projede nerede 
 | Neutral Rate | Finansal metrik | Sinyalin notr veya islemsiz kaldigi oran. | Modelin ne kadar sik pozisyon almaktan kactigini gosterir. | `Neutral_Rate`. | Yuksek notr oran dusuk risk veya yetersiz sinyal anlamina gelebilir. |
 | Composite Score | Metrik | Birden fazla performans olcutunu birlestiren skor. | Lider secimini tek metrik bagimliligindan kurtarir. | `Composite_Score` rapor kolonu. | Formul degisirse eski kosularla karsilastirma dikkat ister. |
 | `RMSE_vs_benchmark` | Metrik | Model RMSE'sinin benchmark RMSE'sine orani. | Modelin basit referansa gore ne kadar iyi oldugunu gosterir. | `enrich_with_benchmark_metrics()`. | 1'in alti daha iyi RMSE anlamina gelir. |
-| Pinball Loss | Kantil metrik | Kantil tahmin hatasini olcen kayip fonksiyonu. | TFT gibi belirsizlik tahmini yapan modelleri degerlendirir. | `compute_quantile_metrics()`. | Nokta tahmini RMSE'siyle ayni sey degildir. |
 | P10/P90 Coverage | Kantil metrik | Gercek degerin alt ve ust kantil bandina dusme orani. | Tahmin araliginin gercegi ne kadar kapsadigini olcer. | `P10_P90_Coverage`, `Interval_Coverage`. | Cok genis bant coverage'i artirirken kullanisliligi azaltabilir. |
 | Winkler Score | Kantil metrik | Aralik genisligi ve kapsama hatasini birlikte cezalandiran skor. | Tahmin bandinin hem dogrulugunu hem darligini olcer. | `Winkler_Score`. | Daha dusuk skor genelde daha iyi aralik anlamina gelir. |
 

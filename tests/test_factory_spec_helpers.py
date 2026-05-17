@@ -62,7 +62,7 @@ def test_tree_models_dynamic():
 def test_seq_models_dynamic():
     seq = model_factory.SEQ_MODELS
     assert isinstance(seq, set)
-    assert {"LSTM", "TFT", "DLinear", "NLinear"}.issubset(seq)
+    assert {"LSTM", "DLinear", "NLinear"}.issubset(seq)
 
 
 def test_benchmark_model_set_dynamic():
@@ -74,7 +74,7 @@ def test_all_models_dynamic():
     all_models = model_factory.ALL_MODELS
     assert isinstance(all_models, list)
     # Default candidate kümesi (Faz 2 sözleşmesi).
-    assert set(all_models) == {"XGBoost", "LSTM", "TFT", "DLinear", "NLinear"}
+    assert set(all_models) == {"XGBoost", "LSTM", "DLinear", "NLinear"}
 
 
 def test_factory_getattr_unknown_raises():

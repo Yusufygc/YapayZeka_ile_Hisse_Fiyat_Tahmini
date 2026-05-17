@@ -17,22 +17,22 @@ def _workspace_tmp(name: str) -> str:
     return path
 
 
-def test_selected_tft_scope_keeps_only_tft_as_candidate_and_naive_as_benchmarks():
+def test_selected_lstm_scope_keeps_only_lstm_as_candidate_and_naive_as_benchmarks():
     tmp = _workspace_tmp("trainer_scope")
     trainer = ModelTrainer(
         stock_symbol="TEST",
         tracker=ExperimentTracker(tmp),
         feature_names=["f1"],
-        selected_models=["TFT"],
+        selected_models=["LSTM"],
         dataset_metadata={"target_mode": "log_return"},
     )
 
-    assert trainer.candidate_models == {"TFT"}
+    assert trainer.candidate_models == {"LSTM"}
     assert trainer.benchmark_models == set(BENCHMARK_MODELS)
     assert reportable_model_names(
-        ["TFT", "ElasticNet Return", "Naive Last Value", "Naive Zero Return"],
+        ["LSTM", "ElasticNet Return", "Naive Last Value", "Naive Zero Return"],
         trainer.candidate_models,
-    ) == {"TFT", "Naive Last Value", "Naive Zero Return"}
+    ) == {"LSTM", "Naive Last Value", "Naive Zero Return"}
 
 
 def test_select_best_model_ignores_benchmarks_and_non_candidates():
@@ -47,14 +47,14 @@ def test_select_best_model_ignores_benchmarks_and_non_candidates():
             "RMSE": 0.2,
             "Candidate_For_Selection": False,
         },
-        "TFT": {
+        "LSTM": {
             "Composite_Score": 40.0,
             "RMSE": 1.0,
             "Candidate_For_Selection": True,
         },
     }
 
-    assert MetricsReportingService._select_best_model(metrics) == "TFT"
+    assert MetricsReportingService._select_best_model(metrics) == "LSTM"
 
 
 def test_best_models_latest_final_holdout_production_candidate_wins():

@@ -212,18 +212,6 @@ class ForecastRunner:
                 validation_ratio=float(cfg.get("validation_ratio", 0.1)),
                 min_val_samples=int(cfg.get("min_validation_samples", 32)),
             )
-        if model_name == "TFT":
-            from src.models.tft_v2 import TFTModel
-            cfg = self._deep_stage_config("tft", stage)
-            return TFTModel(
-                epochs=int(cfg.get("epochs", 80)),
-                patience=int(cfg.get("patience", 15)),
-                dropout=float(cfg.get("dropout", 0.3)),
-                batch_size=int(cfg.get("batch_size", 32)),
-                lr_patience=int(cfg.get("lr_patience", 5)),
-                validation_ratio=float(cfg.get("validation_ratio", 0.1)),
-                min_val_samples=int(cfg.get("min_validation_samples", 32)),
-            )
         raise KeyError(f"Bilinmeyen model adi: {model_name}")
 
     def _deep_stage_config(self, section: str, stage: str) -> dict[str, Any]:

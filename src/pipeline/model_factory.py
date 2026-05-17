@@ -7,7 +7,7 @@ Faz 3: spec helper'ları (`benchmark_specs`, `linear_baseline_specs`,
 üzerinden türetilir. Modül-seviyesi `__getattr__` sayesinde eski isimler
 import edilebilir; dinamik değerler ensure_loaded() üzerinden çözülür.
 
-`make_arima`, `make_lstm`, `make_tft`, `make_prophet`, `build_deep_config`,
+`make_arima`, `make_lstm`, `make_prophet`, `build_deep_config`,
 `arima_config` helper'ları korunur — `ModelTrainer` ve `ForecastRunner`
 bu yardımcılarla dedike workflow çağırır.
 """
@@ -19,7 +19,6 @@ from typing import Callable
 from src.models.arima_model import ARIMAModel
 from src.models.lstm_model import AttentionLSTMModel
 from src.models.random_forest_model import RandomForestModel
-from src.models.tft_v2 import TFTModel
 from src.models.xgboost_model import XGBoostModel
 
 # Faz 3: TREE_MODELS / SEQ_MODELS / BENCHMARK_MODEL_SET / ALL_MODELS artık
@@ -50,21 +49,10 @@ def build_deep_config(config: dict) -> dict:
             "dropout": 0.2,
             "batch_size": 32,
         },
-        "tft": {
-            "epochs_single": 80,
-            "epochs_wf": 50,
-            "epochs_final": 50,
-            "patience_single": 15,
-            "patience_wf": 12,
-            "patience_final": 12,
-            "lr_patience": 5,
-            "dropout": 0.3,
-            "batch_size": 32,
-        },
     }
     merged = dict(default)
-    merged.update({key: value for key, value in config.items() if key not in {"lstm", "tft"}})
-    for section in ("lstm", "tft"):
+    merged.update({key: value for key, value in config.items() if key not in {"lstm"}})
+    for section in ("lstm",):
         section_cfg = dict(default[section])
         section_cfg.update(config.get(section, {}))
         merged[section] = section_cfg
@@ -103,19 +91,6 @@ def make_lstm(deep_config: dict, stage: str) -> AttentionLSTMModel:
         epochs=int(cfg.get(f"epochs_{stage}", cfg.get("epochs_single", 80))),
         patience=int(cfg.get("patience", 15)),
         dropout_rate=float(cfg.get("dropout", 0.2)),
-        batch_size=int(cfg.get("batch_size", 32)),
-        lr_patience=int(cfg.get("lr_patience", 5)),
-        validation_ratio=float(deep_config.get("validation_ratio", 0.1)),
-        min_val_samples=int(deep_config.get("min_validation_samples", 32)),
-    )
-
-
-def make_tft(deep_config: dict, stage: str) -> TFTModel:
-    cfg = deep_config["tft"]
-    return TFTModel(
-        epochs=int(cfg.get(f"epochs_{stage}", cfg.get("epochs_single", 80))),
-        patience=int(cfg.get(f"patience_{stage}", cfg.get("patience_single", 15))),
-        dropout=float(cfg.get("dropout", 0.3)),
         batch_size=int(cfg.get("batch_size", 32)),
         lr_patience=int(cfg.get("lr_patience", 5)),
         validation_ratio=float(deep_config.get("validation_ratio", 0.1)),

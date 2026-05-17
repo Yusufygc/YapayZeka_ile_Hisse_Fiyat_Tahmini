@@ -8,7 +8,7 @@ import os
 import numpy as np
 import pandas as pd
 
-from src.evaluation.evaluator import compute_metrics, plot_comparison, plot_prediction_interval
+from src.evaluation.evaluator import compute_metrics, plot_comparison
 from src.evaluation.financial_metrics import compute_quantile_metrics
 from src.pipeline.evaluation_services import _OwnerBackedService
 
@@ -55,7 +55,7 @@ class SingleSplitEvaluationWorkflow(_OwnerBackedService):
                 self.dataset_metadata,
             )
 
-            model_ext = ".pt" if name == "TFT" else ".keras" if name == "LSTM" else ".pkl"
+            model_ext = ".keras" if name == "LSTM" else ".pkl"
             model_filename = f"{name.replace(' ', '_').lower()}_model{model_ext}"
             model_path = os.path.join(self.models_dir, model_filename)
 
@@ -84,17 +84,7 @@ class SingleSplitEvaluationWorkflow(_OwnerBackedService):
             suffix="latest",
             model_metrics_by_model=metrics,
         )
-        self._save_multihorizon_report(suffix="latest")
         xai_payload = self._get_xai_single_split(trained_models, tensors=self.latest_tensors)
-
-        tft_quantiles_df = None
-        if "TFT" in self.quantile_predictions:
-            tft_quantiles = self.quantile_predictions["TFT"]
-            quantile_labels = [f"Q{idx + 1}" for idx in range(tft_quantiles.shape[1])]
-            if tft_quantiles.shape[1] == 3:
-                quantile_labels = ["P10", "P50", "P90"]
-            tft_quantiles_df = pd.DataFrame(tft_quantiles, columns=quantile_labels)
-            tft_quantiles_df.insert(0, "Actual", self.y_true_aligned[-len(tft_quantiles_df):])
 
         # ── Tahmin karşılaştırma grafikleri ─────────────────────────
         try:
@@ -107,27 +97,12 @@ class SingleSplitEvaluationWorkflow(_OwnerBackedService):
             )
         except Exception as _pe:
             print(f'  [WARN] Tahmin grafiği kaydedilemedi: {_pe}')
-        try:
-            if 'TFT' in self.quantile_predictions and self.quantile_predictions['TFT'].shape[1] >= 3:
-                _q = self.quantile_predictions['TFT']
-                plot_prediction_interval(
-                    self.y_true_aligned,
-                    median_pred=_q[:, 1],
-                    lower_pred=_q[:, 0],
-                    upper_pred=_q[:, 2],
-                    save_path=os.path.join(self.outputs_dir, 'predictions_tft_interval_latest.png'),
-                    title=f'{self.stock_symbol} TFT P10-P50-P90 (latest)',
-                )
-        except Exception as _pe:
-            print(f'  [WARN] TFT interval grafiği kaydedilemedi: {_pe}')
-
         return {
             "metrics": metrics,
             "y_true": self.y_true_aligned,
             "predictions": self.predictions,
             "backtest": backtest_results,
             "xai_payload": xai_payload,
-            "tft_quantiles_df": tft_quantiles_df,
             "quantile_predictions": self.quantile_predictions,
         }
 
@@ -330,7 +305,7 @@ class FinalHoldoutEvaluationWorkflow(_OwnerBackedService):
             final_metadata,
         )
 
-        model_ext = ".pt" if model_name == "TFT" else ".keras" if model_name == "LSTM" else ".pkl"
+        model_ext = ".keras" if model_name == "LSTM" else ".pkl"
         model_filename = f"{model_name.replace(' ', '_').lower()}_final_holdout_model{model_ext}"
         model_path = os.path.join(self.models_dir, model_filename)
         model.save(model_path)
@@ -385,19 +360,6 @@ class FinalHoldoutEvaluationWorkflow(_OwnerBackedService):
             )
         except Exception as _pe:
             print(f'  [WARN] Final holdout grafiği kaydedilemedi: {_pe}')
-        try:
-            if quantile_price is not None and quantile_price.shape[1] >= 3:
-                plot_prediction_interval(
-                    y_true_price,
-                    median_pred=quantile_price[:, 1],
-                    lower_pred=quantile_price[:, 0],
-                    upper_pred=quantile_price[:, 2],
-                    save_path=os.path.join(self.outputs_dir, f'predictions_tft_interval_final_holdout.png'),
-                    title=f'{self.stock_symbol} TFT P10-P50-P90 (final holdout)',
-                )
-        except Exception as _pe:
-            print(f'  [WARN] TFT interval grafiği (final holdout) kaydedilemedi: {_pe}')
-
         return {
             "metrics": metrics,
             "y_true": y_true_price,

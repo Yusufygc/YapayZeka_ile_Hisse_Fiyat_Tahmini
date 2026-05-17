@@ -85,20 +85,11 @@ class _MetricsReporterMixin:
     def _attach_model_family_metadata(
         self, metrics_dict: Dict[str, Dict[str, Any]]
     ) -> Dict[str, Dict[str, Any]]:
-        tft_label = (
-            self.dataset_metadata
-            .get("model_config", {})
-            .get("deep_learning", {})
-            .get("tft", {})
-            .get("model_label", "TFT-like Quantile Sequence Model")
-        )
         for model_name, model_metrics in metrics_dict.items():
             if model_name.startswith("Ensemble "):
                 model_metrics["Model_Family"] = "ensemble"
                 model_metrics["Ensemble_Method"] = model_name.replace("Ensemble ", "")
                 model_metrics["Ensemble_Weights"] = str(self.ensemble_weights.get(model_name, {}))
-            elif model_name == "TFT":
-                model_metrics["Model_Family"] = tft_label
             elif model_name in {"DLinear", "NLinear"}:
                 model_metrics["Model_Family"] = "low_parameter_sequence_baseline"
             elif model_name == "LightGBM Return":
@@ -275,22 +266,3 @@ class _MetricsReporterMixin:
         except Exception as exc:
             print(f"  [WARN] XAI dosya yazimi basarisiz ({suffix}): {exc}")
 
-    def _save_multihorizon_report(self, suffix: str = "latest") -> None:
-        """
-        [A3] TFT multi-horizon tahminlerini CSV olarak outputs/xai/ altına yazar.
-
-        Sütun yapısı: h1 | h5 | h10 | h21  (mevcut horizonlara göre dinamik)
-        """
-        mh = getattr(self, "multihorizon_predictions", {})
-        if not mh or not bool(getattr(self, "write_xai_tables", True)):
-            return
-        try:
-            os.makedirs(self.xai_dir, exist_ok=True)
-            for model_name, horizon_dict in mh.items():
-                df = pd.DataFrame(horizon_dict)
-                safe = model_name.replace(" ", "_")
-                save_path = os.path.join(self.xai_dir, f"tft_multihorizon_{safe}_{suffix}.csv")
-                df.to_csv(save_path, index=False)
-                print(f"  [OK] Multi-horizon CSV kaydedildi -> {save_path}")
-        except Exception as exc:
-            print(f"  [WARN] Multi-horizon CSV yazimi basarisiz: {exc}")

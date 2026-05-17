@@ -44,9 +44,6 @@ class SingleSplitResult(TypedDict):
     xai_payload: Optional[Dict[str, Any]]
     """XAI aciklama icerigi veya None."""
 
-    tft_quantiles_df: Optional[pd.DataFrame]
-    """TFT kantil tahmin DataFrame'i veya None."""
-
     quantile_predictions: Dict[str, np.ndarray]
     """Kantil tahminler {model_name: ndarray[n_samples, n_quantiles]}."""
 
@@ -92,7 +89,7 @@ class FinalHoldoutResult(TypedDict):
     """Secilen model tahminleri {model_name: ndarray}."""
 
     quantiles_df: Optional[pd.DataFrame]
-    """Kantil tahmin DataFrame'i (TFT icin) veya None."""
+    """Kantil tahmin DataFrame'i veya None."""
 
     quantile_price: Optional[np.ndarray]
     """Ham kantil tahmin matrisi veya None."""

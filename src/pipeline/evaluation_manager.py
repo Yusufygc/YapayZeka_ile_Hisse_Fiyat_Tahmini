@@ -121,7 +121,6 @@ class EvaluationManager:
         self.predictions: Dict[str, np.ndarray] = {}
         self.prediction_targets: Dict[str, np.ndarray] = {}
         self.quantile_predictions: Dict[str, np.ndarray] = {}
-        self.multihorizon_predictions: Dict[str, Dict[str, np.ndarray]] = {}
         self.single_backtest_inputs: Dict[str, Dict[str, Any]] = {}
         self.y_true_aligned: Optional[np.ndarray] = None
         self.y_true_target_aligned: Optional[np.ndarray] = None
@@ -148,7 +147,6 @@ class EvaluationManager:
             predictions=self.predictions,
             prediction_targets=self.prediction_targets,
             quantile_predictions=self.quantile_predictions,
-            multihorizon_predictions=self.multihorizon_predictions,
             single_backtest_inputs=self.single_backtest_inputs,
             latest_tensors=self.latest_tensors,
             latest_backtest_results=self.latest_backtest_results,
@@ -473,10 +471,6 @@ class EvaluationManager:
     def _write_xai_reports(self, payload, suffix: str) -> None:
         self._ensure_services()
         return self.metrics_reporting_service._write_xai_reports(payload, suffix)
-
-    def _save_multihorizon_report(self, suffix: str = "latest") -> None:
-        self._ensure_services()
-        return self.metrics_reporting_service._save_multihorizon_report(suffix)
 
     def _split_walk_forward_signal_sets(
         self,

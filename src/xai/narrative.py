@@ -46,18 +46,3 @@ def model_summary_sentence(model_name: str, pred_target: float | None, pred_pric
     if actual_price is not None and np.isfinite(actual_price):
         price_part += f" Gerçekleşen fiyat {actual_price:.4f}."
     return f"{model_name} modeli bu adimda {move} bir hareket bekledi.{price_part}"
-
-
-def uncertainty_sentence(low: float | None, mid: float | None, high: float | None) -> str:
-    values = [low, mid, high]
-    if any(value is None or not np.isfinite(value) for value in values):
-        return ""
-    width = abs(high - low)
-    rel_width = width / max(abs(mid), 1e-9)
-    if rel_width >= 0.08:
-        band = "geniş"
-    elif rel_width <= 0.03:
-        band = "dar"
-    else:
-        band = "orta genişlikte"
-    return f"TFT tahmin aralığı {band}; bu, modelin belirsizlik seviyesini gösterir."

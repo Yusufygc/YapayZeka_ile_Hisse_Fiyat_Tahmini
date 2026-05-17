@@ -15,7 +15,7 @@ from src.pipeline.data_manager import DataManager
 
 
 _TREE_MODELS = {"XGBoost", "Random Forest", "Ridge Return", "ElasticNet Return", "LightGBM Return"}
-_SEQ_MODELS = {"LSTM", "TFT", "DLinear", "NLinear"}
+_SEQ_MODELS = {"LSTM", "DLinear", "NLinear"}
 _BASELINE_MODELS = {"Naive Last Value", "Naive Zero Return", "Naive Drift"}
 
 

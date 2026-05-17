@@ -11,13 +11,13 @@ import numpy as np
 import pandas as pd
 
 from src.xai.feature_dictionary import describe_feature, feature_group
-from src.xai.narrative import contribution_sentence, model_summary_sentence, uncertainty_sentence
+from src.xai.narrative import contribution_sentence, model_summary_sentence
 from src.xai.strategies import SequenceContributionStrategy, TabularContributionStrategy
 
 
 TREE_MODELS = {"XGBoost", "Random Forest", "LightGBM Return"}
 LINEAR_MODELS = {"Ridge Return", "ElasticNet Return"}
-SEQ_MODELS = {"LSTM", "TFT", "AttentionLSTM", "DLinear", "NLinear"}
+SEQ_MODELS = {"LSTM", "AttentionLSTM", "DLinear", "NLinear"}
 BASELINE_MODELS = {"Naive Last Value", "Naive Zero Return", "Naive Drift", "ARIMA", "Prophet"}
 
 
@@ -53,8 +53,6 @@ class XAIExplainer:
 
         quantile_predictions = quantile_predictions or {}
 
-        tft_attention_data: Dict[str, Any] = {}
-
         for model_name, model in trained_models.items():
             if model_name not in predictions:
                 continue
@@ -67,12 +65,6 @@ class XAIExplainer:
                     model_top, model_daily = self._explain_linear_model(
                         model_name, model, tensors, predictions, prediction_targets, y_true_aligned
                     )
-                elif model_name == "TFT":
-                    model_top, model_daily, tft_attn = self._explain_tft_model(
-                        model_name, model, tensors, predictions, prediction_targets, y_true_aligned, quantile_predictions.get(model_name)
-                    )
-                    if tft_attn is not None:
-                        tft_attention_data[model_name] = tft_attn
                 elif model_name in {"LSTM", "AttentionLSTM"}:
                     model_top, model_daily = self._explain_sequence_permutation(
                         model_name, model, tensors, predictions, prediction_targets, y_true_aligned
@@ -93,8 +85,6 @@ class XAIExplainer:
             "daily_reasons": pd.DataFrame(daily_rows),
             "summary_md":   "\n\n".join(summary_blocks),
         }
-        if tft_attention_data:
-            payload["tft_attention_data"] = tft_attention_data
         return payload
 
     def explain_walk_forward(
@@ -362,136 +352,6 @@ class XAIExplainer:
     def _lime_sequence_local_contributions(self, model: Any, X_seq: np.ndarray) -> Tuple[np.ndarray, str]:
         contribs, method, _approximate = self.sequence_strategy.lime_sequence_local_contributions(model, X_seq)
         return contribs, method
-
-    def _explain_tft_model(
-        self,
-        model_name: str,
-        model: Any,
-        tensors: Dict[str, Any],
-        predictions: Dict[str, np.ndarray],
-        prediction_targets: Dict[str, np.ndarray],
-        y_true_aligned: np.ndarray,
-        quantiles: np.ndarray | None,
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Any]:
-        """
-        TFT modelini açıklar.
-
-        Döndürür:
-            rows       : üst-önem satırları
-            daily      : günlük satırlar
-            attn_data  : (N, H, T) dikkat ısı haritası numpy dizisi | None
-                         [A5] XAIReportWriter'ın heatmap PNG üretmesi için
-        """
-        X_seq = self._align_rows(np.asarray(tensors["X_test_seq"], dtype=float), len(predictions[model_name]))
-        sample_count = min(len(X_seq), self.max_rows)
-        selected = X_seq[-sample_count:]
-        weights = []
-        for idx in range(sample_count):
-            item_weights = np.asarray(model.get_variable_importances(selected[idx : idx + 1]), dtype=float)
-            if item_weights.shape[-1] != len(self.feature_names):
-                raise ValueError("TFT variable importance boyutu feature_names ile eşleşmiyor.")
-            weights.append(item_weights)
-        weight_arr = np.asarray(weights)
-        latest_contrib = weight_arr[-1].mean(axis=0)
-        rows, daily = self._rows_from_contributions(
-            model_name,
-            latest_contrib.reshape(1, -1),
-            np.asarray(predictions[model_name])[-1:],
-            np.asarray(prediction_targets.get(model_name, []))[-1:],
-            np.asarray(y_true_aligned)[-1:],
-            "tft_variable_selection",
-            approximate=False,
-            dates=self._align_rows(np.asarray(tensors.get("dates_test", [])), len(predictions[model_name]))[-1:],
-        )
-        rows.extend(self._tft_time_window_rows(model_name, weight_arr))
-
-        if quantiles is not None and len(quantiles):
-            q = np.asarray(quantiles)[-1]
-            if len(q) >= 3:
-                note = uncertainty_sentence(float(q[0]), float(q[1]), float(q[2]))
-                if note:
-                    rows.append(self._row(model_name, "TFT_Uncertainty", 1.0, None, note, "tft_quantiles", False))
-
-        # ── [A5] Dikkat ısı haritası ─────────────────────────────────────────
-        attn_data = None
-        try:
-            if hasattr(model, "get_attention_heatmap"):
-                attn_data = model.get_attention_heatmap(selected)   # (N, H, T)
-                T = selected.shape[1] if selected.ndim >= 2 else 1
-                rows.extend(self._tft_attention_temporal_rows(model_name, attn_data, T))
-        except Exception:
-            pass    # dikkat çıkarma başarısız olursa sessizce devam et
-
-        return rows, daily, attn_data
-
-    def _tft_time_window_rows(self, model_name: str, weights: np.ndarray) -> List[Dict[str, Any]]:
-        if weights.size == 0:
-            return []
-        windows = [
-            ("son gün", weights[:, -1:, :]),
-            ("son hafta", weights[:, -5:, :]),
-            ("son ay", weights),
-        ]
-        rows = []
-        for label, part in windows:
-            mean_by_feature = part.mean(axis=(0, 1))
-            top_idx = int(np.argmax(mean_by_feature))
-            feature = self.feature_names[top_idx]
-            reason = f"TFT {label} içinde en çok {describe_feature(feature)} sinyaline odaklandı."
-            rows.append(self._row(model_name, feature, float(mean_by_feature[top_idx]), None, reason, f"tft_{label}", False))
-        return rows
-
-    def _tft_attention_temporal_rows(
-        self,
-        model_name: str,
-        attn_heatmap: np.ndarray,
-        time_steps: int,
-    ) -> List[Dict[str, Any]]:
-        """
-        [A5] (N, H, T) dikkat ısı haritasını XAI satırlarına dönüştürür.
-
-        Her zaman adımının ortalama dikkat ağırlığı hesaplanır;
-        en yüksek ağırlık alan ilk 3 zaman adımı raporlanır.
-
-        Args:
-            model_name   : model adı ("TFT")
-            attn_heatmap : (N, H, T) dikkat ağırlıkları
-            time_steps   : toplam T adım (sequence uzunluğu)
-
-        Returns:
-            XAI satır listesi (tft_attention metodu)
-        """
-        if attn_heatmap is None or np.asarray(attn_heatmap).size == 0:
-            return []
-
-        arr = np.asarray(attn_heatmap, dtype=float)   # (N, H, T)
-        if arr.ndim != 3:
-            return []
-
-        mean_attn = arr.mean(axis=(0, 1))              # (T,)
-        top_k     = min(3, len(mean_attn))
-        top_steps = np.argsort(mean_attn)[::-1][:top_k]
-
-        rows = []
-        for step in top_steps:
-            steps_back = time_steps - int(step) - 1
-            label      = f"T-{steps_back}" if steps_back > 0 else "T (son gün)"
-            reason     = (
-                f"TFT modeli {label} adım önceki veriye en çok dikkat etti "
-                f"(ortalama ağırlık={float(mean_attn[step]):.4f})."
-            )
-            rows.append(
-                self._row(
-                    model_name,
-                    f"AttnStep_{int(step)}",
-                    float(mean_attn[step]),
-                    None,
-                    reason,
-                    "tft_attention",
-                    False,
-                )
-            )
-        return rows
 
     def _explain_sequence_permutation(
         self,

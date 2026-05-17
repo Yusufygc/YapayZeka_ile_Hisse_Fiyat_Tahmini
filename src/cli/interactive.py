@@ -32,7 +32,6 @@ AVAILABLE_MODELS = [
     "Random Forest",
     "LightGBM Return",
     "LSTM",
-    "TFT",
     "Ridge Return",
     "ElasticNet Return",
     "DLinear",
@@ -42,7 +41,7 @@ AVAILABLE_MODELS = [
 PRESETS = {
     "1": ("Tüm Modeller",            AVAILABLE_MODELS),
     "2": ("Agac Tabanli",            ["XGBoost", "Random Forest", "LightGBM Return"]),
-    "3": ("Yalnızca Derin Öğrenme",  ["LSTM", "TFT"]),
+    "3": ("Yalnızca Derin Öğrenme",  ["LSTM"]),
     "4": ("Hızlı (XGBoost + LSTM)",  ["XGBoost", "LSTM"]),
     "5": ("Yalnızca Prophet",        ["Prophet"]),
     "6": ("Modern Baseline",         ["Ridge Return", "ElasticNet Return", "LightGBM Return", "DLinear", "NLinear"]),

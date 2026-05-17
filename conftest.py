@@ -160,7 +160,6 @@ def _install_optional_dependency_stubs() -> None:
         "lightgbm": _stub_lightgbm,
         "prophet": _stub_prophet,
         "optuna": _stub_optuna,
-        "torch": lambda: _stub("torch"),
     }
     for name, installer in optional_modules.items():
         if not _real_import_available(name):

@@ -28,7 +28,7 @@ except ImportError:  # pragma: no cover
         return np.asarray(prev_close, dtype=float).ravel() * (1.0 + np.asarray(returns, dtype=float).ravel())
 
 
-_SEQ_MODELS = {"LSTM", "TFT", "AttentionLSTM", "DLinear", "NLinear"}
+_SEQ_MODELS = {"LSTM", "AttentionLSTM", "DLinear", "NLinear"}
 _TREE_MODELS = {"XGBoost", "Random Forest", "Ridge Return", "ElasticNet Return", "LightGBM Return"}
 
 
@@ -497,27 +497,6 @@ class _PredictionEngineMixin:
 
                 raw_pred_targets[name] = preds_target
                 raw_preds[name] = self._target_to_price(preds_target, prev_close_aligned)
-
-                # ── [A3] TFT multi-horizon tahminler ─────────────────────
-                if name == "TFT" and hasattr(model, "predict_multihorizon"):
-                    try:
-                        mh_raw = model.predict_multihorizon(tensors["X_test_seq"])
-                        mh_aligned: Dict[str, np.ndarray] = {}
-                        for horizon_key, arr in mh_raw.items():
-                            arr_f = np.asarray(arr, dtype=float)
-                            # (N, 3) kuantil dizisi → P50 (orta sütun)
-                            if arr_f.ndim == 2:
-                                arr_f = arr_f[:, arr_f.shape[1] // 2]
-                            arr_f = arr_f.ravel()
-                            arr_k = arr_f[-k:] if len(arr_f) >= k else arr_f
-                            arr_inv = tensors["scaler_y"].inverse_transform(
-                                arr_k.reshape(-1, 1)
-                            ).ravel()
-                            mh_aligned[horizon_key] = arr_inv   # "h1", "h5", ...
-                        self.multihorizon_predictions[name] = mh_aligned
-                        print(f"  [OK] TFT multi-horizon tahminleri: {list(mh_aligned.keys())}")
-                    except Exception as mh_exc:
-                        print(f"  [WARN] TFT multi-horizon tahmini atlaniyor: {mh_exc}")
 
                 if name in raw_quantiles:
                     aligned_quantiles = raw_quantiles[name][-k:]

@@ -3,7 +3,7 @@
 preprocessor.py — Veri Ön İşleme (Split, Scale, Windowing)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Zaman serisi verisini kronolojik sırayla train/test'e ayırır,
-RobustScaler ile ölçeklendirir ve LSTM/TFT için 3-boyutlu pencereler oluşturur.
+RobustScaler ile ölçeklendirir ve LSTM için 3-boyutlu pencereler oluşturur.
 
 ⚠ Data Leakage Önlemi: Scaler yalnızca eğitim verisi üzerinde fit edilir.
 

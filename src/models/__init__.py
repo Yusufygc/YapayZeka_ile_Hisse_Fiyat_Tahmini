@@ -40,7 +40,7 @@ def __getattr__(name):
 
 # --- Plug-in keşfi (Faz 1 — additive) ------------------------------------
 # `model_registry.ensure_loaded()` tarafından bir kez çağrılır.
-# Her *_model.py (ve linear_sequence_model, tft_v2 paketi) import edilince
+# Her *_model.py (ve linear_sequence_model) import edilince
 # içlerindeki `register_model(ModelSpec(...))` çağrıları registry'i doldurur.
 _DISCOVERED = False
 
@@ -67,7 +67,6 @@ def _discover_models() -> None:
         if not (
             name.endswith("_model")
             or name == "linear_sequence_model"
-            or name == "tft_v2"
         ):
             continue
         # base_model abstrakttır, kayıt gerekmez.
