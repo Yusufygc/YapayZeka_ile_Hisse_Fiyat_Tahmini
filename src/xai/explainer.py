@@ -12,11 +12,13 @@ import pandas as pd
 
 from src.xai.feature_dictionary import describe_feature, feature_group
 from src.xai.narrative import contribution_sentence, model_summary_sentence, uncertainty_sentence
+from src.xai.strategies import SequenceContributionStrategy, TabularContributionStrategy
 
 
-TREE_MODELS = {"XGBoost", "Random Forest"}
+TREE_MODELS = {"XGBoost", "Random Forest", "LightGBM Return"}
+LINEAR_MODELS = {"Ridge Return", "ElasticNet Return"}
 SEQ_MODELS = {"LSTM", "TFT", "AttentionLSTM", "DLinear", "NLinear"}
-BASELINE_MODELS = {"Naive Last Value", "Naive Zero Return", "Naive Drift", "ARIMA", "Prophet", "LightGBM Return"}
+BASELINE_MODELS = {"Naive Last Value", "Naive Zero Return", "Naive Drift", "ARIMA", "Prophet"}
 
 
 class XAIExplainer:
@@ -33,6 +35,8 @@ class XAIExplainer:
         self.dataset_metadata = dataset_metadata
         self.max_rows = max_rows
         self.top_k = top_k
+        self.tabular_strategy = TabularContributionStrategy(feature_names, max_rows=max_rows)
+        self.sequence_strategy = SequenceContributionStrategy(feature_names, max_rows=max_rows)
 
     def explain_single_split(
         self,
@@ -57,6 +61,10 @@ class XAIExplainer:
             try:
                 if model_name in TREE_MODELS:
                     model_top, model_daily = self._explain_tree_model(
+                        model_name, model, tensors, predictions, prediction_targets, y_true_aligned
+                    )
+                elif model_name in LINEAR_MODELS:
+                    model_top, model_daily = self._explain_linear_model(
                         model_name, model, tensors, predictions, prediction_targets, y_true_aligned
                     )
                 elif model_name == "TFT":
@@ -316,30 +324,44 @@ class XAIExplainer:
         y_true_aligned: np.ndarray,
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         X = self._align_rows(np.asarray(tensors["X_test_s"], dtype=float), len(predictions[model_name]))
-        contribs, method = self._tree_contributions(wrapper.model, X)
+        contribs, method, approximate = self.tabular_strategy.tree_contributions(wrapper.model, X)
         dates = self._align_rows(np.asarray(tensors.get("dates_test", [])), len(predictions[model_name]))
         return self._rows_from_contributions(
-            model_name, contribs, predictions[model_name], prediction_targets.get(model_name), y_true_aligned, method, approximate=False, dates=dates
+            model_name, contribs, predictions[model_name], prediction_targets.get(model_name), y_true_aligned, method, approximate=approximate, dates=dates
         )
 
     def _tree_contributions(self, estimator: Any, X: np.ndarray) -> Tuple[np.ndarray, str]:
-        try:
-            import shap  # type: ignore
+        contribs, method, _approximate = self.tabular_strategy.tree_contributions(estimator, X)
+        return contribs, method
 
-            explainer = shap.TreeExplainer(estimator)
-            shap_values = explainer.shap_values(X)
-            if isinstance(shap_values, list):
-                shap_values = shap_values[0]
-            return np.asarray(shap_values, dtype=float), "shap"
-        except Exception:
-            baseline = np.asarray(estimator.predict(X), dtype=float).ravel()
-            contribs = np.zeros((len(X), len(self.feature_names)), dtype=float)
-            for feature_idx in range(X.shape[1]):
-                X_perm = X.copy()
-                X_perm[:, feature_idx] = np.mean(X_perm[:, feature_idx])
-                perm_pred = np.asarray(estimator.predict(X_perm), dtype=float).ravel()
-                contribs[:, feature_idx] = baseline - perm_pred
-            return contribs, "permutation_fallback"
+    def _explain_linear_model(
+        self,
+        model_name: str,
+        wrapper: Any,
+        tensors: Dict[str, Any],
+        predictions: Dict[str, np.ndarray],
+        prediction_targets: Dict[str, np.ndarray],
+        y_true_aligned: np.ndarray,
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        X = self._align_rows(np.asarray(tensors["X_test_s"], dtype=float), len(predictions[model_name]))
+        estimator = getattr(wrapper, "model", wrapper)
+        contribs, method, approximate = self.tabular_strategy.linear_contributions(estimator, X)
+        dates = self._align_rows(np.asarray(tensors.get("dates_test", [])), len(predictions[model_name]))
+        return self._rows_from_contributions(
+            model_name, contribs, predictions[model_name], prediction_targets.get(model_name), y_true_aligned, method, approximate=approximate, dates=dates
+        )
+
+    def _linear_contributions(self, estimator: Any, X: np.ndarray) -> Tuple[np.ndarray, str]:
+        contribs, method, _approximate = self.tabular_strategy.linear_contributions(estimator, X)
+        return contribs, method
+
+    def _lime_tabular_contributions(self, estimator: Any, X: np.ndarray) -> Tuple[np.ndarray, str]:
+        contribs, method, _approximate = self.tabular_strategy.lime_tabular_contributions(estimator, X)
+        return contribs, method
+
+    def _lime_sequence_local_contributions(self, model: Any, X_seq: np.ndarray) -> Tuple[np.ndarray, str]:
+        contribs, method, _approximate = self.sequence_strategy.lime_sequence_local_contributions(model, X_seq)
+        return contribs, method
 
     def _explain_tft_model(
         self,
@@ -481,27 +503,15 @@ class XAIExplainer:
         y_true_aligned: np.ndarray,
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         X_seq = self._align_rows(np.asarray(tensors["X_test_seq"], dtype=float), len(predictions[model_name]))
-        sample_count = min(len(X_seq), self.max_rows)
-        X = X_seq[-sample_count:]
-        baseline = np.asarray(model.predict(X), dtype=float).ravel()
-        importances = np.zeros(len(self.feature_names), dtype=float)
-        signs = np.zeros(len(self.feature_names), dtype=float)
-        for feature_idx in range(X.shape[2]):
-            X_masked = X.copy()
-            X_masked[:, :, feature_idx] = np.mean(X_masked[:, :, feature_idx])
-            masked_pred = np.asarray(model.predict(X_masked), dtype=float).ravel()
-            delta = baseline - masked_pred
-            importances[feature_idx] = float(np.mean(np.abs(delta)))
-            signs[feature_idx] = float(np.mean(delta))
-        contribs = (np.sign(signs) * importances).reshape(1, -1)
+        contribs, method, approximate = self.sequence_strategy.permutation_contributions(model, X_seq)
         return self._rows_from_contributions(
             model_name,
             contribs,
             np.asarray(predictions[model_name])[-1:],
             np.asarray(prediction_targets.get(model_name, []))[-1:],
             np.asarray(y_true_aligned)[-1:],
-            "sequence_permutation",
-            approximate=True,
+            method,
+            approximate=approximate,
             dates=self._align_rows(np.asarray(tensors.get("dates_test", [])), len(predictions[model_name]))[-1:],
         )
 

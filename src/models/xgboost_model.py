@@ -8,8 +8,10 @@ Optuna ile hiperparametre optimizasyonu desteklenir.
 Modelin kaydedilmesi/yüklenmesi joblib ile yapılır.
 """
 
-import numpy as np
+import os
+
 import joblib
+import numpy as np
 from xgboost import XGBRegressor
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_squared_error
@@ -161,7 +163,16 @@ class XGBoostModel(BaseModel):
         # ── Optuna çalıştır ──────────────────────────────────────────────────
         print(f"  [Optuna] {n_trials} deneme başlatılıyor ({n_splits}-fold TSCV)...")
         # Warm-start: SQLite backend varsa onceki denemeleri yukle
-        _storage = study_storage or "sqlite:///optuna_studies.db"
+        if study_storage is None:
+            optuna_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                "data",
+                "optuna",
+            )
+            os.makedirs(optuna_dir, exist_ok=True)
+            optuna_path = os.path.join(optuna_dir, "optuna_studies.db")
+            study_storage = f"sqlite:///{optuna_path.replace(os.sep, '/')}"
+        _storage = study_storage
         _study_name = study_name or f"xgb_{self.__class__.__name__}"
         try:
             study = optuna.create_study(

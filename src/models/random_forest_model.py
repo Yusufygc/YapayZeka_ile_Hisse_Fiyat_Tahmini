@@ -7,8 +7,10 @@ Eğitim 2-boyutlu (düz) özellik matrisi üzerinde yapılır.
 Optuna ile hiperparametre optimizasyonu desteklenir.
 """
 
-import numpy as np
+import os
+
 import joblib
+import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_squared_error
@@ -130,7 +132,16 @@ class RandomForestModel(BaseModel):
             return float(np.mean(rmse_scores))
 
         print(f"  [Optuna RF] {n_trials} deneme başlatılıyor ({n_splits}-fold TSCV)...")
-        _storage = study_storage or "sqlite:///optuna_studies.db"
+        if study_storage is None:
+            optuna_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                "data",
+                "optuna",
+            )
+            os.makedirs(optuna_dir, exist_ok=True)
+            optuna_path = os.path.join(optuna_dir, "optuna_studies.db")
+            study_storage = f"sqlite:///{optuna_path.replace(os.sep, '/')}"
+        _storage = study_storage
         _study_name = study_name or f"rf_{self.__class__.__name__}"
         try:
             study = optuna.create_study(
