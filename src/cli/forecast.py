@@ -31,7 +31,7 @@ def _parse_stocks(raw: str) -> List[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="BIST uyumlu ileri tahminleri SQLite DB'ye yazar.")
-    parser.add_argument("--stocks", required=True, help="Virgulle ayrilmis semboller: TUPRS,ASELS")
+    parser.add_argument("--stocks", required=False, help="Virgulle ayrilmis semboller: TUPRS,ASELS")
     parser.add_argument("--horizon-days", type=int, default=5, help="Kac BIST islem gunu tahmin edilecek.")
     parser.add_argument("--data-dir", default=os.path.join(_PROJECT_ROOT, "data"), help="OHLCV CSV dizini.")
     parser.add_argument("--db-path", default=os.path.join(_PROJECT_ROOT, "data", "stock_models.db"), help="SQLite DB yolu.")
@@ -42,7 +42,20 @@ def main() -> int:
     parser.add_argument("--no-update", action="store_true", help="Forecast oncesi hisse CSV guncellemesini kapat.")
     parser.add_argument("--verbose", action="store_true", help="Detayli pipeline/model loglarini goster.")
     parser.add_argument("--resolve", action="store_true", help="Mevcut OHLCV CSV kapanislariyla eski forecast'leri cozumle.")
+    parser.add_argument(
+        "--list-models",
+        action="store_true",
+        help="Registry'deki tüm modelleri tabular listele ve çık.",
+    )
     args = parser.parse_args()
+
+    if args.list_models:
+        from src.cli._model_filters import list_models_table
+        print(list_models_table())
+        return 0
+
+    if not args.stocks:
+        raise SystemExit("--stocks zorunlu (sadece --list-models bayrağı stand-alone çalışır).")
 
     stocks = _parse_stocks(args.stocks)
     if not stocks:

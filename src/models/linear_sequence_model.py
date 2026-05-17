@@ -152,3 +152,27 @@ class NLinearSequenceModel(_BaseLinearSequenceModel):
 # PatchTSTExperimentalModel kaldırıldı (Faz 6 Optimizasyon).
 # Gerçek PatchTST implementasyonu Faz 6 Eksen A kapsamında TFT ile birlikte
 # ele alınacaktır (Nie et al., ICLR 2023 — Transformer tabanlı mimari).
+
+
+# --- Registry tescili (Faz 1) -------------------------------------------
+from src.pipeline.model_registry import ModelSpec, register_model  # noqa: E402
+
+register_model(ModelSpec(
+    name="DLinear",
+    factory=lambda **kw: DLinearSequenceModel(**kw),
+    category="linear_decomp",
+    role="candidate",
+    ensemble_eligible=True,
+    default_candidate=True,
+    description="Trend + seasonal decomposition; lineer aile içinde tek pozitif WF.",
+))
+
+register_model(ModelSpec(
+    name="NLinear",
+    factory=lambda **kw: NLinearSequenceModel(**kw),
+    category="linear_decomp",
+    role="candidate",
+    ensemble_eligible=False,
+    default_candidate=True,
+    description="Last-value normalization; DLinear varken bilgi içermeyen kuzen.",
+))

@@ -36,3 +36,46 @@ def __getattr__(name):
     value = getattr(module, attr_name)
     globals()[name] = value
     return value
+
+
+# --- Plug-in keşfi (Faz 1 — additive) ------------------------------------
+# `model_registry.ensure_loaded()` tarafından bir kez çağrılır.
+# Her *_model.py (ve linear_sequence_model, tft_v2 paketi) import edilince
+# içlerindeki `register_model(ModelSpec(...))` çağrıları registry'i doldurur.
+_DISCOVERED = False
+
+
+def _discover_models() -> None:
+    """src/models içindeki model modüllerini import et → registry tetiklensin.
+
+    Idempotent. Optional dep eksikse modül atlanır, warning verilir.
+    Mevcut lazy `_EXPORTS` davranışı bozulmaz; bu sadece registry için ek import.
+    """
+    global _DISCOVERED
+    if _DISCOVERED:
+        return
+    _DISCOVERED = True
+
+    import importlib
+    import pkgutil
+    import warnings
+
+    # Discover kapsamı: bu paketin doğrudan modülleri/alt paketleri.
+    for mod_info in pkgutil.iter_modules(__path__):
+        name = mod_info.name
+        # Sadece model dosyaları ve bilinen alt paketler.
+        if not (
+            name.endswith("_model")
+            or name == "linear_sequence_model"
+            or name == "tft_v2"
+        ):
+            continue
+        # base_model abstrakttır, kayıt gerekmez.
+        if name == "base_model":
+            continue
+        try:
+            importlib.import_module(f"{__name__}.{name}")
+        except ImportError as exc:
+            warnings.warn(f"Model modülü atlandı ({name}): {exc}")
+        except Exception as exc:  # pragma: no cover - kayıt hatası nadir
+            warnings.warn(f"Model modülü import sırasında hata ({name}): {exc}")

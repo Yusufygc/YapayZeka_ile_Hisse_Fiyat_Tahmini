@@ -107,3 +107,33 @@ class ARIMAModel(BaseModel):
         self.candidate_orders = [tuple(order) for order in payload.get("candidate_orders", [(1, 0, 0)])]
         self.model_fit = payload["model_fit"]
         print(f"[OK] ARIMA baseline yuklendi <- {path}")
+
+
+# --- Registry tescili (Faz 1 + Faz 2 config-aware) ----------------------
+from src.pipeline.model_registry import ModelSpec, register_model  # noqa: E402
+
+
+def _build_arima(arima: dict | None = None, **_unused) -> ARIMAModel:
+    """ARIMA için config-aware factory; `arima` alt-sözlüğü unpack edilir.
+
+    Eski `model_factory.make_arima` davranışını birebir korur.
+    """
+    cfg = arima or {}
+    candidate_orders = [tuple(order) for order in cfg.get("candidate_orders", [])] or None
+    return ARIMAModel(
+        order=tuple(cfg.get("order", (1, 0, 0))),
+        auto_order=bool(cfg.get("auto_order", False)),
+        candidate_orders=candidate_orders,
+    )
+
+
+register_model(ModelSpec(
+    name="ARIMA",
+    factory=_build_arima,
+    category="stat",
+    role="candidate",
+    ensemble_eligible=False,
+    requires=("statsmodels",),
+    needs_config_keys=("arima",),
+    description="Klasik ARIMA; candidate listesinde ancak default değil.",
+))

@@ -141,3 +141,18 @@ class ProphetModel(BaseModel):
             raise ImportError("joblib paketi kurulu degil; Prophet modeli yuklenemez.")
         self.model = joblib.load(path)
         print(f"[OK] Prophet modeli yuklendi <- {path}")
+
+
+# --- Registry tescili (Faz 1) -------------------------------------------
+from src.pipeline.model_registry import ModelSpec, register_model  # noqa: E402
+
+register_model(ModelSpec(
+    name="Prophet",
+    factory=lambda **kw: ProphetModel(**kw),
+    category="stat",
+    role="candidate",
+    ensemble_eligible=False,
+    requires=("prophet",),
+    needs_config_keys=("prophet",),
+    description="Meta Prophet; opsiyonel dep, kullanılabilirse legacy karşılaştırma.",
+))

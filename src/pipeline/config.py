@@ -50,6 +50,12 @@ class ValidationConfig:
 class ModelConfig:
     """Model secimi, hiperparametreler ve ensemble ayarlari."""
     selected_models: Optional[List[str]] = None
+    # Faz 4: registry'de var ama bu koşuda eğitilmesin / raporlanmasin.
+    disabled_models: List[str] = field(default_factory=list)
+    # Eksik optional dep durumunda davranış: True → fail, False → sessizce atla.
+    require_available: bool = False
+    # Spec.ensemble_eligible alanını runtime'da override etme imkanı.
+    ensemble_eligibility_overrides: Dict[str, bool] = field(default_factory=dict)
     registry_version: str = "v5"
     ensemble_enabled: bool = True
     model_settings: Dict[str, Any] = field(default_factory=lambda: {

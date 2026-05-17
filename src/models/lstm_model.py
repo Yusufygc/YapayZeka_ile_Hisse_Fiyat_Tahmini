@@ -230,3 +230,19 @@ class AttentionLSTMModel(BaseModel):
         """Kaydedilmiş Keras modelini yükler."""
         self.model = load_model(path, custom_objects={"AttentionLayer": AttentionLayer})
         print(f"[OK] Attention LSTM modeli yüklendi <- {path}")
+
+
+# --- Registry tescili (Faz 1) -------------------------------------------
+from src.pipeline.model_registry import ModelSpec, register_model  # noqa: E402
+
+register_model(ModelSpec(
+    name="LSTM",
+    factory=lambda **kw: AttentionLSTMModel(**kw),
+    category="seq",
+    role="candidate",
+    ensemble_eligible=True,
+    requires=("tensorflow",),
+    needs_config_keys=("lstm",),
+    default_candidate=True,
+    description="Attention LSTM; sequence target için derin model.",
+))

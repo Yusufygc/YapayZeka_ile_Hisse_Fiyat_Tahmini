@@ -70,6 +70,22 @@ class _PredictionEngineMixin:
         return np.average(stacked, axis=0, weights=weight_array)
 
     @staticmethod
+    def _resolve_categories(names) -> Dict[str, str]:
+        """Registry'den her modelin kategori adını çek; eksik → 'unknown'."""
+        try:
+            from src.pipeline.model_registry import ensure_loaded, has_spec, get_spec
+            ensure_loaded()
+        except Exception:
+            return {n: "unknown" for n in names}
+        out: Dict[str, str] = {}
+        for n in names:
+            try:
+                out[n] = get_spec(n).category if has_spec(n) else "unknown"
+            except Exception:
+                out[n] = "unknown"
+        return out
+
+    @staticmethod
     def _base_predictions_for_ensemble(predictions: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
         return {
             name: np.asarray(preds, dtype=float).ravel()
@@ -92,19 +108,76 @@ class _PredictionEngineMixin:
 
         equal_name = "Ensemble Equal Weight"
         inv_name = "Ensemble Inverse RMSE"
+        sharpe_name = "Ensemble Sharpe-Weighted"
+        rp_name = "Ensemble Risk-Parity"
+        hier_name = "Ensemble Hierarchical"
+        stk_name = "Ensemble Meta-Stacker"
+        cg_name = "Ensemble Cash-Gated"
         equal_preds = EnsembleModel().combine(base_preds)
         inverse_weights = EnsembleModel.optimize_inverse_rmse(np.asarray(self.y_true_aligned), base_preds)
         inverse_preds = EnsembleModel(inverse_weights).combine(base_preds)
+        # Faz 5 Katman 1: Sharpe-weighted blend.
+        base_targets = {name: self.prediction_targets[name] for name in base_preds if name in self.prediction_targets}
+        y_true_target = np.asarray(getattr(self, "y_true_target_aligned", []), dtype=float).ravel()
+        sharpe_weights = (
+            EnsembleModel.optimize_by_sharpe(y_true_target, base_targets)
+            if len(y_true_target) and base_targets
+            else {name: 1.0 / len(base_preds) for name in base_preds}
+        )
+        sharpe_preds = EnsembleModel(sharpe_weights).combine(base_preds)
+        # Faz 5 Katman 2: Risk-parity (inverse-volatility) blend.
+        if len(y_true_target) and base_targets:
+            pnl_vols = EnsembleModel.compute_pnl_volatilities(y_true_target, base_targets)
+            rp_weights = EnsembleModel.optimize_by_risk_parity(pnl_vols)
+        else:
+            rp_weights = {name: 1.0 / len(base_preds) for name in base_preds}
+        rp_preds = EnsembleModel(rp_weights).combine(base_preds)
+        # Faz 5 Katman 3: Kategori-gated hierarchical blend.
+        categories = self._resolve_categories(list(base_preds))
+        hier_weights = EnsembleModel.optimize_hierarchical_by_category(base_preds, categories)
+        hier_preds = EnsembleModel(hier_weights).combine(base_preds)
+        # Faz 5 Katman 4: Ridge meta-stacker (target-space).
+        if len(y_true_target) and base_targets:
+            stk_weights = EnsembleModel.optimize_by_ridge_stacker(y_true_target, base_targets, alpha=1.0)
+        else:
+            stk_weights = {name: 1.0 / len(base_preds) for name in base_preds}
+        stk_preds = EnsembleModel(stk_weights).combine(base_preds)
         self.ensemble_weights[equal_name] = {name: round(1.0 / len(base_preds), 6) for name in base_preds}
         self.ensemble_weights[inv_name] = inverse_weights
+        self.ensemble_weights[sharpe_name] = sharpe_weights
+        self.ensemble_weights[rp_name] = rp_weights
+        self.ensemble_weights[hier_name] = hier_weights
+        self.ensemble_weights[stk_name] = stk_weights
+        # Cash-Gated, Sharpe-Weighted ağırlıklarını miras alır (gate transformasyondur, blend değil).
+        self.ensemble_weights[cg_name] = dict(sharpe_weights)
 
-        base_targets = {name: self.prediction_targets[name] for name in base_preds if name in self.prediction_targets}
         equal_target = EnsembleModel().combine(base_targets) if len(base_targets) >= 2 else None
         inverse_target = self._weighted_average(base_targets, inverse_weights) if len(base_targets) >= 2 else None
+        sharpe_target = self._weighted_average(base_targets, sharpe_weights) if len(base_targets) >= 2 else None
+        rp_target = self._weighted_average(base_targets, rp_weights) if len(base_targets) >= 2 else None
+        hier_target = self._weighted_average(base_targets, hier_weights) if len(base_targets) >= 2 else None
+        stk_target = self._weighted_average(base_targets, stk_weights) if len(base_targets) >= 2 else None
+        # Faz 5 Katman 5: Cash gate (Sharpe-Weighted hedef üzerinde, agreement >= 0.6).
+        cg_target = None
+        cg_preds = sharpe_preds
+        if sharpe_target is not None and base_targets:
+            try:
+                cg_target = EnsembleModel.apply_cash_gate(
+                    sharpe_target, base_targets, magnitude_threshold=0.0, agreement_threshold=0.6
+                )
+                cg_preds = self._target_to_price(cg_target, self.prev_close_aligned[-len(cg_target):])
+            except AttributeError:
+                cg_target = None
+                cg_preds = sharpe_preds
 
         for name, pred_price, pred_target in [
             (equal_name, equal_preds, equal_target),
             (inv_name, inverse_preds, inverse_target),
+            (sharpe_name, sharpe_preds, sharpe_target),
+            (rp_name, rp_preds, rp_target),
+            (hier_name, hier_preds, hier_target),
+            (stk_name, stk_preds, stk_target),
+            (cg_name, cg_preds, cg_target),
         ]:
             k = min(len(pred_price), len(self.y_true_aligned), len(self.prev_close_aligned))
             self.predictions[name] = np.asarray(pred_price)[-k:]
@@ -119,7 +192,7 @@ class _PredictionEngineMixin:
                 payload["pred_price"] = self.predictions[name]
                 payload["pred_target"] = self.prediction_targets.get(name)
                 self.single_backtest_inputs[name] = payload
-        print("  [OK] Ensemble tahminleri eklendi: Equal Weight, Inverse RMSE")
+        print("  [OK] Ensemble tahminleri eklendi: Equal Weight, Inverse RMSE, Sharpe-Weighted, Risk-Parity, Hierarchical, Meta-Stacker, Cash-Gated")
 
     def _add_walk_forward_ensembles(
         self,
@@ -142,21 +215,93 @@ class _PredictionEngineMixin:
 
         equal_name = "Ensemble Equal Weight"
         inv_name = "Ensemble Inverse RMSE"
+        sharpe_name = "Ensemble Sharpe-Weighted"
+        rp_name = "Ensemble Risk-Parity"
+        hier_name = "Ensemble Hierarchical"
+        stk_name = "Ensemble Meta-Stacker"
+        cg_name = "Ensemble Cash-Gated"
         equal_preds = EnsembleModel().combine(base_preds)
         inverse_weights = EnsembleModel.optimize_inverse_rmse(np.asarray(wf_y_true), base_preds)
         inverse_preds = EnsembleModel(inverse_weights).combine(base_preds)
-        self.ensemble_weights[equal_name] = {name: round(1.0 / len(base_preds), 6) for name in base_preds}
-        self.ensemble_weights[inv_name] = inverse_weights
 
         bt_inputs = wf_backtest_inputs or {}
         template = next(iter(bt_inputs.values()), None)
-        base_targets = {name: bt_inputs[name]["pred_target"] for name in base_preds if name in bt_inputs and "pred_target" in bt_inputs[name]}
+        base_targets = {
+            name: np.asarray(bt_inputs[name]["pred_target"], dtype=float).ravel()
+            for name in base_preds
+            if name in bt_inputs and "pred_target" in bt_inputs[name]
+        }
+        # Faz 5 Katman 1: Sharpe-weighted blend (target-space).
+        y_true_target = (
+            np.asarray(template.get("y_true_target", []), dtype=float).ravel()
+            if template else np.asarray([])
+        )
+        sharpe_weights = (
+            EnsembleModel.optimize_by_sharpe(y_true_target, base_targets)
+            if len(y_true_target) and base_targets
+            else {name: 1.0 / len(base_preds) for name in base_preds}
+        )
+        sharpe_preds = EnsembleModel(sharpe_weights).combine(base_preds)
+        # Faz 5 Katman 2: Risk-parity blend (target-space PnL).
+        if len(y_true_target) and base_targets:
+            pnl_vols = EnsembleModel.compute_pnl_volatilities(y_true_target, base_targets)
+            rp_weights = EnsembleModel.optimize_by_risk_parity(pnl_vols)
+        else:
+            rp_weights = {name: 1.0 / len(base_preds) for name in base_preds}
+        rp_preds = EnsembleModel(rp_weights).combine(base_preds)
+        # Faz 5 Katman 3: Kategori-gated hierarchical blend.
+        categories = self._resolve_categories(list(base_preds))
+        hier_weights = EnsembleModel.optimize_hierarchical_by_category(base_preds, categories)
+        hier_preds = EnsembleModel(hier_weights).combine(base_preds)
+        # Faz 5 Katman 4: Ridge meta-stacker (OOF — WF y_true zaten fold birleşimi).
+        if len(y_true_target) and base_targets:
+            stk_weights = EnsembleModel.optimize_by_ridge_stacker(y_true_target, base_targets, alpha=1.0)
+        else:
+            stk_weights = {name: 1.0 / len(base_preds) for name in base_preds}
+        stk_preds = EnsembleModel(stk_weights).combine(base_preds)
+        self.ensemble_weights[equal_name] = {name: round(1.0 / len(base_preds), 6) for name in base_preds}
+        self.ensemble_weights[inv_name] = inverse_weights
+        self.ensemble_weights[sharpe_name] = sharpe_weights
+        self.ensemble_weights[rp_name] = rp_weights
+        self.ensemble_weights[hier_name] = hier_weights
+        self.ensemble_weights[stk_name] = stk_weights
+        self.ensemble_weights[cg_name] = dict(sharpe_weights)
+
         equal_target = EnsembleModel().combine(base_targets) if len(base_targets) >= 2 else None
         inverse_target = self._weighted_average(base_targets, inverse_weights) if len(base_targets) >= 2 else None
+        sharpe_target = self._weighted_average(base_targets, sharpe_weights) if len(base_targets) >= 2 else None
+        rp_target = self._weighted_average(base_targets, rp_weights) if len(base_targets) >= 2 else None
+        hier_target = self._weighted_average(base_targets, hier_weights) if len(base_targets) >= 2 else None
+        stk_target = self._weighted_average(base_targets, stk_weights) if len(base_targets) >= 2 else None
+        # Faz 5 Katman 5: Cash gate (Sharpe-Weighted hedef üzerinde).
+        cg_target = None
+        cg_preds = sharpe_preds
+        if sharpe_target is not None and base_targets:
+            try:
+                cg_target = EnsembleModel.apply_cash_gate(
+                    sharpe_target, base_targets, magnitude_threshold=0.0, agreement_threshold=0.6
+                )
+                prev_close_tpl = (
+                    np.asarray(template.get("prev_close", []), dtype=float).ravel()
+                    if template else np.array([])
+                )
+                if len(prev_close_tpl) >= len(cg_target):
+                    cg_preds = self._target_to_price(cg_target, prev_close_tpl[-len(cg_target):])
+                else:
+                    cg_target = None
+                    cg_preds = sharpe_preds
+            except AttributeError:
+                cg_target = None
+                cg_preds = sharpe_preds
 
         for name, pred_price, pred_target in [
             (equal_name, equal_preds, equal_target),
             (inv_name, inverse_preds, inverse_target),
+            (sharpe_name, sharpe_preds, sharpe_target),
+            (rp_name, rp_preds, rp_target),
+            (hier_name, hier_preds, hier_target),
+            (stk_name, stk_preds, stk_target),
+            (cg_name, cg_preds, cg_target),
         ]:
             k = min(len(pred_price), len(np.asarray(wf_y_true).ravel()))
             wf_predictions[name] = np.asarray(pred_price)[-k:]
@@ -184,7 +329,7 @@ class _PredictionEngineMixin:
                 payload["pred_price"] = wf_predictions[name]
                 payload["pred_target"] = np.asarray(pred_target)[-k:] if pred_target is not None else None
                 bt_inputs[name] = payload
-        print("  [OK] Walk-forward ensemble tahminleri eklendi.")
+        print("  [OK] Walk-forward ensemble tahminleri eklendi: Equal, Inverse RMSE, Sharpe-Weighted, Risk-Parity, Hierarchical, Meta-Stacker, Cash-Gated.")
 
     # ------------------------------------------------------------------ #
     #  Plot helper                                                         #

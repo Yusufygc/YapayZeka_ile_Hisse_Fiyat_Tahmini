@@ -232,3 +232,18 @@ class XGBoostModel(BaseModel):
         """Kaydedilmiş modeli diskten yükler."""
         self.model = joblib.load(path)
         print(f"[OK] XGBoost modeli yüklendi <- {path}")
+
+
+# --- Registry tescili (Faz 1) -------------------------------------------
+from src.pipeline.model_registry import ModelSpec, register_model  # noqa: E402
+
+register_model(ModelSpec(
+    name="XGBoost",
+    factory=lambda **kw: XGBoostModel(**kw),
+    category="tree",
+    role="candidate",
+    ensemble_eligible=True,
+    requires=("xgboost",),
+    default_candidate=True,
+    description="Gradient boosting; SASA WF'sinde zayıf, hyperparam tune önerilir.",
+))

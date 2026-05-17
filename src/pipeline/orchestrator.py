@@ -19,7 +19,7 @@ from src.experiments.experiment_tracker import ExperimentTracker
 from src.pipeline.config import PipelineConfig, DataConfig, ValidationConfig, ModelConfig, ExecutionConfig
 from src.pipeline.data_manager import DataManager
 from src.pipeline.evaluation_manager import EvaluationManager
-from src.pipeline.model_scope import BENCHMARK_MODELS, normalize_candidate_models
+from src.pipeline.model_scope import BENCHMARK_MODELS, normalize_candidate_models, resolve_candidates
 from src.pipeline.model_trainer import ModelTrainer
 from src.utils.reproducibility import set_global_seed
 from src.utils.reporting_utils import write_csv_and_aligned_view
@@ -94,7 +94,17 @@ class ForecastingPipeline:
 
         self.stock_symbol = os.path.splitext(os.path.basename(self.data_file))[0]
         self.project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        self.candidate_models = normalize_candidate_models(self.selected_models)
+        # Faz 4: selected − disabled − unavailable
+        self.disabled_models = list(getattr(m, "disabled_models", []) or [])
+        self.require_available = bool(getattr(m, "require_available", False))
+        self.ensemble_eligibility_overrides = dict(
+            getattr(m, "ensemble_eligibility_overrides", {}) or {}
+        )
+        self.candidate_models = resolve_candidates(
+            selected=self.selected_models,
+            disabled=self.disabled_models,
+            require_available=self.require_available,
+        )
         self.benchmark_models = set(BENCHMARK_MODELS)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         model_slug = self._model_slug_for_run_id(self.selected_models)

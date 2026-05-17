@@ -196,3 +196,16 @@ class RandomForestModel(BaseModel):
         """Kaydedilmiş modeli diskten yükler."""
         self.model = joblib.load(path)
         print(f"[OK] Random Forest modeli yüklendi <- {path}")
+
+
+# --- Registry tescili (Faz 1) -------------------------------------------
+from src.pipeline.model_registry import ModelSpec, register_model  # noqa: E402
+
+register_model(ModelSpec(
+    name="Random Forest",
+    factory=lambda **kw: RandomForestModel(**kw),
+    category="tree",
+    role="candidate",
+    ensemble_eligible=True,
+    description="RF regressor — SASA WF'sinde en yüksek DSR; savunmacı exposure.",
+))

@@ -55,6 +55,8 @@ def _run_single_stock(args_dict: Dict[str, Any]) -> Dict[str, Any]:
     data_dir: str = args_dict["data_dir"]
     mode: str = args_dict["mode"]
     selected_models: Optional[List[str]] = args_dict.get("selected_models")
+    disabled_models: List[str] = args_dict.get("disabled_models") or []
+    require_available: bool = bool(args_dict.get("require_available", False))
     output_dir_base: Optional[str] = args_dict.get("output_dir_base")
 
     result: Dict[str, Any] = {
@@ -84,7 +86,11 @@ def _run_single_stock(args_dict: Dict[str, Any]) -> Dict[str, Any]:
         pipeline_cfg = PipelineConfig(
             data=DataConfig(data_file=data_file),
             validation=ValidationConfig(validation_mode=mode),
-            models=ModelConfig(selected_models=selected_models),
+            models=ModelConfig(
+                selected_models=selected_models,
+                disabled_models=disabled_models,
+                require_available=require_available,
+            ),
             execution=ExecutionConfig(),
         )
         pipeline = ForecastingPipeline(cfg=pipeline_cfg)
@@ -173,7 +179,7 @@ def _parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    stock_group = p.add_mutually_exclusive_group(required=True)
+    stock_group = p.add_mutually_exclusive_group(required=False)
     stock_group.add_argument(
         "--stocks",
         type=str,
@@ -220,6 +226,8 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Pipeline çalıştırmadan hangi hisselerin işleneceğini göster",
     )
+    from src.cli._model_filters import add_model_filter_args
+    add_model_filter_args(p)
     return p.parse_args()
 
 
@@ -238,27 +246,50 @@ def _load_universe(universe_file: str) -> List[str]:
 def main() -> None:
     args = _parse_args()
 
+    # --list-models stand-alone: tabloyu yaz ve çık.
+    if getattr(args, "list_models", False):
+        from src.cli._model_filters import list_models_table
+        print(list_models_table())
+        return
+
     # Hisse listesi
     if args.stocks:
         symbols = [s.strip().upper() for s in args.stocks.split(",") if s.strip()]
-    else:
+    elif args.universe:
         symbols = _load_universe(args.universe)
+    else:
+        print("[ERROR] --stocks veya --universe gerekli (--list-models hariç).")
+        sys.exit(1)
 
     if not symbols:
         print("[ERROR] Hisse listesi boş.")
         sys.exit(1)
 
-    selected_models = (
+    from src.cli._model_filters import resolve_selected, resolve_disabled
+
+    explicit = (
         [m.strip() for m in args.models.split(",") if m.strip()]
         if args.models else None
     )
+    selected_models = resolve_selected(
+        explicit_models=explicit,
+        enable=getattr(args, "enable", None),
+        category=getattr(args, "category", None),
+        role=getattr(args, "role", None),
+    )
+    disabled_models = resolve_disabled(disable=getattr(args, "disable", None))
+    require_available = bool(getattr(args, "strict_deps", False))
 
     print(f"\n{'=' * 60}")
     print(f"  ts_forecasting_lab — Batch Runner")
     print(f"{'=' * 60}")
     print(f"  Hisseler    : {', '.join(symbols)}")
     print(f"  Mod         : {args.mode}")
-    print(f"  Modeller    : {selected_models or 'tümü'}")
+    print(f"  Modeller    : {selected_models or 'default'}")
+    if disabled_models:
+        print(f"  Disabled    : {disabled_models}")
+    if require_available:
+        print(f"  Strict deps : on")
     print(f"  Workers     : {args.workers}")
     print(f"  Data dizini : {args.data_dir}")
     print(f"{'=' * 60}\n")
@@ -278,6 +309,8 @@ def main() -> None:
             "data_dir": args.data_dir,
             "mode": args.mode,
             "selected_models": selected_models,
+            "disabled_models": disabled_models,
+            "require_available": require_available,
             "output_dir_base": args.output_dir,
         }
         for sym in symbols

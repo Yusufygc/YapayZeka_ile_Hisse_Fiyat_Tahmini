@@ -55,3 +55,27 @@ class ElasticNetReturnModel(BaseModel):
     def load(self, path: str) -> None:
         self.model = joblib.load(path)
         print(f"[OK] ElasticNet return baseline yuklendi <- {path}")
+
+
+# --- Registry tescili (Faz 1) -------------------------------------------
+from src.pipeline.model_registry import ModelSpec, register_model  # noqa: E402
+
+register_model(ModelSpec(
+    name="Ridge Return",
+    factory=lambda **kw: RidgeReturnModel(**kw),
+    category="linear_shrinkage",
+    role="candidate",
+    ensemble_eligible=True,
+    target_modes=("return", "log_return"),
+    description="L2 shrinkage; düşük sinyal kalitesi fakat Holdout'ta sermaye koruma rolü.",
+))
+
+register_model(ModelSpec(
+    name="ElasticNet Return",
+    factory=lambda **kw: ElasticNetReturnModel(**kw),
+    category="linear_shrinkage",
+    role="candidate",
+    ensemble_eligible=True,
+    target_modes=("return", "log_return"),
+    description="L1+L2 karmasi; l1_ratio ~ 0 ise Ridge'e dejenere olur.",
+))

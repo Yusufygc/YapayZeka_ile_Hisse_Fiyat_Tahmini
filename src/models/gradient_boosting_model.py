@@ -84,3 +84,18 @@ class LightGBMReturnModel(BaseModel):
         self.params = payload["params"]
         self.model = payload["model"]
         print(f"[OK] LightGBM return baseline yuklendi <- {path}")
+
+
+# --- Registry tescili (Faz 1) -------------------------------------------
+from src.pipeline.model_registry import ModelSpec, register_model  # noqa: E402
+
+register_model(ModelSpec(
+    name="LightGBM Return",
+    factory=lambda **kw: LightGBMReturnModel(**kw),
+    category="tree",
+    role="candidate",
+    ensemble_eligible=True,
+    requires=("lightgbm",),
+    target_modes=("return", "log_return"),
+    description="LightGBM regressor; RF ile birlikte SASA WF'sinin üst düzey üreticisi.",
+))

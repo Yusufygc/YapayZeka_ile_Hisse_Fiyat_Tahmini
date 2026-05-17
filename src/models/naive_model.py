@@ -90,3 +90,35 @@ class NaiveDriftModel(BaseModel):
         payload = joblib.load(path)
         self.mean_return = float(payload["mean_return"])
         print(f"[OK] NaiveDrift baseline yüklendi <- {path}")
+
+
+# --- Registry tescili (Faz 1) -------------------------------------------
+from src.pipeline.model_registry import ModelSpec, register_model  # noqa: E402
+
+register_model(ModelSpec(
+    name="Naive Last Value",
+    factory=lambda **kw: NaiveLastValueModel(),
+    category="benchmark",
+    role="benchmark",
+    ensemble_eligible=False,
+    description="Son gözlenen hedef değerini geleceğe taşır.",
+))
+
+register_model(ModelSpec(
+    name="Naive Zero Return",
+    factory=lambda **kw: NaiveZeroReturnModel(),
+    category="benchmark",
+    role="benchmark",
+    ensemble_eligible=False,
+    target_modes=("return", "log_return"),
+    description="Sıfır getiri baseline'ı; return target için sermaye koruma referansı.",
+))
+
+register_model(ModelSpec(
+    name="Naive Drift",
+    factory=lambda **kw: NaiveDriftModel(),
+    category="benchmark",
+    role="benchmark",
+    ensemble_eligible=False,
+    description="Eğitim dönemi ortalama getirisini sabit taşır.",
+))

@@ -7,6 +7,7 @@
 graphify-out
 _make_report.py
 rapor.docx
+tools
 
 /stock_models.db
 /data/stock_models.db
