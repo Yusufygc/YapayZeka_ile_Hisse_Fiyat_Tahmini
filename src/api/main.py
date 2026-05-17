@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-src/api/main.py - ts_forecasting_lab FastAPI SonuÃ§ Servisi (Faz 5.4)
+src/api/main.py - ts_forecasting_lab FastAPI Sonuç Servisi (Faz 5.4)
 
-Proje kÃ¶kÃ¼nden Ã§alÄ±ÅŸtÄ±r:
+Proje kökünden çalıştır:
     uvicorn src.api.main:app --reload --port 8000
 
 Interaktif docs:
@@ -10,14 +10,14 @@ Interaktif docs:
     http://localhost:8000/redoc      (ReDoc)
 
 Endpoints:
-    GET /health                      â€” servis saÄŸlÄ±k kontrolÃ¼
-    GET /best-model/{symbol}         â€” hisse iÃ§in en iyi model
-    GET /experiments/{symbol}        â€” deney geÃ§miÅŸi
-    GET /metrics/{symbol}            â€” model karÅŸÄ±laÅŸtÄ±rma tablosu
-    GET /leaderboard                 â€” tÃ¼m hisseler lider tablosu
-    GET /symbols                     â€” kayÄ±tlÄ± tÃ¼m hisse kodlarÄ±
-    POST /run/{symbol}               â€” tek hisse pipeline'Ä±nÄ± tetikle (arka planda)
-    GET /run/status/{job_id}         â€” tetiklenen iÅŸin durumu
+    GET /health                      — servis sağlık kontrolü
+    GET /best-model/{symbol}         — hisse için en iyi model
+    GET /experiments/{symbol}        — deney geçmişi
+    GET /metrics/{symbol}            — model karşılaştırma tablosu
+    GET /leaderboard                 — tüm hisseler lider tablosu
+    GET /symbols                     — kayıtlı tüm hisse kodları
+    POST /run/{symbol}               — tek hisse pipeline'ını tetikle (arka planda)
+    GET /run/status/{job_id}         — tetiklenen işin durumu
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-# Proje kÃ¶kÃ¼nÃ¼ path'e ekle (uvicorn proje kÃ¶kÃ¼nden Ã§alÄ±ÅŸtÄ±rÄ±lÄ±rsa gerekli)
+# Proje kökünü path'e ekle (uvicorn proje kökünden çalıştırılırsa gerekli)
 _API_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(_API_DIR))
 if _PROJECT_ROOT not in sys.path:
@@ -40,31 +40,31 @@ try:
     from pydantic import BaseModel as PydanticModel
 except ImportError as exc:
     raise ImportError(
-        "FastAPI yÃ¼klÃ¼ deÄŸil. Kurmak iÃ§in:\n"
+        "FastAPI yüklü değil. Kurmak için:\n"
         "  pip install fastapi uvicorn\n"
-        "ya da dl_env ortamÄ±nda:\n"
+        "ya da dl_env ortamında:\n"
         "  conda activate dl_env && pip install fastapi uvicorn"
     ) from exc
 
 from src.database.stock_model_db import StockModelDB
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-# App ve DB baÅŸlatma
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
+# App ve DB başlatma
+# ─────────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="ts_forecasting_lab API",
     description=(
-        "BIST hisse tahmin pipeline'Ä±nÄ±n sonuÃ§larÄ±na eriÅŸim servisi.\n\n"
-        "SQLite veritabanÄ±ndaki model deneyleri, metrikler ve lider tablosunu "
-        "HTTP Ã¼zerinden sunar. Merge_PortfoySim gibi dÄ±ÅŸ uygulamalar bu API "
-        "aracÄ±lÄ±ÄŸÄ±yla en iyi model seÃ§imini ve metriklerini sorgulayabilir."
+        "BIST hisse tahmin pipeline'ının sonuçlarına erişim servisi.\n\n"
+        "SQLite veritabanındaki model deneyleri, metrikler ve lider tablosunu "
+        "HTTP üzerinden sunar. Merge_PortfoySim gibi dış uygulamalar bu API "
+        "aracılığıyla en iyi model seçimini ve metriklerini sorgulayabilir."
     ),
     version="1.0.0",
     contact={"name": "ts_forecasting_lab"},
 )
 
-# CORS â€” aynÄ± makinedeki baÅŸka servisler (React dashboard, Merge_PortfoySim vb.)
+# CORS — aynı makinedeki başka servisler (React dashboard, Merge_PortfoySim vb.)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -79,9 +79,9 @@ def _get_db() -> StockModelDB:
     return StockModelDB(_DB_PATH)
 
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-# Pydantic ÅŸemalarÄ±
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
+# Pydantic şemaları
+# ─────────────────────────────────────────────────────────────────────────────
 
 class RunRequest(PydanticModel):
     mode: str = "walk_forward"
@@ -98,22 +98,22 @@ class RunStatus(PydanticModel):
     error: Optional[str] = None
 
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-# In-memory job tracker (production'da Redis kullanÄ±lÄ±r)
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
+# In-memory job tracker (production'da Redis kullanılır)
+# ─────────────────────────────────────────────────────────────────────────────
 
 _jobs: Dict[str, Dict[str, Any]] = {}
 
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
 # Endpoint'ler
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["Sistem"])
 def health_check() -> Dict[str, Any]:
     """
-    Servis saÄŸlÄ±k kontrolÃ¼.
-    DB eriÅŸimi ve kayÄ±tlÄ± hisse sayÄ±sÄ±nÄ± dÃ¶ner.
+    Servis sağlık kontrolü.
+    DB erişimi ve kayıtlı hisse sayısını döner.
     """
     try:
         db = _get_db()
@@ -136,7 +136,7 @@ def health_check() -> Dict[str, Any]:
 @app.get("/symbols", tags=["Hisseler"])
 def list_symbols() -> Dict[str, Any]:
     """
-    VeritabanÄ±nda kayÄ±tlÄ± tÃ¼m hisse kodlarÄ±nÄ± listeler.
+    Veritabanında kayıtlı tüm hisse kodlarını listeler.
     """
     try:
         db = _get_db()
@@ -150,11 +150,11 @@ def list_symbols() -> Dict[str, Any]:
 @app.get("/best-model/{symbol}", tags=["Modeller"])
 def get_best_model(symbol: str) -> Dict[str, Any]:
     """
-    Belirtilen hisse iÃ§in en iyi modelin tÃ¼m bilgilerini dÃ¶ner.
+    Belirtilen hisse için en iyi modelin tüm bilgilerini döner.
 
-    - **symbol**: Hisse kodu (bÃ¼yÃ¼k/kÃ¼Ã§Ã¼k harf duyarsÄ±z, Ã¶r. `TUPRS`)
+    - **symbol**: Hisse kodu (büyük/küçük harf duyarsız, ör. `TUPRS`)
 
-    DÃ¶nen model; composite_score'a gÃ¶re tÃ¼m denemeler iÃ§inden seÃ§ilir.
+    Dönen model; composite_score'a göre tüm denemeler içinden seçilir.
     """
     symbol = symbol.upper()
     try:
@@ -166,8 +166,8 @@ def get_best_model(symbol: str) -> Dict[str, Any]:
     if result is None:
         raise HTTPException(
             status_code=404,
-            detail=f"{symbol} iÃ§in kayÄ±tlÄ± model bulunamadÄ±. "
-                   "Ã–nce pipeline'Ä± Ã§alÄ±ÅŸtÄ±rÄ±n: python -m src.cli.interactive",
+            detail=f"{symbol} için kayıtlı model bulunamadı. "
+                   "Önce pipeline'ı çalıştırın: python -m src.cli.interactive",
         )
     return result
 
@@ -175,15 +175,15 @@ def get_best_model(symbol: str) -> Dict[str, Any]:
 @app.get("/experiments/{symbol}", tags=["Deneyler"])
 def get_experiments(
     symbol: str,
-    model_name: Optional[str] = Query(None, description="Model adÄ±na gÃ¶re filtrele"),
-    limit: int = Query(20, ge=1, le=500, description="Maksimum sonuÃ§ sayÄ±sÄ±"),
+    model_name: Optional[str] = Query(None, description="Model adına göre filtrele"),
+    limit: int = Query(20, ge=1, le=500, description="Maksimum sonuç sayısı"),
 ) -> Dict[str, Any]:
     """
-    Belirtilen hisse iÃ§in deney geÃ§miÅŸini dÃ¶ner.
+    Belirtilen hisse için deney geçmişini döner.
 
     - **symbol**: Hisse kodu
-    - **model_name**: Opsiyonel â€” belirli bir modeli filtrele (Ã¶r. `XGBoost`)
-    - **limit**: DÃ¶ndÃ¼rÃ¼lecek maksimum satÄ±r sayÄ±sÄ± (varsayÄ±lan: 20)
+    - **model_name**: Opsiyonel — belirli bir modeli filtrele (ör. `XGBoost`)
+    - **limit**: Döndürülecek maksimum satır sayısı (varsayılan: 20)
     """
     symbol = symbol.upper()
     try:
@@ -203,10 +203,10 @@ def get_experiments(
 @app.get("/metrics/{symbol}", tags=["Modeller"])
 def get_model_comparison(symbol: str) -> Dict[str, Any]:
     """
-    Belirtilen hisse iÃ§in tÃ¼m modellerin ortalama metrik karÅŸÄ±laÅŸtÄ±rmasÄ±nÄ± dÃ¶ner.
+    Belirtilen hisse için tüm modellerin ortalama metrik karşılaştırmasını döner.
 
     Composite score, directional accuracy, Sharpe, MAE, RMSE gibi metrikleri
-    model bazÄ±nda gruplayarak Ã¶zetler.
+    model bazında gruplayarak özetler.
     """
     symbol = symbol.upper()
     try:
@@ -218,7 +218,7 @@ def get_model_comparison(symbol: str) -> Dict[str, Any]:
     if not rows:
         raise HTTPException(
             status_code=404,
-            detail=f"{symbol} iÃ§in metrik verisi bulunamadÄ±.",
+            detail=f"{symbol} için metrik verisi bulunamadı.",
         )
     return {
         "symbol": symbol,
@@ -229,13 +229,13 @@ def get_model_comparison(symbol: str) -> Dict[str, Any]:
 
 @app.get("/leaderboard", tags=["Hisseler"])
 def get_leaderboard(
-    top_n: int = Query(20, ge=1, le=500, description="KaÃ§ hisse dÃ¶ndÃ¼rÃ¼lsÃ¼n"),
+    top_n: int = Query(20, ge=1, le=500, description="Kaç hisse döndürülsün"),
 ) -> Dict[str, Any]:
     """
-    TÃ¼m hisseler arasÄ±nda composite_score'a gÃ¶re lider tablosunu dÃ¶ner.
+    Tüm hisseler arasında composite_score'a göre lider tablosunu döner.
 
-    Her satÄ±r bir hissenin en iyi modelini temsil eder.
-    PortfÃ¶y seÃ§imi ve Ã¶nceliklendirme iÃ§in kullanÄ±labilir.
+    Her satır bir hissenin en iyi modelini temsil eder.
+    Portföy seçimi ve önceliklendirme için kullanılabilir.
     """
     try:
         db = _get_db()
@@ -257,12 +257,12 @@ def trigger_pipeline(
     background_tasks: BackgroundTasks,
 ) -> Dict[str, Any]:
     """
-    Belirtilen hisse iÃ§in pipeline'Ä± arka planda baÅŸlatÄ±r.
+    Belirtilen hisse için pipeline'ı arka planda başlatır.
 
-    **Not:** Bu endpoint pipeline'Ä± tetikler ve hemen bir `job_id` dÃ¶ner.
-    Ä°ÅŸin durumunu `GET /run/status/{job_id}` ile takip edebilirsiniz.
+    **Not:** Bu endpoint pipeline'ı tetikler ve hemen bir `job_id` döner.
+    İşin durumunu `GET /run/status/{job_id}` ile takip edebilirsiniz.
 
-    Paralel Ã§alÄ±ÅŸtÄ±rmak iÃ§in `python -m src.cli.batch` kullanÄ±n.
+    Paralel çalıştırmak için `python -m src.cli.batch` kullanın.
     """
     symbol = symbol.upper()
     job_id = str(uuid.uuid4())[:8]
@@ -282,7 +282,7 @@ def trigger_pipeline(
         try:
             data_file = os.path.join(_PROJECT_ROOT, request.data_dir, f"{symbol}.csv")
             if not os.path.exists(data_file):
-                raise FileNotFoundError(f"Veri dosyasÄ± bulunamadÄ±: {data_file}")
+                raise FileNotFoundError(f"Veri dosyası bulunamadı: {data_file}")
 
             from src.pipeline.orchestrator import ForecastingPipeline
             pipeline = ForecastingPipeline(
@@ -304,29 +304,29 @@ def trigger_pipeline(
         "job_id": job_id,
         "symbol": symbol,
         "status": "queued",
-        "message": f"Pipeline kuyruÄŸa alÄ±ndÄ±. Durum: GET /run/status/{job_id}",
+        "message": f"Pipeline kuyruğa alındı. Durum: GET /run/status/{job_id}",
     }
 
 
 @app.get("/run/status/{job_id}", tags=["Pipeline"])
 def get_run_status(job_id: str) -> Dict[str, Any]:
     """
-    Tetiklenen bir pipeline iÅŸinin durumunu dÃ¶ner.
+    Tetiklenen bir pipeline işinin durumunu döner.
 
-    - **job_id**: `/run/{symbol}` endpoint'inden dÃ¶nen job_id
+    - **job_id**: `/run/{symbol}` endpoint'inden dönen job_id
     """
     job = _jobs.get(job_id)
     if job is None:
         raise HTTPException(
             status_code=404,
-            detail=f"Job '{job_id}' bulunamadÄ±. GeÃ§erli job listesi: {list(_jobs.keys())}",
+            detail=f"Job '{job_id}' bulunamadı. Geçerli job listesi: {list(_jobs.keys())}",
         )
     return job
 
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-# DoÄŸrudan Ã§alÄ±ÅŸtÄ±rma (geliÅŸtirme iÃ§in)
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
+# Doğrudan çalıştırma (geliştirme için)
+# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     try:
@@ -339,5 +339,5 @@ if __name__ == "__main__":
             reload_dirs=[_PROJECT_ROOT],
         )
     except ImportError:
-        print("uvicorn yÃ¼klÃ¼ deÄŸil: pip install uvicorn")
+        print("uvicorn yüklü değil: pip install uvicorn")
 
