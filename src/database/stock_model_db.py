@@ -18,9 +18,7 @@ Kullanım:
     best = db.get_best_model("TUPRS")   # ileriye dönük otomatik seçim için
 """
 
-import json
 import sqlite3
-from datetime import datetime
 import hashlib
 import math
 from typing import Any, Dict, List, Optional
@@ -229,7 +227,36 @@ class StockModelDB:
         self.db_path = db_path
         import os as _os
         _os.makedirs(_os.path.dirname(db_path) or ".", exist_ok=True)
+        self._init_repositories()
         self._init_db()
+
+    def _init_repositories(self) -> None:
+        from src.database.repositories import (
+            BestModelRepository,
+            ExperimentRepository,
+            ForecastRepository,
+            ForecastResolutionRepository,
+            SchemaRepository,
+        )
+
+        self.schema_repository = SchemaRepository(self)
+        self.best_model_repository = BestModelRepository(self)
+        self.experiment_repository = ExperimentRepository(self, self.best_model_repository)
+        self.forecast_repository = ForecastRepository(self)
+        self.forecast_resolution_repository = ForecastResolutionRepository(self)
+
+    def _ensure_repositories(self) -> None:
+        if not all(
+            hasattr(self, attr)
+            for attr in (
+                "schema_repository",
+                "best_model_repository",
+                "experiment_repository",
+                "forecast_repository",
+                "forecast_resolution_repository",
+            )
+        ):
+            self._init_repositories()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -239,42 +266,14 @@ class StockModelDB:
         return conn
 
     def _init_db(self) -> None:
-        with self._connect() as conn:
-            conn.execute(_CREATE_EXPERIMENTS)
-            conn.execute(_CREATE_BEST_MODELS)
-            conn.execute(_CREATE_IDX_SYMBOL)
-            conn.execute(_CREATE_IDX_SCORE)
-            conn.execute(_CREATE_FORECAST_RUNS)
-            conn.execute(_CREATE_FORECAST_POINTS)
-            conn.execute(_CREATE_FORECAST_ACCURACY)
-            self._ensure_column(conn, "forecast_runs", "run_key", "TEXT")
-            conn.execute(_CREATE_IDX_FORECAST_SYMBOL)
-            conn.execute(_CREATE_IDX_FORECAST_RUN_KEY)
-            conn.execute(_CREATE_IDX_FORECAST_POINTS_DATE)
-            self._ensure_column(conn, "experiments", "target_mode", "TEXT NOT NULL DEFAULT 'price'")
-            self._ensure_column(conn, "experiments", "feature_mode", "TEXT NOT NULL DEFAULT 'legacy_price_features'")
-            self._ensure_column(conn, "experiments", "scaling_mode", "TEXT NOT NULL DEFAULT 'minmax'")
-            self._ensure_column(conn, "experiments", "is_production_candidate", "INTEGER NOT NULL DEFAULT 0")
-            self._ensure_column(conn, "experiments", "selection_source", "TEXT")
-            self._ensure_column(conn, "experiments", "run_id", "TEXT")
-            self._ensure_column(conn, "best_models", "target_mode", "TEXT NOT NULL DEFAULT 'price'")
-            self._ensure_column(conn, "best_models", "feature_mode", "TEXT NOT NULL DEFAULT 'legacy_price_features'")
-            self._ensure_column(conn, "best_models", "scaling_mode", "TEXT NOT NULL DEFAULT 'minmax'")
-            self._ensure_column(conn, "best_models", "validation_mode", "TEXT NOT NULL DEFAULT 'final_holdout'")
-            self._ensure_column(conn, "best_models", "dataset_hash", "TEXT")
-            self._ensure_column(conn, "best_models", "run_id", "TEXT")
-            self._ensure_column(conn, "best_models", "selection_source", "TEXT")
-            self._migrate_legacy_production_candidates(conn)
-            self._refresh_best_models_from_production_experiments(conn)
+        self._ensure_repositories()
+        return self.schema_repository.initialize()
 
     @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
-        existing = {
-            row["name"]
-            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-        }
-        if column not in existing:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+        from src.database.repositories import SchemaRepository
+
+        return SchemaRepository.ensure_column(conn, table, column, ddl)
 
     def log_experiment(
         self,
@@ -290,70 +289,20 @@ class StockModelDB:
         selection_source: Optional[str] = None,
         run_id: Optional[str] = None,
     ) -> int:
-        """
-        Bir model eğitim çalışmasını kaydeder ve bileşik skoru hesaplar.
-
-        Returns:
-            Yeni eklenen satırın birincil anahtarı (experiment_id).
-        """
-        composite = compute_composite_score(metrics)
-        trained_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        features_json = json.dumps(features or [], ensure_ascii=False)
-        dataset_metadata = dataset_metadata or {}
-        target_mode = dataset_metadata.get("target_mode", "price")
-        feature_mode = dataset_metadata.get("feature_mode", "legacy_price_features")
-        scaling_mode = dataset_metadata.get("scaling_mode", "minmax")
-        run_id = run_id or dataset_metadata.get("run_id")
-
-        with self._connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO experiments
-                    (stock_symbol, model_name, validation_mode, target_mode, feature_mode, scaling_mode,
-                     mae, rmse, mape, dir_acc, sharpe, hit_rate,
-                     composite_score, model_path, features, dataset_hash,
-                     is_production_candidate, selection_source, run_id, trained_at)
-                VALUES
-                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    stock_symbol, model_name, validation_mode,
-                    target_mode, feature_mode, scaling_mode,
-                    metrics.get("MAE"), metrics.get("RMSE"),
-                    metrics.get("MAPE"), metrics.get("Dir_Acc"),
-                    metrics.get("Sharpe"), metrics.get("Hit_Rate"),
-                    composite, model_path, features_json,
-                    dataset_hash, int(bool(is_production_candidate)),
-                    selection_source, run_id, trained_at,
-                ),
-            )
-            experiment_id = cursor.lastrowid
-
-        self._update_production_best_model(
+        self._ensure_repositories()
+        return self.experiment_repository.log_experiment(
             stock_symbol=stock_symbol,
             model_name=model_name,
-            experiment_id=experiment_id,
-            composite_score=composite,
             metrics=metrics,
             model_path=model_path,
-            trained_at=trained_at,
-            target_mode=target_mode,
-            feature_mode=feature_mode,
-            scaling_mode=scaling_mode,
-            validation_mode=validation_mode,
+            features=features,
             dataset_hash=dataset_hash,
-            is_production_candidate=bool(is_production_candidate),
+            validation_mode=validation_mode,
+            dataset_metadata=dataset_metadata,
+            is_production_candidate=is_production_candidate,
             selection_source=selection_source,
             run_id=run_id,
         )
-
-        print(
-            f"  [DB] {stock_symbol} | {model_name:15s} → "
-            f"composite={composite:.2f}  "
-            f"dir_acc={metrics.get('Dir_Acc', 0):.1f}%  "
-            f"sharpe={metrics.get('Sharpe', 0):.3f}"
-        )
-        return experiment_id
 
     def _update_production_best_model(
         self,
@@ -374,39 +323,24 @@ class StockModelDB:
         selection_source: Optional[str],
         run_id: Optional[str],
     ) -> None:
-        if validation_mode != "final_holdout" or not is_production_candidate:
-            return
-
-        with self._connect() as conn:
-            existing = conn.execute(
-                "SELECT model_name, experiment_id FROM best_models WHERE stock_symbol = ?",
-                (stock_symbol,),
-            ).fetchone()
-            self._upsert_best_from_values(
-                conn=conn,
-                stock_symbol=stock_symbol,
-                model_name=model_name,
-                experiment_id=experiment_id,
-                composite_score=composite_score,
-                metrics=metrics,
-                model_path=model_path,
-                updated_at=trained_at,
-                target_mode=target_mode,
-                feature_mode=feature_mode,
-                scaling_mode=scaling_mode,
-                validation_mode=validation_mode,
-                dataset_hash=dataset_hash,
-                run_id=run_id,
-                selection_source=selection_source,
-            )
-            if existing is None:
-                print(f"  [DB] ✓ {stock_symbol} production best: {model_name}")
-            elif int(existing["experiment_id"]) != int(experiment_id):
-                print(
-                    f"  [DB] ✓ {stock_symbol} production best guncellendi: "
-                    f"{existing['model_name']} -> {model_name}"
-                )
-        return
+        self._ensure_repositories()
+        return self.best_model_repository.update_production_best_model(
+            stock_symbol=stock_symbol,
+            model_name=model_name,
+            experiment_id=experiment_id,
+            composite_score=composite_score,
+            metrics=metrics,
+            model_path=model_path,
+            trained_at=trained_at,
+            target_mode=target_mode,
+            feature_mode=feature_mode,
+            scaling_mode=scaling_mode,
+            validation_mode=validation_mode,
+            dataset_hash=dataset_hash,
+            is_production_candidate=is_production_candidate,
+            selection_source=selection_source,
+            run_id=run_id,
+        )
 
     @staticmethod
     def _upsert_best_from_values(
@@ -480,118 +414,20 @@ class StockModelDB:
         )
 
     def _migrate_legacy_production_candidates(self, conn: sqlite3.Connection) -> None:
-        placeholders = ",".join("?" for _ in BENCHMARK_MODELS)
-        conn.execute(
-            f"""
-            UPDATE experiments
-            SET is_production_candidate = 1,
-                selection_source = COALESCE(selection_source, 'legacy_final_holdout_migration')
-            WHERE validation_mode = 'final_holdout'
-              AND COALESCE(is_production_candidate, 0) = 0
-              AND model_name NOT LIKE 'Ensemble %'
-              AND model_name NOT IN ({placeholders})
-            """,
-            tuple(BENCHMARK_MODELS),
-        )
+        self._ensure_repositories()
+        return self.schema_repository.migrate_legacy_production_candidates(conn)
 
     def _refresh_best_models_from_production_experiments(self, conn: sqlite3.Connection) -> None:
-        conn.execute(
-            """
-            DELETE FROM best_models
-            WHERE experiment_id NOT IN (
-                SELECT id
-                FROM experiments
-                WHERE validation_mode = 'final_holdout'
-                  AND COALESCE(is_production_candidate, 0) = 1
-            )
-            """
-        )
-        stocks = conn.execute(
-            """
-            SELECT DISTINCT stock_symbol
-            FROM experiments
-            WHERE validation_mode = 'final_holdout'
-              AND COALESCE(is_production_candidate, 0) = 1
-            """
-        ).fetchall()
-        for stock_row in stocks:
-            row = conn.execute(
-                """
-                SELECT *
-                FROM experiments
-                WHERE stock_symbol = ?
-                  AND validation_mode = 'final_holdout'
-                  AND COALESCE(is_production_candidate, 0) = 1
-                ORDER BY trained_at DESC, id DESC
-                LIMIT 1
-                """,
-                (stock_row["stock_symbol"],),
-            ).fetchone()
-            if row is None:
-                continue
-            self._upsert_best_from_values(
-                conn=conn,
-                stock_symbol=row["stock_symbol"],
-                model_name=row["model_name"],
-                experiment_id=int(row["id"]),
-                composite_score=float(row["composite_score"] or 0.0),
-                metrics={
-                    "MAE": row["mae"],
-                    "RMSE": row["rmse"],
-                    "MAPE": row["mape"],
-                    "Dir_Acc": row["dir_acc"],
-                    "Sharpe": row["sharpe"],
-                    "Hit_Rate": row["hit_rate"],
-                },
-                model_path=row["model_path"] or "",
-                updated_at=row["trained_at"],
-                target_mode=row["target_mode"],
-                feature_mode=row["feature_mode"],
-                scaling_mode=row["scaling_mode"],
-                validation_mode=row["validation_mode"],
-                dataset_hash=row["dataset_hash"],
-                run_id=row["run_id"],
-                selection_source=row["selection_source"],
-            )
+        self._ensure_repositories()
+        return self.schema_repository.refresh_best_models_from_production_experiments(conn)
 
     def get_best_model(self, stock_symbol: str) -> Optional[Dict[str, Any]]:
-        """
-        Belirtilen hisse için en iyi modelin tüm bilgilerini döndürür.
-
-        Returns:
-            dict veya None (kayıt yoksa).
-
-        Kullanım örneği (ileride otomatik seçim için):
-            best = db.get_best_model("TUPRS")
-            if best:
-                print(best["model_name"], best["model_path"])
-        """
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM best_models WHERE stock_symbol = ?",
-                (stock_symbol,),
-            ).fetchone()
-        return dict(row) if row else None
+        self._ensure_repositories()
+        return self.best_model_repository.get_best_model(stock_symbol)
 
     def get_leaderboard(self, top_n: int = 20) -> List[Dict[str, Any]]:
-        """
-        Tüm hisseler arasında composite_score'a göre sıralı lider tablosu.
-
-        Returns:
-            Her hissenin en iyi modelini içeren liste.
-        """
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT stock_symbol, model_name, composite_score,
-                       dir_acc, sharpe, mae, rmse, updated_at
-                FROM   best_models
-                ORDER  BY composite_score DESC
-                LIMIT  ?
-                """,
-                (top_n,),
-            ).fetchall()
-        return [dict(r) for r in rows]
+        self._ensure_repositories()
+        return self.best_model_repository.get_leaderboard(top_n)
 
     def get_experiments(
         self,
@@ -599,61 +435,16 @@ class StockModelDB:
         model_name: Optional[str] = None,
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
-        """
-        Deney geçmişini filtreli sorgular.
-
-        Args:
-            stock_symbol : Yalnızca bu hissenin deneyleri (None → hepsi).
-            model_name   : Yalnızca bu modelin deneyleri (None → hepsi).
-            limit        : Maksimum satır sayısı.
-        """
-        clauses, params = [], []
-        if stock_symbol:
-            clauses.append("stock_symbol = ?")
-            params.append(stock_symbol)
-        if model_name:
-            clauses.append("model_name = ?")
-            params.append(model_name)
-
-        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-        params.append(limit)
-
-        with self._connect() as conn:
-            rows = conn.execute(
-                f"""
-                SELECT * FROM experiments
-                {where}
-                ORDER BY trained_at DESC
-                LIMIT ?
-                """,
-                params,
-            ).fetchall()
-        return [dict(r) for r in rows]
+        self._ensure_repositories()
+        return self.experiment_repository.get_experiments(
+            stock_symbol=stock_symbol,
+            model_name=model_name,
+            limit=limit,
+        )
 
     def get_model_comparison(self, stock_symbol: str) -> List[Dict[str, Any]]:
-        """
-        Belirli bir hisse için tüm modellerin ortalama metriklerini karşılaştırır.
-        """
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT
-                    model_name,
-                    COUNT(*)          AS run_count,
-                    AVG(composite_score) AS avg_composite,
-                    AVG(dir_acc)      AS avg_dir_acc,
-                    AVG(sharpe)       AS avg_sharpe,
-                    AVG(mae)          AS avg_mae,
-                    AVG(rmse)         AS avg_rmse,
-                    MAX(composite_score) AS best_composite
-                FROM   experiments
-                WHERE  stock_symbol = ?
-                GROUP  BY model_name
-                ORDER  BY avg_composite DESC
-                """,
-                (stock_symbol,),
-            ).fetchall()
-        return [dict(r) for r in rows]
+        self._ensure_repositories()
+        return self.experiment_repository.get_model_comparison(stock_symbol)
 
     def log_forecast_run(
         self,
@@ -672,277 +463,42 @@ class StockModelDB:
         status: str = "pending",
         run_at: Optional[str] = None,
     ) -> int:
-        """Persist one forward forecast run and its daily forecast points."""
-        stock_symbol = stock_symbol.upper()
-        run_at = run_at or datetime.now().isoformat(timespec="seconds")
-        run_key = self._forecast_run_key(
-            stock_symbol,
-            model_name,
-            source_experiment_id,
-            last_observed_date,
-            horizon_days,
-            rules_version,
+        self._ensure_repositories()
+        return self.forecast_repository.log_forecast_run(
+            stock_symbol=stock_symbol,
+            model_name=model_name,
+            source_experiment_id=source_experiment_id,
+            last_observed_date=last_observed_date,
+            last_close=last_close,
+            horizon_days=horizon_days,
+            trend_label=trend_label,
+            weekly_expected_return=weekly_expected_return,
+            trend_threshold=trend_threshold,
+            rules_version=rules_version,
+            points=points,
+            status=status,
+            run_at=run_at,
         )
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO forecast_runs
-                    (run_key, stock_symbol, model_name, source_experiment_id,
-                     run_at, last_observed_date, last_close, horizon_days,
-                     trend_label, weekly_expected_return, trend_threshold,
-                     rules_version, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(run_key) DO UPDATE SET
-                    run_at                 = excluded.run_at,
-                    last_close             = excluded.last_close,
-                    trend_label            = excluded.trend_label,
-                    weekly_expected_return = excluded.weekly_expected_return,
-                    trend_threshold        = excluded.trend_threshold,
-                    status                 = excluded.status
-                """,
-                (
-                    run_key,
-                    stock_symbol,
-                    model_name,
-                    source_experiment_id,
-                    run_at,
-                    last_observed_date,
-                    float(last_close),
-                    int(horizon_days),
-                    trend_label,
-                    float(weekly_expected_return),
-                    float(trend_threshold),
-                    rules_version,
-                    status,
-                ),
-            )
-            run_id = int(conn.execute(
-                "SELECT id FROM forecast_runs WHERE run_key = ?",
-                (run_key,),
-            ).fetchone()["id"])
-            for point in points:
-                conn.execute(
-                    """
-                    INSERT INTO forecast_points
-                        (run_id, target_date, horizon_index, raw_predicted_close,
-                         bounded_predicted_close, predicted_return, lower_band,
-                         upper_band, price_tick)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(run_id, target_date) DO UPDATE SET
-                        horizon_index           = excluded.horizon_index,
-                        raw_predicted_close     = excluded.raw_predicted_close,
-                        bounded_predicted_close = excluded.bounded_predicted_close,
-                        predicted_return        = excluded.predicted_return,
-                        lower_band              = excluded.lower_band,
-                        upper_band              = excluded.upper_band,
-                        price_tick              = excluded.price_tick,
-                        actual_close            = NULL,
-                        actual_return           = NULL,
-                        abs_error               = NULL,
-                        direction_correct       = NULL,
-                        resolved_at             = NULL
-                    """,
-                    (
-                        run_id,
-                        str(point["target_date"])[:10],
-                        int(point["horizon_index"]),
-                        self._optional_float(point.get("raw_predicted_close")),
-                        self._optional_float(point.get("bounded_predicted_close")),
-                        self._optional_float(point.get("predicted_return")),
-                        self._optional_float(point.get("lower_band")),
-                        self._optional_float(point.get("upper_band")),
-                        self._optional_float(point.get("price_tick")),
-                    ),
-                )
-        return run_id
 
     def get_latest_forecast(self, stock_symbol: str) -> Optional[Dict[str, Any]]:
-        rows = self.get_forecast_history(stock_symbol, limit=1)
-        return rows[0] if rows else None
+        self._ensure_repositories()
+        return self.forecast_repository.get_latest_forecast(stock_symbol)
 
     def get_forecast_history(self, stock_symbol: str, limit: int = 20) -> List[Dict[str, Any]]:
-        stock_symbol = stock_symbol.upper()
-        with self._connect() as conn:
-            runs = conn.execute(
-                """
-                SELECT *
-                FROM forecast_runs
-                WHERE stock_symbol = ?
-                ORDER BY run_at DESC, id DESC
-                LIMIT ?
-                """,
-                (stock_symbol, int(limit)),
-            ).fetchall()
-            result: List[Dict[str, Any]] = []
-            for run in runs:
-                run_dict = dict(run)
-                points = conn.execute(
-                    """
-                    SELECT *
-                    FROM forecast_points
-                    WHERE run_id = ?
-                    ORDER BY horizon_index ASC
-                    """,
-                    (run_dict["id"],),
-                ).fetchall()
-                summary = conn.execute(
-                    "SELECT * FROM forecast_accuracy_summary WHERE run_id = ?",
-                    (run_dict["id"],),
-                ).fetchone()
-                run_dict["points"] = [dict(point) for point in points]
-                run_dict["accuracy_summary"] = dict(summary) if summary else None
-                result.append(run_dict)
-        return result
+        self._ensure_repositories()
+        return self.forecast_repository.get_forecast_history(stock_symbol, limit=limit)
 
     def resolve_forecasts(self, stock_symbol: str, actual_prices: Dict[str, float]) -> int:
-        """Attach actual closes to unresolved forecast points and refresh accuracy."""
-        stock_symbol = stock_symbol.upper()
-        normalized_actuals = {
-            str(key)[:10]: float(value)
-            for key, value in actual_prices.items()
-            if value is not None
-        }
-        if not normalized_actuals:
-            return 0
-
-        resolved = 0
-        now = datetime.now().isoformat(timespec="seconds")
-        with self._connect() as conn:
-            runs = conn.execute(
-                "SELECT * FROM forecast_runs WHERE stock_symbol = ?",
-                (stock_symbol,),
-            ).fetchall()
-            for run in runs:
-                run_id = int(run["id"])
-                points = conn.execute(
-                    """
-                    SELECT *
-                    FROM forecast_points
-                    WHERE run_id = ?
-                    ORDER BY horizon_index ASC
-                    """,
-                    (run_id,),
-                ).fetchall()
-                previous_actual = float(run["last_close"])
-                contiguous = True
-                for point in points:
-                    target_date = str(point["target_date"])[:10]
-                    actual_close = normalized_actuals.get(target_date)
-                    if actual_close is None:
-                        contiguous = False
-                        continue
-                    if not contiguous:
-                        continue
-                    predicted = self._optional_float(point["bounded_predicted_close"])
-                    predicted_return = self._optional_float(point["predicted_return"])
-                    actual_return = (actual_close / previous_actual) - 1.0 if previous_actual else None
-                    abs_error = abs(actual_close - predicted) if predicted is not None else None
-                    direction_correct = None
-                    if predicted_return is not None and actual_return is not None:
-                        direction_correct = int(self._sign(predicted_return) == self._sign(actual_return))
-                    conn.execute(
-                        """
-                        UPDATE forecast_points
-                        SET actual_close = ?,
-                            actual_return = ?,
-                            abs_error = ?,
-                            direction_correct = ?,
-                            resolved_at = ?
-                        WHERE id = ?
-                        """,
-                        (
-                            actual_close,
-                            actual_return,
-                            abs_error,
-                            direction_correct,
-                            now,
-                            int(point["id"]),
-                        ),
-                    )
-                    previous_actual = actual_close
-                    resolved += 1
-                self._refresh_forecast_accuracy(conn, run_id)
-        return resolved
+        self._ensure_repositories()
+        return self.forecast_resolution_repository.resolve_forecasts(stock_symbol, actual_prices)
 
     def resolve_forecasts_from_csv(self, stock_symbol: str, csv_path: str) -> int:
-        import pandas as pd
-
-        df = pd.read_csv(csv_path)
-        if "Date" not in df.columns or "Close" not in df.columns:
-            raise ValueError("CSV must include Date and Close columns.")
-        df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
-        actuals = {
-            row["Date"]: float(row["Close"])
-            for _, row in df.dropna(subset=["Date", "Close"]).iterrows()
-        }
-        return self.resolve_forecasts(stock_symbol, actuals)
+        self._ensure_repositories()
+        return self.forecast_resolution_repository.resolve_forecasts_from_csv(stock_symbol, csv_path)
 
     def _refresh_forecast_accuracy(self, conn: sqlite3.Connection, run_id: int) -> None:
-        run = conn.execute("SELECT * FROM forecast_runs WHERE id = ?", (run_id,)).fetchone()
-        if run is None:
-            return
-        points = conn.execute(
-            """
-            SELECT *
-            FROM forecast_points
-            WHERE run_id = ? AND actual_close IS NOT NULL
-            ORDER BY horizon_index ASC
-            """,
-            (run_id,),
-        ).fetchall()
-        if not points:
-            conn.execute("DELETE FROM forecast_accuracy_summary WHERE run_id = ?", (run_id,))
-            return
-
-        actual = [float(point["actual_close"]) for point in points]
-        pred = [float(point["bounded_predicted_close"]) for point in points]
-        errors = [a - p for a, p in zip(actual, pred)]
-        abs_errors = [abs(err) for err in errors]
-        rmse = math.sqrt(sum(err * err for err in errors) / len(errors))
-        mae = sum(abs_errors) / len(abs_errors)
-        mape_vals = [abs((a - p) / a) for a, p in zip(actual, pred) if a]
-        mape = (sum(mape_vals) / len(mape_vals) * 100.0) if mape_vals else None
-        direction_values = [
-            int(point["direction_correct"])
-            for point in points
-            if point["direction_correct"] is not None
-        ]
-        dir_acc = (sum(direction_values) / len(direction_values) * 100.0) if direction_values else None
-        weekly_direction_correct = None
-        if len(points) >= int(run["horizon_days"]):
-            weekly_actual_return = (float(points[-1]["actual_close"]) / float(run["last_close"])) - 1.0
-            weekly_direction_correct = int(
-                self._sign(float(run["weekly_expected_return"])) == self._sign(weekly_actual_return)
-            )
-
-        conn.execute(
-            """
-            INSERT INTO forecast_accuracy_summary
-                (run_id, stock_symbol, model_name, rmse, mae, mape, dir_acc,
-                 weekly_direction_correct, resolved_points, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(run_id) DO UPDATE SET
-                rmse                     = excluded.rmse,
-                mae                      = excluded.mae,
-                mape                     = excluded.mape,
-                dir_acc                  = excluded.dir_acc,
-                weekly_direction_correct = excluded.weekly_direction_correct,
-                resolved_points          = excluded.resolved_points,
-                updated_at               = excluded.updated_at
-            """,
-            (
-                run_id,
-                run["stock_symbol"],
-                run["model_name"],
-                rmse,
-                mae,
-                mape,
-                dir_acc,
-                weekly_direction_correct,
-                len(points),
-                datetime.now().isoformat(timespec="seconds"),
-            ),
-        )
+        self._ensure_repositories()
+        return self.forecast_resolution_repository.refresh_forecast_accuracy(conn, run_id)
 
     @staticmethod
     def _forecast_run_key(
