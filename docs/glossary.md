@@ -165,7 +165,7 @@ Her satir su mantikla okunmalidir: terim nedir, ne ise yarar, bu projede nerede 
 | XAI | Aciklanabilirlik | Explainable AI, model tahminlerini insan tarafindan yorumlanabilir hale getirme alani. | Hangi ozelliklerin tahmine katkisini anlamayi saglar. | `src/xai/`. | Aciklama nedensellik kaniti degildir. |
 | Feature importance | Aciklanabilirlik | Bir ozelligin tahmin performansina katkisini ozetleyen olcu. | Modelin hangi sinyallere dayandigini gosterir. | Permutasyon testi ve XAI raporlari. | Importance train veya test kapsamina gore farkli yorumlanir. |
 | SHAP | Aciklanabilirlik | Tahminleri ozellik katkilarina ayiran model aciklama yontemi. | Tekil tahminlerin hangi feature'lardan etkilendigini gosterir. | README'de XAI katmani kapsaminda anilir. | SHAP degerleri model tipine ve arka plan verisine duyarlidir. |
-| Permutation importance | Aciklanabilirlik | Bir ozelligi bozup performans dususunu olcen model-agnostik yontem. | Her model icin tutarli onem testi saglar. | `src/evaluation/permutation_test.py`. | Korelasyonlu feature'larda onem paylasilabilir. |
+| Permutation importance | Aciklanabilirlik | Bir ozelligi bozup performans dususunu olcen model-agnostik yontem. | Her model icin tutarli onem testi saglar. | XAI strategy fallbacks under `src/xai/`. | Korelasyonlu feature'larda onem paylasilabilir. |
 | `describe_feature()` | Aciklanabilirlik | Feature adini sade Turkce aciklamaya ceviren yardimci fonksiyon. | Raporlari teknik kolon adlarindan kurtarir. | `src/xai/feature_dictionary.py`. | Yeni feature icin aciklama yoksa genel fallback metni doner. |
 | Narrative report | Raporlama | Sayisal sinyal ve XAI sonucunu Turkce cumleye donusturen rapor. | Teknik olmayan okuyucuya tahmin nedenini anlatir. | `src/xai/narrative.py`, `src/xai/report_writer.py`. | Cumleler aciklama amaclidir, yatirim tavsiyesi gibi yazilmamali. |
 | `registry.json` | Kayit | Model versiyon metadata'sini saklayan JSON kayit dosyasi. | Kaydedilen modelin ozellik, metrik ve dosya bilgilerini izler. | `ModelRegistry` uyumluluk katmani. | Guncel uretim kaydi SQLite tarafina kaymis olabilir; ikisi karistirilmamali. |
@@ -180,3 +180,5 @@ Her satir su mantikla okunmalidir: terim nedir, ne ise yarar, bu projede nerede 
 ## Gelistirici Icin Hizli Okuma Rehberi
 
 Yeni bir gelistirici once `ForecastingPipeline` akisinin hangi alt yoneticilere ayrildigini anlamalidir. Sonra `DataManager` icindeki split, scaler ve sequence hazirlama kurallarini okumali; bu proje icin en kritik invariant veri sizintisi olmamasidir. Model ekleme veya degistirme yaparken `BaseModel` sozlesmesi ve `src/pipeline/model_scope.py` icindeki model adlari kontrol edilmelidir. Son olarak tahmin kalitesini yalniz RMSE ile degil, directional accuracy, backtest, maliyet ve risk metrikleriyle birlikte yorumlamak gerekir.
+
+

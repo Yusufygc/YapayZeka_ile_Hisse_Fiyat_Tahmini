@@ -90,7 +90,7 @@ ForecastingPipeline
 pip install -r requirements.txt
 
 # Run interactive pipeline
-python main_pipeline.py
+python -m src.cli.interactive
 
 # Run tests
 python -m pytest tests
@@ -99,7 +99,7 @@ python -m pytest tests
 python -m pytest tests/test_smoke.py -v
 
 # Run BIST-compliant forward forecasts
-python run_forecast.py --stocks TUPRS,ASELS --horizon-days 5
+python -m src.cli.forecast --stocks TUPRS,ASELS --horizon-days 5
 
 # Serve registry/API data
 uvicorn src.api.main:app --reload --port 8000

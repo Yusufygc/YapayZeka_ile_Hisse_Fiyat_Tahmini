@@ -27,6 +27,10 @@ data/macro/*.csv
 # Batch çalışma raporları (çalışmaya özgü, arşiv değeri yok)
 batch_summary_*.csv
 batch_summary_*.json
+outputs/batch_summaries/
+outputs/_test_*/
+outputs/_pytest_tmp/
+data/optuna/
 
 # AI asistan talimat dosyaları (proje dökümantasyonu değil)
 CLAUDE.md
