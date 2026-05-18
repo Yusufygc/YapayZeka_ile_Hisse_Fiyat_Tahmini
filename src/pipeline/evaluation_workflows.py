@@ -158,6 +158,7 @@ class WalkForwardEvaluationWorkflow(_OwnerBackedService):
         print("\nWalk-Forward Ortalama Metrikleri:")
         print(df_wf)
 
+        self._attach_stability_scores(wf_results, enriched_fold_metrics)
         self._log_walk_forward_experiments(wf_results)
 
         backtest_results = self._run_backtests(
@@ -215,6 +216,35 @@ class WalkForwardEvaluationWorkflow(_OwnerBackedService):
         })
         self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
         return {}
+
+    @staticmethod
+    def _compute_stability_score(fold_rows: list) -> float:
+        """Fold bazlı Sharpe değerlerinden tek bir istikrar skoru hesapla.
+
+        stability_score = positive_fold_ratio - 0.5 * std(fold_sharpe)
+        Aralık teorik olarak (-inf, 1]. Değer yükseldikçe daha istikrarlı.
+        """
+        sharpes = []
+        for row in fold_rows:
+            try:
+                v = float(row.get("Sharpe", float("nan")))
+                if np.isfinite(v):
+                    sharpes.append(v)
+            except (TypeError, ValueError):
+                pass
+        if not sharpes:
+            return float("nan")
+        arr = np.asarray(sharpes, dtype=float)
+        positive_ratio = float(np.mean(arr > 0.0))
+        std_sharpe = float(np.std(arr, ddof=0)) if len(arr) > 1 else 0.0
+        return float(positive_ratio - 0.5 * std_sharpe)
+
+    def _attach_stability_scores(
+        self, wf_results: dict, enriched_fold_metrics: dict
+    ) -> None:
+        for model_name, metrics in wf_results.items():
+            fold_rows = enriched_fold_metrics.get(model_name, [])
+            metrics["Stability_Score"] = self._compute_stability_score(fold_rows)
 
     def _log_walk_forward_experiments(self, wf_results: dict) -> None:
         if self.stock_db is None:

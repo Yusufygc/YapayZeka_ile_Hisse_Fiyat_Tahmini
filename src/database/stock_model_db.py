@@ -446,6 +446,12 @@ class StockModelDB:
         self._ensure_repositories()
         return self.experiment_repository.get_model_comparison(stock_symbol)
 
+    def get_cross_run_leaderboard(
+        self, stock_symbol: str, n_runs: int = 5
+    ) -> List[Dict[str, Any]]:
+        self._ensure_repositories()
+        return self.experiment_repository.get_cross_run_leaderboard(stock_symbol, n_runs=n_runs)
+
     def log_forecast_run(
         self,
         *,

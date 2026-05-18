@@ -52,6 +52,7 @@ class SchemaRepository:
         self.ensure_column(conn, "experiments", "is_production_candidate", "INTEGER NOT NULL DEFAULT 0")
         self.ensure_column(conn, "experiments", "selection_source", "TEXT")
         self.ensure_column(conn, "experiments", "run_id", "TEXT")
+        self.ensure_column(conn, "experiments", "stability_score", "REAL")
 
     def _ensure_best_model_columns(self, conn: sqlite3.Connection) -> None:
         self.ensure_column(conn, "best_models", "target_mode", "TEXT NOT NULL DEFAULT 'price'")
@@ -189,6 +190,7 @@ class ExperimentRepository:
         composite: float,
         trained_at: str,
     ) -> int:
+        stability = self.db._optional_float(metrics.get("Stability_Score"))
         with self.db._connect() as conn:
             cursor = conn.execute(
                 """
@@ -196,9 +198,10 @@ class ExperimentRepository:
                     (stock_symbol, model_name, validation_mode, target_mode, feature_mode, scaling_mode,
                      mae, rmse, mape, dir_acc, sharpe, hit_rate,
                      composite_score, model_path, features, dataset_hash,
-                     is_production_candidate, selection_source, run_id, trained_at)
+                     is_production_candidate, selection_source, run_id, trained_at,
+                     stability_score)
                 VALUES
-                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     stock_symbol, model_name, validation_mode,
@@ -211,6 +214,7 @@ class ExperimentRepository:
                     composite, model_path, json.dumps(features, ensure_ascii=False),
                     dataset_hash, int(bool(is_production_candidate)),
                     selection_source, run_id, trained_at,
+                    stability,
                 ),
             )
             return int(cursor.lastrowid)
@@ -239,6 +243,41 @@ class ExperimentRepository:
                 LIMIT ?
                 """,
                 params,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_cross_run_leaderboard(
+        self, stock_symbol: str, n_runs: int = 5
+    ) -> List[Dict[str, Any]]:
+        """Son N run üzerinden model bazlı ortalama ve istikrar istatistikleri döner."""
+        stock_symbol = stock_symbol.upper()
+        with self.db._connect() as conn:
+            rows = conn.execute(
+                """
+                WITH recent_runs AS (
+                    SELECT DISTINCT run_id
+                    FROM experiments
+                    WHERE stock_symbol = ?
+                      AND run_id IS NOT NULL
+                    ORDER BY trained_at DESC
+                    LIMIT ?
+                )
+                SELECT
+                    e.model_name,
+                    COUNT(*)                                   AS run_count,
+                    AVG(e.composite_score)                     AS avg_composite,
+                    AVG(e.dir_acc)                             AS avg_dir_acc,
+                    AVG(e.sharpe)                              AS avg_sharpe,
+                    AVG(e.stability_score)                     AS avg_stability_score,
+                    MIN(e.stability_score)                     AS min_stability_score,
+                    SUM(CASE WHEN e.stability_score >= 0 THEN 1 ELSE 0 END) AS positive_stability_runs
+                FROM experiments e
+                JOIN recent_runs r ON e.run_id = r.run_id
+                WHERE e.stock_symbol = ?
+                GROUP BY e.model_name
+                ORDER BY avg_composite DESC
+                """,
+                (stock_symbol, int(n_runs), stock_symbol),
             ).fetchall()
         return [dict(row) for row in rows]
 
