@@ -62,3 +62,14 @@ def test_selected_model_skip_policy_stays_on_facade_owner(tmp_path):
     assert trainer._skip("XGBoost") is True
     assert trainer._skip("Random Forest") is False
     assert trainer._skip("Naive Last Value") is False
+
+
+def test_lstm_lite_uses_own_min_sequence_threshold(tmp_path):
+    trainer = _trainer(
+        tmp_path,
+        selected_models=["LSTM Lite"],
+    )
+
+    assert trainer._has_min_sequences(251, "LSTM Lite", "train") is False
+    assert trainer._has_min_sequences(252, "LSTM Lite", "train") is True
+    assert trainer._has_min_sequences(64, "LSTM", "train") is True
