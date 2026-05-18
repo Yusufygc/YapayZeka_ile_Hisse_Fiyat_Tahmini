@@ -3,10 +3,13 @@
 orchestrator.py - Ana ForecastingPipeline sinifi
 """
 
+import json
 import os
 import shutil
 import hashlib
 import re
+import subprocess
+import sys
 import warnings
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -312,6 +315,78 @@ class ForecastingPipeline:
         except Exception as exc:
             print(f"  [WARN] Validation/data quality raporlari kaydedilemedi: {exc}")
 
+    def _write_run_manifest(self) -> None:
+        def _md5_file(path: str) -> str:
+            h = hashlib.md5()
+            try:
+                with open(path, "rb") as fh:
+                    for chunk in iter(lambda: fh.read(65536), b""):
+                        h.update(chunk)
+                return h.hexdigest()
+            except OSError:
+                return "unavailable"
+
+        def _dict_hash(d: dict) -> str:
+            raw = json.dumps(d, sort_keys=True, default=str).encode()
+            return hashlib.sha256(raw).hexdigest()[:16]
+
+        def _git_commit() -> str:
+            try:
+                result = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    capture_output=True, text=True, timeout=5,
+                    cwd=self.project_root,
+                )
+                return result.stdout.strip() if result.returncode == 0 else "unavailable"
+            except Exception:
+                return "unavailable"
+
+        def _lib_versions() -> Dict[str, str]:
+            libs = ["numpy", "pandas", "sklearn", "xgboost", "lightgbm", "torch"]
+            versions: Dict[str, str] = {}
+            for lib in libs:
+                try:
+                    import importlib
+                    mod = importlib.import_module(lib if lib != "sklearn" else "sklearn")
+                    versions[lib] = getattr(mod, "__version__", "unknown")
+                except ImportError:
+                    versions[lib] = "not_installed"
+            return versions
+
+        signal_cfg_dict = {}
+        try:
+            sc = self._cfg.execution.signal_config
+            signal_cfg_dict = {
+                "quality_gate_mode": self.quality_gate_mode,
+                "min_directional_accuracy": self.min_directional_accuracy,
+                "max_rmse_vs_benchmark": self.max_rmse_vs_benchmark,
+                "min_composite_score": self.min_composite_score,
+            }
+        except Exception:
+            pass
+
+        manifest = {
+            "run_id": self.run_id,
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "stock_symbol": self.stock_symbol,
+            "data_hash": _md5_file(self.data_file),
+            "feature_pipeline_version": getattr(self._cfg.data, "feature_mode", "unknown"),
+            "model_config_hash": _dict_hash(self.model_config),
+            "signal_config_hash": _dict_hash(signal_cfg_dict),
+            "random_seed": 42,
+            "model_list": sorted(self.candidate_models),
+            "validation_protocol": self.validation_mode,
+            "git_commit": _git_commit(),
+            "python_version": sys.version,
+            "lib_versions": _lib_versions(),
+        }
+
+        manifest_path = os.path.join(self.outputs_dir, "run_manifest.json")
+        os.makedirs(self.outputs_dir, exist_ok=True)
+        with open(manifest_path, "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh, indent=2, ensure_ascii=False)
+        print(f"  [OK] Run manifest yazildi -> {manifest_path}")
+
     def _sync_latest_output(self) -> None:
         root = os.path.abspath(self.output_root)
         run_dir = os.path.abspath(self.outputs_dir)
@@ -423,5 +498,6 @@ class ForecastingPipeline:
                 except Exception as exc:
                     print(f"  [WARN] Final holdout degerlendirmesi basarisiz, atlaniyor: {exc}")
 
+        self._write_run_manifest()
         self._sync_latest_output()
         print("\n  [OK] Pipeline completed successfully!")
