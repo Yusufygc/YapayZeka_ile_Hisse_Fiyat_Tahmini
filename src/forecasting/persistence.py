@@ -26,6 +26,7 @@ class ForecastPersistence:
         rules_version: str,
         points: List[Dict[str, Any]],
         status: str = "pending",
+        ensemble_direction_agreement: Optional[float] = None,
     ) -> int:
         return self.db.log_forecast_run(
             stock_symbol=stock_symbol,
@@ -40,4 +41,5 @@ class ForecastPersistence:
             rules_version=rules_version,
             points=points,
             status=status,
+            ensemble_direction_agreement=ensemble_direction_agreement,
         )

@@ -36,6 +36,7 @@ class SchemaRepository:
             conn.execute(schema._CREATE_IDX_FORECAST_POINTS_DATE)
             self._ensure_experiment_columns(conn)
             self._ensure_best_model_columns(conn)
+            self._ensure_forecast_run_columns(conn)
             self.migrate_legacy_production_candidates(conn)
             self.refresh_best_models_from_production_experiments(conn)
 
@@ -53,6 +54,9 @@ class SchemaRepository:
         self.ensure_column(conn, "experiments", "selection_source", "TEXT")
         self.ensure_column(conn, "experiments", "run_id", "TEXT")
         self.ensure_column(conn, "experiments", "stability_score", "REAL")
+
+    def _ensure_forecast_run_columns(self, conn: sqlite3.Connection) -> None:
+        self.ensure_column(conn, "forecast_runs", "ensemble_direction_agreement", "REAL")
 
     def _ensure_best_model_columns(self, conn: sqlite3.Connection) -> None:
         self.ensure_column(conn, "best_models", "target_mode", "TEXT NOT NULL DEFAULT 'price'")
@@ -508,6 +512,7 @@ class ForecastRepository:
         points: List[Dict[str, Any]],
         status: str = "pending",
         run_at: Optional[str] = None,
+        ensemble_direction_agreement: Optional[float] = None,
     ) -> int:
         stock_symbol = stock_symbol.upper()
         run_at = run_at or datetime.now().isoformat(timespec="seconds")
@@ -520,6 +525,7 @@ class ForecastRepository:
                 conn, run_key, stock_symbol, model_name, source_experiment_id,
                 run_at, last_observed_date, last_close, horizon_days,
                 trend_label, weekly_expected_return, trend_threshold, rules_version, status,
+                ensemble_direction_agreement=ensemble_direction_agreement,
             )
             run_id = int(conn.execute(
                 "SELECT id FROM forecast_runs WHERE run_key = ?",
@@ -534,6 +540,7 @@ class ForecastRepository:
         conn, run_key, stock_symbol, model_name, source_experiment_id, run_at,
         last_observed_date, last_close, horizon_days, trend_label,
         weekly_expected_return, trend_threshold, rules_version, status,
+        ensemble_direction_agreement=None,
     ) -> None:
         conn.execute(
             """
@@ -541,21 +548,23 @@ class ForecastRepository:
                 (run_key, stock_symbol, model_name, source_experiment_id,
                  run_at, last_observed_date, last_close, horizon_days,
                  trend_label, weekly_expected_return, trend_threshold,
-                 rules_version, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 rules_version, status, ensemble_direction_agreement)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_key) DO UPDATE SET
-                run_at                 = excluded.run_at,
-                last_close             = excluded.last_close,
-                trend_label            = excluded.trend_label,
-                weekly_expected_return = excluded.weekly_expected_return,
-                trend_threshold        = excluded.trend_threshold,
-                status                 = excluded.status
+                run_at                       = excluded.run_at,
+                last_close                   = excluded.last_close,
+                trend_label                  = excluded.trend_label,
+                weekly_expected_return       = excluded.weekly_expected_return,
+                trend_threshold              = excluded.trend_threshold,
+                status                       = excluded.status,
+                ensemble_direction_agreement = excluded.ensemble_direction_agreement
             """,
             (
                 run_key, stock_symbol, model_name, source_experiment_id, run_at,
                 last_observed_date, float(last_close), int(horizon_days),
                 trend_label, float(weekly_expected_return), float(trend_threshold),
                 rules_version, status,
+                float(ensemble_direction_agreement) if ensemble_direction_agreement is not None else None,
             ),
         )
 

@@ -468,6 +468,7 @@ class StockModelDB:
         points: List[Dict[str, Any]],
         status: str = "pending",
         run_at: Optional[str] = None,
+        ensemble_direction_agreement: Optional[float] = None,
     ) -> int:
         self._ensure_repositories()
         return self.forecast_repository.log_forecast_run(
@@ -484,6 +485,7 @@ class StockModelDB:
             points=points,
             status=status,
             run_at=run_at,
+            ensemble_direction_agreement=ensemble_direction_agreement,
         )
 
     def get_latest_forecast(self, stock_symbol: str) -> Optional[Dict[str, Any]]:

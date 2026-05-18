@@ -332,6 +332,30 @@ class _PredictionEngineMixin:
         print("  [OK] Walk-forward ensemble tahminleri eklendi: Equal, Inverse RMSE, Sharpe-Weighted, Risk-Parity, Hierarchical, Meta-Stacker, Cash-Gated.")
 
     # ------------------------------------------------------------------ #
+    #  Ensemble directional agreement (Adim 2.2)                          #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def compute_ensemble_direction_agreement(
+        component_predictions: Dict[str, np.ndarray],
+        main_model_name: str,
+    ) -> Optional[float]:
+        main_preds = component_predictions.get(main_model_name)
+        if main_preds is None or len(main_preds) == 0:
+            return None
+        main_direction = float(np.sign(main_preds[-1]))
+        if main_direction == 0:
+            return None
+        others = [
+            v for k, v in component_predictions.items()
+            if k != main_model_name and not k.startswith("Ensemble ") and len(v) > 0
+        ]
+        if not others:
+            return None
+        agreements = [float(np.sign(v[-1])) == main_direction for v in others]
+        return float(sum(agreements)) / len(agreements)
+
+    # ------------------------------------------------------------------ #
     #  Plot helper                                                         #
     # ------------------------------------------------------------------ #
 

@@ -190,11 +190,13 @@ def _build_forecast_block(forecast_row: Dict[str, Any]) -> ForecastBlock:
         )
         for p in raw_points
     ]
+    raw_agreement = forecast_row.get("ensemble_direction_agreement")
     return ForecastBlock(
         horizon_days=forecast_row.get("horizon_days"),
         trend_label=forecast_row.get("trend_label"),
         weekly_expected_return=forecast_row.get("weekly_expected_return"),
         trend_threshold=forecast_row.get("trend_threshold"),
+        ensemble_agreement=float(raw_agreement) if raw_agreement is not None else None,
         points=points,
     )
 
