@@ -105,3 +105,4 @@ cover/
 .flake8
 pyproject.toml
 .codex_tmp/
+yeniTasarim/
