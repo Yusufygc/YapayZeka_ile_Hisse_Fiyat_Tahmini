@@ -78,7 +78,7 @@ def test_resolve_candidates_require_available_drops_missing_deps():
     """require_available=True ile optional dep eksik modeller düşer."""
     # Tüm candidate kümesinden LSTM (tensorflow gerektirir) optional.
     result = resolve_candidates(
-        selected=["DLinear", "NLinear", "Random Forest", "XGBoost", "LSTM"],
+        selected=["DLinear", "NLinear", "Random Forest", "XGBoost", "LSTM", "LSTM Lite"],
         disabled=[],
         require_available=True,
     )
@@ -91,7 +91,7 @@ def test_list_models_table_contains_all_models():
     for required in (
         "Random Forest", "DLinear", "NLinear", "Ridge Return",
         "ElasticNet Return", "Naive Zero Return", "XGBoost",
-        "LightGBM Return", "ARIMA", "LSTM", "Prophet",
+        "LightGBM Return", "ARIMA", "LSTM", "LSTM Lite", "Prophet",
     ):
         assert required in out, f"{required} listede yok"
     # Başlıklar görünmeli.
@@ -112,6 +112,11 @@ def test_modelconfig_new_fields_default():
     assert cfg.disabled_models == []
     assert cfg.require_available is False
     assert cfg.ensemble_eligibility_overrides == {}
+    lstm_lite = cfg.model_settings["deep_learning"]["lstm_lite"]
+    assert cfg.model_settings["deep_learning"]["lstm_lite_min_sequence_samples"] == 252
+    assert lstm_lite["units"] == 32
+    assert lstm_lite["dense_units"] == 16
+    assert lstm_lite["tune_on_fit"] is False
 
 
 def test_modelconfig_accepts_disabled_and_require_available():
