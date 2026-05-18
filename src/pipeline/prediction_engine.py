@@ -28,7 +28,7 @@ except ImportError:  # pragma: no cover
         return np.asarray(prev_close, dtype=float).ravel() * (1.0 + np.asarray(returns, dtype=float).ravel())
 
 
-_SEQ_MODELS = {"LSTM", "AttentionLSTM", "DLinear", "NLinear"}
+_SEQ_MODELS = {"LSTM", "LSTM Lite", "AttentionLSTM", "DLinear", "NLinear"}
 _TREE_MODELS = {"XGBoost", "Random Forest", "Ridge Return", "ElasticNet Return", "LightGBM Return"}
 
 
