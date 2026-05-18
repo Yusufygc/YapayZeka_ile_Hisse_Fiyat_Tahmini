@@ -28,7 +28,7 @@ def test_benchmark_models_content():
 def test_candidate_models_content():
     expected = {
         "Prophet", "ARIMA", "Ridge Return", "ElasticNet Return", "LightGBM Return",
-        "DLinear", "NLinear", "XGBoost", "Random Forest", "LSTM",
+        "DLinear", "NLinear", "XGBoost", "Random Forest", "LSTM", "LSTM Lite",
     }
     assert set(CANDIDATE_MODELS) == expected
 
@@ -45,7 +45,7 @@ def test_canonical_ordering_preserved():
     # CANDIDATE_MODELS sıralaması da preserve edilmeli.
     expected_order = (
         "Prophet", "ARIMA", "Ridge Return", "ElasticNet Return", "LightGBM Return",
-        "DLinear", "NLinear", "XGBoost", "Random Forest", "LSTM",
+        "DLinear", "NLinear", "XGBoost", "Random Forest", "LSTM", "LSTM Lite",
     )
     assert CANDIDATE_MODELS == expected_order
 
