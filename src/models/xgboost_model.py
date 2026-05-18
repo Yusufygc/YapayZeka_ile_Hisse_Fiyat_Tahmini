@@ -32,7 +32,7 @@ class XGBoostModel(BaseModel):
         random_state: int = 42,
         *,
         tune_on_fit: bool = False,
-        tune_n_trials: int = 30,
+        tune_n_trials: int = 40,
         tune_n_splits: int = 3,
         early_stopping_rounds: int = 50,
         **xgb_kwargs,
@@ -98,7 +98,7 @@ class XGBoostModel(BaseModel):
         self,
         X_train: np.ndarray,
         y_train: np.ndarray,
-        n_trials: int = 50,
+        n_trials: int = 40,
         n_splits: int = 5,
         random_state: int = 42,
         study_storage: str | None = None,
@@ -138,7 +138,7 @@ class XGBoostModel(BaseModel):
                 "reg_lambda": trial.suggest_float("reg_lambda", 0.5, 2.0),
             }
 
-            rmse_scores = []
+            sharpe_scores = []
             for train_idx, val_idx in tscv.split(X_train):
                 X_tr, X_val = X_train[train_idx], X_train[val_idx]
                 y_tr, y_val = y_flat[train_idx], y_flat[val_idx]
@@ -155,10 +155,15 @@ class XGBoostModel(BaseModel):
                     verbose=False,
                 )
                 preds = model.predict(X_val)
-                rmse = float(np.sqrt(mean_squared_error(y_val, preds)))
-                rmse_scores.append(rmse)
+                signals = np.sign(preds)
+                fold_ret = signals * y_val
+                denom = float(np.std(fold_ret, ddof=0))
+                fold_sharpe = float(np.mean(fold_ret) / denom * np.sqrt(252)) if denom > 1e-9 else -1.0
+                sharpe_scores.append(fold_sharpe)
 
-            return float(np.mean(rmse_scores))
+            mean_s = float(np.mean(sharpe_scores))
+            std_s = float(np.std(sharpe_scores, ddof=0)) if len(sharpe_scores) > 1 else 0.0
+            return -(mean_s - 0.5 * std_s)
 
         # ── Optuna çalıştır ──────────────────────────────────────────────────
         print(f"  [Optuna] {n_trials} deneme başlatılıyor ({n_splits}-fold TSCV)...")
@@ -191,8 +196,8 @@ class XGBoostModel(BaseModel):
         study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
 
         self.best_params = study.best_params
-        best_rmse = study.best_value
-        print(f"  [Optuna] En iyi CV RMSE: {best_rmse:.4f}")
+        best_obj = study.best_value
+        print(f"  [Optuna] En iyi stability-adj objective: {best_obj:.4f}")
         print(f"  [Optuna] En iyi parametreler: {self.best_params}")
 
         # ── En iyi parametrelerle nihai modeli eğit ──────────────────────────

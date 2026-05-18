@@ -128,7 +128,7 @@ class SingleSplitTrainingWorkflow(_OwnerBackedService):
             model = getattr(trainer_module, attr)()
             model.tune_and_train(
                 tensors["X_train_s"], tensors["y_train_s"],
-                n_trials=30, n_splits=3,
+                n_trials=40, n_splits=3,
                 study_storage=optuna_storage,
                 study_name=study_name,
             )
@@ -233,7 +233,7 @@ class WalkForwardTrainingWorkflow(_OwnerBackedService):
                 model_name,
                 lambda attr=attr, extra_kwargs=extra_kwargs: getattr(trainer_module, attr)(
                     tune_on_fit=True,
-                    tune_n_trials=30,
+                    tune_n_trials=40,
                     tune_n_splits=3,
                     **extra_kwargs,
                 ),

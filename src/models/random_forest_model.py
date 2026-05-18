@@ -31,7 +31,7 @@ class RandomForestModel(BaseModel):
         random_state: int = 42,
         *,
         tune_on_fit: bool = False,
-        tune_n_trials: int = 30,
+        tune_n_trials: int = 40,
         tune_n_splits: int = 3,
         **rf_kwargs,
     ):
@@ -78,7 +78,7 @@ class RandomForestModel(BaseModel):
         self,
         X_train: np.ndarray,
         y_train: np.ndarray,
-        n_trials: int = 30,
+        n_trials: int = 40,
         n_splits: int = 5,
         random_state: int = 42,
         study_storage: str | None = None,
@@ -91,7 +91,7 @@ class RandomForestModel(BaseModel):
         ----------
         X_train : np.ndarray  (samples, features)
         y_train : np.ndarray  (samples,) veya (samples, 1)
-        n_trials : int        Optuna deneme sayısı (varsayılan: 30).
+        n_trials : int        Optuna deneme sayısı (varsayılan: 40).
         n_splits : int        TimeSeriesSplit katman sayısı.
         random_state : int    Tekrarlanabilirlik için rastgele tohum.
 
@@ -114,7 +114,7 @@ class RandomForestModel(BaseModel):
                 "max_features": trial.suggest_categorical("max_features", [1.0, "sqrt", "log2"]),
             }
 
-            rmse_scores = []
+            sharpe_scores = []
             for train_idx, val_idx in tscv.split(X_train):
                 X_tr, X_val = X_train[train_idx], X_train[val_idx]
                 y_tr, y_val = y_flat[train_idx], y_flat[val_idx]
@@ -126,10 +126,15 @@ class RandomForestModel(BaseModel):
                 )
                 model.fit(X_tr, y_tr)
                 preds = model.predict(X_val)
-                rmse = float(np.sqrt(mean_squared_error(y_val, preds)))
-                rmse_scores.append(rmse)
+                signals = np.sign(preds)
+                fold_ret = signals * y_val
+                denom = float(np.std(fold_ret, ddof=0))
+                fold_sharpe = float(np.mean(fold_ret) / denom * np.sqrt(252)) if denom > 1e-9 else -1.0
+                sharpe_scores.append(fold_sharpe)
 
-            return float(np.mean(rmse_scores))
+            mean_s = float(np.mean(sharpe_scores))
+            std_s = float(np.std(sharpe_scores, ddof=0)) if len(sharpe_scores) > 1 else 0.0
+            return -(mean_s - 0.5 * std_s)
 
         print(f"  [Optuna RF] {n_trials} deneme başlatılıyor ({n_splits}-fold TSCV)...")
         if study_storage is None:
@@ -159,8 +164,8 @@ class RandomForestModel(BaseModel):
         study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
 
         self.best_params = study.best_params
-        best_rmse = study.best_value
-        print(f"  [Optuna RF] En iyi CV RMSE: {best_rmse:.4f}")
+        best_obj = study.best_value
+        print(f"  [Optuna RF] En iyi stability-adj objective: {best_obj:.4f}")
         print(f"  [Optuna RF] En iyi parametreler: {self.best_params}")
 
         # Nihai modeli en iyi parametrelerle eğit

@@ -412,8 +412,8 @@ class ForecastingPipeline:
                 "candidate_models": sorted(self.candidate_models),
                 "benchmark_models": list(BENCHMARK_MODELS),
                 "registry_version": self.registry_version,
-                "xgboost_hpo": {"scope": "train_only_temporal_cv", "n_trials": 5, "n_splits": 3},
-                "random_forest_hpo": {"scope": "train_only_temporal_cv", "n_trials": 5, "n_splits": 3},
+                "xgboost_hpo": {"scope": "train_only_temporal_cv", "n_trials": 40, "n_splits": 3},
+                "random_forest_hpo": {"scope": "train_only_temporal_cv", "n_trials": 40, "n_splits": 3},
                 **self.model_config,
             },
         )
