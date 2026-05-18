@@ -100,15 +100,23 @@ class ModelTrainer:
     def _make_lstm(self, stage: str):
         return model_factory.make_lstm(self.deep_config, stage)
 
+    def _make_lstm_lite(self, stage: str):
+        return model_factory.make_lstm_lite(self.deep_config, stage)
+
+    def _min_sequence_samples_for(self, model_name: str) -> int:
+        if model_name == "LSTM Lite":
+            return int(self.deep_config.get("lstm_lite_min_sequence_samples", 252))
+        return int(self.deep_config.get("min_sequence_samples", 64))
+
     def _has_min_sequences(self, count: int, model_name: str, context: str) -> bool:
-        min_seq = int(self.deep_config.get("min_sequence_samples", 64))
+        min_seq = self._min_sequence_samples_for(model_name)
         if count < min_seq:
             print(f"  [WARN] {model_name} atlandi: {context} sequence sayisi {count} < {min_seq}.")
             return False
         return True
 
     def _wf_has_min_sequences(self, wf_splits: list, data_manager, model_name: str) -> bool:
-        min_seq = int(self.deep_config.get("min_sequence_samples", 64))
+        min_seq = self._min_sequence_samples_for(model_name)
         time_steps = getattr(data_manager, "time_steps", None) or data_manager.data_cfg.time_steps
         min_fold_seq = min(max(0, len(split["train"]) - time_steps) for split in wf_splits) if wf_splits else 0
         if min_fold_seq < min_seq:
