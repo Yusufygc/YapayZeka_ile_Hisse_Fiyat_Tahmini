@@ -55,7 +55,7 @@ class SingleSplitEvaluationWorkflow(_OwnerBackedService):
                 self.dataset_metadata,
             )
 
-            model_ext = ".keras" if name == "LSTM" else ".pkl"
+            model_ext = ".keras" if name in {"LSTM", "LSTM Lite"} else ".pkl"
             model_filename = f"{name.replace(' ', '_').lower()}_model{model_ext}"
             model_path = os.path.join(self.models_dir, model_filename)
 
@@ -305,7 +305,7 @@ class FinalHoldoutEvaluationWorkflow(_OwnerBackedService):
             final_metadata,
         )
 
-        model_ext = ".keras" if model_name == "LSTM" else ".pkl"
+        model_ext = ".keras" if model_name in {"LSTM", "LSTM Lite"} else ".pkl"
         model_filename = f"{model_name.replace(' ', '_').lower()}_final_holdout_model{model_ext}"
         model_path = os.path.join(self.models_dir, model_filename)
         model.save(model_path)
