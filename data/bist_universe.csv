@@ -1,3 +1,21 @@
 Symbol,Listed_Date,Delisted_Date,Status,Source,Note
 AKSA,1986-01-01,,Active,https://aksa.com/en/investor-relations/stock-data/stock-identification,AKSA has been traded on BIST since 1986; exact first trading day is encoded conservatively as year start.
 BIMAS,2010-10-28,,Active,https://www.bim.com.tr/en/investor-relations/,BIM Birlesik Magazalar began trading on BIST on 28 October 2010.
+AKBNK,2015-10-29,,Active,auto-discovered,Auto-populated from AKBNK.csv first trading date
+ASELS,2015-10-29,,Active,auto-discovered,Auto-populated from ASELS.csv first trading date
+ASTOR,2023-01-18,,Active,auto-discovered,Auto-populated from ASTOR.csv first trading date
+BIGEN,2025-02-05,,Active,auto-discovered,Auto-populated from BIGEN.csv first trading date
+ENKAI,2015-10-29,,Active,auto-discovered,Auto-populated from ENKAI.csv first trading date
+EREGL,2015-10-29,,Active,auto-discovered,Auto-populated from EREGL.csv first trading date
+KCHOL,2015-10-29,,Active,auto-discovered,Auto-populated from KCHOL.csv first trading date
+KLSER,2023-07-27,,Active,auto-discovered,Auto-populated from KLSER.csv first trading date
+KTLEV,2023-06-12,,Active,auto-discovered,Auto-populated from KTLEV.csv first trading date
+MGROS,2015-10-29,,Active,auto-discovered,Auto-populated from MGROS.csv first trading date
+MIATK,2021-11-22,,Active,auto-discovered,Auto-populated from MIATK.csv first trading date
+ONRYT,2024-05-28,,Active,auto-discovered,Auto-populated from ONRYT.csv first trading date
+OYAKC,2015-10-29,,Active,auto-discovered,Auto-populated from OYAKC.csv first trading date
+SASA,2015-10-29,,Active,auto-discovered,Auto-populated from SASA.csv first trading date
+SMRTG,2022-03-24,,Active,auto-discovered,Auto-populated from SMRTG.csv first trading date
+THYAO,2015-10-29,,Active,auto-discovered,Auto-populated from THYAO.csv first trading date
+TUCLK,2015-10-29,,Active,auto-discovered,Auto-populated from TUCLK.csv first trading date
+TUPRS,2015-10-29,,Active,auto-discovered,Auto-populated from TUPRS.csv first trading date

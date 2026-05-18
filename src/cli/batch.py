@@ -252,6 +252,13 @@ def main() -> None:
         print(list_models_table())
         return
 
+    universe_path = args.universe or os.path.join(_PROJECT_ROOT, "data", "bist_universe.csv")
+    try:
+        from src.data.universe_sync import sync_universe
+        sync_universe(args.data_dir, universe_path)
+    except Exception as _exc:
+        print(f"  [UNIVERSE] pre-flight sync atlandi: {_exc}")
+
     # Hisse listesi
     if args.stocks:
         symbols = [s.strip().upper() for s in args.stocks.split(",") if s.strip()]

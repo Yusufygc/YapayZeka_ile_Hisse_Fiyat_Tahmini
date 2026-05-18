@@ -79,6 +79,13 @@ class DataManager:
         if self.universe_file and not os.path.isabs(self.universe_file):
             self.universe_file = os.path.join(self.project_root, self.universe_file)
 
+        if self.universe_file and getattr(self.data_cfg, "universe_auto_sync", True):
+            try:
+                from src.data.universe_sync import sync_universe
+                sync_universe(os.path.join(self.project_root, "data"), self.universe_file)
+            except Exception as _exc:
+                print(f"  [UNIVERSE] sync atlandi: {_exc}")
+
         effective_wf_embargo_size = self.data_cfg.time_steps if self.val_cfg.wf_embargo_size is None else max(0, int(self.val_cfg.wf_embargo_size))
         
         wf_max_train_size = self.val_cfg.wf_max_train_size

@@ -33,6 +33,7 @@ class DataConfig:
     new_listing_min_days: int = 252
     auto_update_data: bool = False
     auto_update_interactive: bool = False
+    universe_auto_sync: bool = True
 
 @dataclass
 class ValidationConfig:
