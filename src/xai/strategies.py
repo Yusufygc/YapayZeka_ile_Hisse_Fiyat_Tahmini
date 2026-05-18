@@ -2,9 +2,41 @@
 
 from __future__ import annotations
 
-from typing import Any, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
+
+
+def compute_feature_stability_scores(
+    fold_importances: List[Dict[str, float]],
+    top_k: int = 5,
+) -> Dict[str, float]:
+    """Her fold'daki top-K özelliği sayarak stabilite skoru hesapla.
+
+    Parameters
+    ----------
+    fold_importances:
+        Her eleman bir fold için ``{feature_name: importance}`` dicts.
+    top_k:
+        Her fold'da kaç özelliğin "top" sayılacağı.
+
+    Returns
+    -------
+    dict
+        ``{feature_name: fold_ratio}`` — özelliğin kaç fold'da top-K'ya
+        girdiğini normalize eder (0..1).
+    """
+    if not fold_importances:
+        return {}
+    n_folds = len(fold_importances)
+    top_counts: Dict[str, int] = {}
+    for fold_imp in fold_importances:
+        if not fold_imp:
+            continue
+        sorted_items = sorted(fold_imp.items(), key=lambda x: abs(x[1]), reverse=True)
+        for feat, _ in sorted_items[:top_k]:
+            top_counts[feat] = top_counts.get(feat, 0) + 1
+    return {feat: count / n_folds for feat, count in top_counts.items()}
 
 
 class TabularContributionStrategy:

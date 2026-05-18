@@ -49,6 +49,7 @@ class XaiProductSummary:
     method: str = ""
     top_positive_reasons: List[XaiFeatureFactor] = field(default_factory=list)
     top_negative_reasons: List[XaiFeatureFactor] = field(default_factory=list)
+    feature_stability_top: Dict[str, float] = field(default_factory=dict)
     model_family_caveat: str = ""
     caveat: str = XAI_CAVEAT
 
