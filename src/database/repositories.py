@@ -57,6 +57,7 @@ class SchemaRepository:
 
     def _ensure_forecast_run_columns(self, conn: sqlite3.Connection) -> None:
         self.ensure_column(conn, "forecast_runs", "ensemble_direction_agreement", "REAL")
+        self.ensure_column(conn, "forecast_runs", "live_status", "TEXT NOT NULL DEFAULT 'healthy'")
 
     def _ensure_best_model_columns(self, conn: sqlite3.Connection) -> None:
         self.ensure_column(conn, "best_models", "target_mode", "TEXT NOT NULL DEFAULT 'price'")
@@ -788,3 +789,77 @@ class ForecastResolutionRepository:
             for _, row in df.dropna(subset=["Date", "Close"]).iterrows()
         }
         return self.resolve_forecasts(stock_symbol, actuals)
+
+    def get_rolling_resolution_accuracy(
+        self,
+        stock_symbol: str,
+        days: int = 60,
+    ) -> Dict[str, Any]:
+        """Son N günlük gerçekleşmiş forecast'lar üzerinde rolling dir_acc ve MAE.
+
+        Returns
+        -------
+        dict:
+            rolling_dir_acc (float | None), rolling_mae (float | None),
+            resolved_count (int), model_status ('healthy' | 'degraded')
+        """
+        stock_symbol = stock_symbol.upper()
+        cutoff_date = (
+            datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        )
+        from datetime import timedelta
+        cutoff_iso = (cutoff_date - timedelta(days=days)).strftime("%Y-%m-%d")
+
+        with self.db._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT fp.direction_correct, fp.abs_error, fp.resolved_at
+                FROM forecast_points fp
+                JOIN forecast_runs fr ON fr.id = fp.run_id
+                WHERE fr.stock_symbol = ?
+                  AND fp.resolved_at IS NOT NULL
+                  AND fp.resolved_at >= ?
+                ORDER BY fp.resolved_at DESC
+                """,
+                (stock_symbol, cutoff_iso),
+            ).fetchall()
+
+        if not rows:
+            return {
+                "rolling_dir_acc": None,
+                "rolling_mae": None,
+                "resolved_count": 0,
+                "model_status": "healthy",
+            }
+
+        dir_vals = [int(r["direction_correct"]) for r in rows if r["direction_correct"] is not None]
+        mae_vals = [float(r["abs_error"]) for r in rows if r["abs_error"] is not None]
+
+        rolling_dir_acc = (sum(dir_vals) / len(dir_vals) * 100.0) if dir_vals else None
+        rolling_mae = (sum(mae_vals) / len(mae_vals)) if mae_vals else None
+        model_status = "degraded" if (rolling_dir_acc is not None and rolling_dir_acc < 50.0) else "healthy"
+
+        if model_status == "degraded":
+            conn_update = self.db._connect()
+            with conn_update as conn:
+                conn.execute(
+                    """
+                    UPDATE forecast_runs
+                    SET live_status = 'degraded'
+                    WHERE stock_symbol = ?
+                      AND id = (
+                          SELECT id FROM forecast_runs
+                          WHERE stock_symbol = ?
+                          ORDER BY run_at DESC, id DESC
+                          LIMIT 1
+                      )
+                    """,
+                    (stock_symbol, stock_symbol),
+                )
+
+        return {
+            "rolling_dir_acc": rolling_dir_acc,
+            "rolling_mae": rolling_mae,
+            "resolved_count": len(rows),
+            "model_status": model_status,
+        }

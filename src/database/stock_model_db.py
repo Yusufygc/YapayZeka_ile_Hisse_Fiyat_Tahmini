@@ -504,6 +504,14 @@ class StockModelDB:
         self._ensure_repositories()
         return self.forecast_resolution_repository.resolve_forecasts_from_csv(stock_symbol, csv_path)
 
+    def get_rolling_resolution_accuracy(
+        self, stock_symbol: str, days: int = 60
+    ) -> Dict[str, Any]:
+        self._ensure_repositories()
+        return self.forecast_resolution_repository.get_rolling_resolution_accuracy(
+            stock_symbol, days=days
+        )
+
     def _refresh_forecast_accuracy(self, conn: sqlite3.Connection, run_id: int) -> None:
         self._ensure_repositories()
         return self.forecast_resolution_repository.refresh_forecast_accuracy(conn, run_id)

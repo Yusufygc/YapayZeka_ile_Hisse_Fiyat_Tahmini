@@ -101,6 +101,14 @@ class AnalysisService:
         # ── 4. Performance block ─────────────────────────────────────────
         perf = _build_performance_block(best)
 
+        # ── 4b. Rolling resolution accuracy (Adim 2.5) ──────────────────
+        rolling_acc = {}
+        try:
+            rolling_acc = db.get_rolling_resolution_accuracy(symbol, days=60)
+        except Exception:
+            pass
+        live_model_status = rolling_acc.get("model_status", "healthy")
+
         # ── 5. Güven etiketi ────────────────────────────────────────────
         conf_result = compute_confidence(
             eligibility_status=str(best.get("eligibility_status", "eligible")),
@@ -109,6 +117,7 @@ class AnalysisService:
             rmse_vs_benchmark=None,
             signal_diagnosis=best.get("signal_diagnosis"),
             stability_score=best.get("stability_score"),
+            model_status=live_model_status,
         )
         conf_block = ConfidenceBlock(
             label=conf_result.label,
