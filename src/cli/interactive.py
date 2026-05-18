@@ -32,6 +32,7 @@ AVAILABLE_MODELS = [
     "Random Forest",
     "LightGBM Return",
     "LSTM",
+    "LSTM Lite",
     "Ridge Return",
     "ElasticNet Return",
     "DLinear",
@@ -41,7 +42,7 @@ AVAILABLE_MODELS = [
 PRESETS = {
     "1": ("Tüm Modeller",            AVAILABLE_MODELS),
     "2": ("Agac Tabanli",            ["XGBoost", "Random Forest", "LightGBM Return"]),
-    "3": ("Yalnızca Derin Öğrenme",  ["LSTM"]),
+    "3": ("Yalnızca Derin Öğrenme",  ["LSTM", "LSTM Lite"]),
     "4": ("Hızlı (XGBoost + LSTM)",  ["XGBoost", "LSTM"]),
     "5": ("Yalnızca Prophet",        ["Prophet"]),
     "6": ("Modern Baseline",         ["Ridge Return", "ElasticNet Return", "LightGBM Return", "DLinear", "NLinear"]),
@@ -189,6 +190,7 @@ def confirm(cfg: PipelineConfig) -> bool:
     print(
         "  Model Config : "
         f"min_seq={cfg.models.model_settings['deep_learning']['min_sequence_samples']}, "
+        f"lstm_lite_min_seq={cfg.models.model_settings['deep_learning'].get('lstm_lite_min_sequence_samples')}, "
         f"val_ratio={cfg.models.model_settings['deep_learning']['validation_ratio']}, "
         f"arima_auto={cfg.models.model_settings['arima']['auto_order']}"
     )
