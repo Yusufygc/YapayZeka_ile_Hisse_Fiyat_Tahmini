@@ -38,6 +38,9 @@ CLAUDE.md
 AGENTS.md
 RULES.md
 
+# Claude tarafından üretilen lokal analiz/iyileştirme notları (repo'ya dahil değil)
+ClaudeGelistirme/
+
 # Python
 __pycache__/
 *.py[cod]
