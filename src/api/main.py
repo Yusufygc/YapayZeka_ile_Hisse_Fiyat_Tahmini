@@ -47,6 +47,7 @@ except ImportError as exc:
     ) from exc
 
 from src.database.stock_model_db import StockModelDB
+from src.api.routers.analysis import router as analysis_router
 
 # ─────────────────────────────────────────────────────────────────────────────
 # App ve DB başlatma
@@ -72,6 +73,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(analysis_router)
 
 _DB_PATH = os.path.join(_PROJECT_ROOT, "data", "stock_models.db")
 
