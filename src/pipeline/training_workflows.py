@@ -36,6 +36,8 @@ class FinalHoldoutTrainingWorkflow(_OwnerBackedService):
                 raise ValueError(f"{model_name} final holdout egitimi icin sequence sayisi yetersiz.")
             if model_name == "LSTM":
                 model = self._make_lstm("final")
+            elif model_name == "LSTM Lite":
+                model = self._make_lstm_lite("final")
             else:
                 model = cls()
             model.train(tensors["X_train_seq"], tensors["y_train_seq"])
@@ -135,6 +137,7 @@ class SingleSplitTrainingWorkflow(_OwnerBackedService):
     def _train_deep_models(self, tensors: dict) -> None:
         specs = (
             ("LSTM", lambda: self._make_lstm("single")),
+            ("LSTM Lite", lambda: self._make_lstm_lite("single")),
         )
         for model_name, factory in specs:
             if self._skip(model_name):
@@ -242,6 +245,7 @@ class WalkForwardTrainingWorkflow(_OwnerBackedService):
     def _run_deep_validators(self, wf_splits, data_manager, preprocessor, validators) -> None:
         specs = (
             ("LSTM", lambda: self._make_lstm("wf")),
+            ("LSTM Lite", lambda: self._make_lstm_lite("wf")),
         )
         for model_name, factory in specs:
             if self._skip(model_name):
