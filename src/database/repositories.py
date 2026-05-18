@@ -61,6 +61,8 @@ class SchemaRepository:
         self.ensure_column(conn, "best_models", "dataset_hash", "TEXT")
         self.ensure_column(conn, "best_models", "run_id", "TEXT")
         self.ensure_column(conn, "best_models", "selection_source", "TEXT")
+        self.ensure_column(conn, "best_models", "eligibility_status", "TEXT NOT NULL DEFAULT 'eligible'")
+        self.ensure_column(conn, "best_models", "eligibility_reason", "TEXT NOT NULL DEFAULT ''")
 
     def migrate_legacy_production_candidates(self, conn: sqlite3.Connection) -> None:
         placeholders = ",".join("?" for _ in schema.BENCHMARK_MODELS)
@@ -288,6 +290,15 @@ class BestModelRepository:
     ) -> None:
         if validation_mode != "final_holdout" or not is_production_candidate:
             return
+        from src.pipeline.selection_guard import evaluate_best_model_eligibility
+
+        eligibility_row = {
+            "model_name": model_name,
+            "is_production_candidate": int(is_production_candidate),
+            "Trade_Count": metrics.get("Trade_Count", 0),
+        }
+        eligibility_status, eligibility_reason = evaluate_best_model_eligibility(eligibility_row)
+
         with self.db._connect() as conn:
             existing = conn.execute(
                 "SELECT model_name, experiment_id FROM best_models WHERE stock_symbol = ?",
@@ -309,6 +320,8 @@ class BestModelRepository:
                 dataset_hash=dataset_hash,
                 run_id=run_id,
                 selection_source=selection_source,
+                eligibility_status=eligibility_status,
+                eligibility_reason=eligibility_reason,
             )
             self._print_best_update(stock_symbol, model_name, experiment_id, existing)
 
@@ -367,6 +380,8 @@ class BestModelRepository:
         dataset_hash: Optional[str],
         run_id: Optional[str],
         selection_source: Optional[str],
+        eligibility_status: str = "eligible",
+        eligibility_reason: str = "",
     ) -> None:
         conn.execute(
             """
@@ -375,27 +390,30 @@ class BestModelRepository:
                  target_mode, feature_mode, scaling_mode, validation_mode,
                  dataset_hash, run_id, selection_source,
                  mae, rmse, mape, dir_acc, sharpe, hit_rate,
-                 model_path, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 model_path, updated_at,
+                 eligibility_status, eligibility_reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(stock_symbol) DO UPDATE SET
-                model_name       = excluded.model_name,
-                experiment_id    = excluded.experiment_id,
-                composite_score  = excluded.composite_score,
-                target_mode      = excluded.target_mode,
-                feature_mode     = excluded.feature_mode,
-                scaling_mode     = excluded.scaling_mode,
-                validation_mode  = excluded.validation_mode,
-                dataset_hash     = excluded.dataset_hash,
-                run_id           = excluded.run_id,
-                selection_source = excluded.selection_source,
-                mae              = excluded.mae,
-                rmse             = excluded.rmse,
-                mape             = excluded.mape,
-                dir_acc          = excluded.dir_acc,
-                sharpe           = excluded.sharpe,
-                hit_rate         = excluded.hit_rate,
-                model_path       = excluded.model_path,
-                updated_at       = excluded.updated_at
+                model_name          = excluded.model_name,
+                experiment_id       = excluded.experiment_id,
+                composite_score     = excluded.composite_score,
+                target_mode         = excluded.target_mode,
+                feature_mode        = excluded.feature_mode,
+                scaling_mode        = excluded.scaling_mode,
+                validation_mode     = excluded.validation_mode,
+                dataset_hash        = excluded.dataset_hash,
+                run_id              = excluded.run_id,
+                selection_source    = excluded.selection_source,
+                mae                 = excluded.mae,
+                rmse                = excluded.rmse,
+                mape                = excluded.mape,
+                dir_acc             = excluded.dir_acc,
+                sharpe              = excluded.sharpe,
+                hit_rate            = excluded.hit_rate,
+                model_path          = excluded.model_path,
+                updated_at          = excluded.updated_at,
+                eligibility_status  = excluded.eligibility_status,
+                eligibility_reason  = excluded.eligibility_reason
             """,
             (
                 stock_symbol, model_name, experiment_id, composite_score,
@@ -404,6 +422,7 @@ class BestModelRepository:
                 metrics.get("MAE"), metrics.get("RMSE"), metrics.get("MAPE"),
                 metrics.get("Dir_Acc"), metrics.get("Sharpe"), metrics.get("Hit_Rate"),
                 model_path, updated_at,
+                eligibility_status, eligibility_reason,
             ),
         )
 
