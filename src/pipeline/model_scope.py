@@ -33,6 +33,7 @@ _CANONICAL_ORDER: tuple[str, ...] = (
     "XGBoost",
     "Random Forest",
     "LSTM",
+    "LSTM Lite",
 )
 
 
