@@ -11,6 +11,7 @@ _EXPORTS = {
     "ProphetModel": ("prophet_model", "ProphetModel"),
     "XGBoostModel": ("xgboost_model", "XGBoostModel"),
     "AttentionLSTMModel": ("lstm_model", "AttentionLSTMModel"),
+    "LSTMLiteModel": ("lstm_lite_model", "LSTMLiteModel"),
     "RandomForestModel": ("random_forest_model", "RandomForestModel"),
     "NaiveLastValueModel": ("naive_model", "NaiveLastValueModel"),
     "NaiveZeroReturnModel": ("naive_model", "NaiveZeroReturnModel"),
