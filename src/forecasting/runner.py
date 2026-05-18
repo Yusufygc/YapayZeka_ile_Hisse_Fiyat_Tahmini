@@ -212,6 +212,23 @@ class ForecastRunner:
                 validation_ratio=float(cfg.get("validation_ratio", 0.1)),
                 min_val_samples=int(cfg.get("min_validation_samples", 32)),
             )
+        if model_name == "LSTM Lite":
+            from src.models.lstm_lite_model import LSTMLiteModel
+            cfg = self._deep_stage_config("lstm_lite", stage)
+            return LSTMLiteModel(
+                units=int(cfg.get("units", 32)),
+                dense_units=int(cfg.get("dense_units", 16)),
+                epochs=int(cfg.get("epochs", 80)),
+                patience=int(cfg.get("patience", 12)),
+                dropout_rate=float(cfg.get("dropout", 0.25)),
+                batch_size=int(cfg.get("batch_size", 32)),
+                learning_rate=float(cfg.get("learning_rate", 0.0003)),
+                lr_patience=int(cfg.get("lr_patience", 4)),
+                validation_ratio=float(cfg.get("validation_ratio", 0.1)),
+                min_val_samples=int(cfg.get("min_validation_samples", 32)),
+                tune_on_fit=bool(cfg.get("tune_on_fit", False)),
+                tune_n_trials=int(cfg.get("tune_n_trials", 12)),
+            )
         raise KeyError(f"Bilinmeyen model adi: {model_name}")
 
     def _deep_stage_config(self, section: str, stage: str) -> dict[str, Any]:
