@@ -35,6 +35,23 @@ def test_selected_lstm_scope_keeps_only_lstm_as_candidate_and_naive_as_benchmark
     ) == {"LSTM", "Naive Last Value", "Naive Zero Return"}
 
 
+def test_selected_lstm_lite_scope_keeps_only_lstm_lite_as_candidate():
+    tmp = _workspace_tmp("trainer_lstm_lite_scope")
+    trainer = ModelTrainer(
+        stock_symbol="TEST",
+        tracker=ExperimentTracker(tmp),
+        feature_names=["f1"],
+        selected_models=["LSTM Lite"],
+        dataset_metadata={"target_mode": "log_return"},
+    )
+
+    assert trainer.candidate_models == {"LSTM Lite"}
+    assert reportable_model_names(
+        ["LSTM", "LSTM Lite", "Naive Last Value", "Naive Zero Return"],
+        trainer.candidate_models,
+    ) == {"LSTM Lite", "Naive Last Value", "Naive Zero Return"}
+
+
 def test_select_best_model_ignores_benchmarks_and_non_candidates():
     metrics = {
         "Naive Last Value": {
