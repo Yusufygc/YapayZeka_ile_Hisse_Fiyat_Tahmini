@@ -181,15 +181,15 @@ class Phase5DataQualityTests(unittest.TestCase):
             "feature_pruning_report": {},
         }
 
-        with patch("src.pipeline.data_manager.DataUpdater.check_and_update") as updater, \
-             patch("src.pipeline.data_manager.load_data", return_value=frame), \
+        with patch("src.pipeline.data_services.DataUpdater.check_and_update") as updater, \
+             patch("src.pipeline.data_services.load_data", return_value=frame), \
              patch.object(DataManager, "_apply_training_window", side_effect=lambda df: df), \
              patch.object(DataManager, "_check_survivorship_bias", return_value={}), \
-             patch("src.pipeline.data_manager.FeatureCache") as cache_cls:
+             patch("src.pipeline.data_services.FeatureCache") as cache_cls:
             cache_cls.return_value.make_key.return_value = "k"
             cache_cls.return_value.get.return_value = (frame, cache_meta)
             dm = DataManager(
-                data_cfg=DataConfig(data_file="data/DUMMY.csv", use_macro=False),
+                data_cfg=DataConfig(data_file="data/DUMMY.csv", use_macro=False, universe_auto_sync=False),
                 val_cfg=ValidationConfig(),
                 models_dir="outputs/_test_phase5_data_quality",
             )
@@ -213,11 +213,11 @@ class Phase5DataQualityTests(unittest.TestCase):
             "feature_pruning_report": {},
         }
 
-        with patch("src.pipeline.data_manager.DataUpdater.check_and_update") as updater, \
-             patch("src.pipeline.data_manager.load_data", return_value=frame), \
+        with patch("src.pipeline.data_services.DataUpdater.check_and_update") as updater, \
+             patch("src.pipeline.data_services.load_data", return_value=frame), \
              patch.object(DataManager, "_apply_training_window", side_effect=lambda df: df), \
              patch.object(DataManager, "_check_survivorship_bias", return_value={}), \
-             patch("src.pipeline.data_manager.FeatureCache") as cache_cls:
+             patch("src.pipeline.data_services.FeatureCache") as cache_cls:
             cache_cls.return_value.make_key.return_value = "k"
             cache_cls.return_value.get.return_value = (frame, cache_meta)
             dm = DataManager(
@@ -226,6 +226,7 @@ class Phase5DataQualityTests(unittest.TestCase):
                     use_macro=False,
                     auto_update_data=True,
                     auto_update_interactive=False,
+                    universe_auto_sync=False,
                 ),
                 val_cfg=ValidationConfig(),
                 models_dir="outputs/_test_phase5_data_quality",
@@ -269,6 +270,7 @@ class Phase5DataQualityTests(unittest.TestCase):
             models_dir="outputs/_test_phase5_data_quality",
             use_macro=False,
             universe_file="outputs/_test_phase5_data_quality/missing_universe.csv",
+            universe_auto_sync=False,
         )
         dm.df = pd.DataFrame({"Date": pd.date_range("2024-01-01", periods=5)})
         missing_report = dm._check_survivorship_bias()
