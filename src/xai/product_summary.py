@@ -5,6 +5,7 @@ from __future__ import annotations
 import glob
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -58,6 +59,8 @@ def build_xai_product_summary(
     symbol: str,
     model_name: str,
     outputs_base: Optional[str] = None,
+    run_id: Optional[str] = None,
+    model_path: Optional[str] = None,
     top_k: int = 5,
 ) -> XaiProductSummary:
     symbol = symbol.upper()
@@ -65,26 +68,110 @@ def build_xai_product_summary(
         here = os.path.dirname(os.path.abspath(__file__))
         outputs_base = os.path.join(here, "..", "..", "outputs")
 
-    latest_dir = os.path.join(outputs_base, symbol, "latest", "xai")
-    if not os.path.isdir(latest_dir):
+    xai_dirs = _candidate_xai_dirs(
+        outputs_base=outputs_base,
+        symbol=symbol,
+        run_id=run_id,
+        model_path=model_path,
+    )
+    existing_dirs = [xai_dir for xai_dir in xai_dirs if os.path.isdir(xai_dir)]
+    if not existing_dirs:
         return _unavailable("xai dizini bulunamadi")
 
-    standard_table = _find_standard_xai_table(latest_dir)
-    if standard_table is not None:
-        return _summary_from_standard_table(
-            table_path=standard_table,
-            model_name=model_name,
-            top_k=top_k,
-        )
+    last_unavailable: Optional[XaiProductSummary] = None
+    for xai_dir in existing_dirs:
+        standard_table = _find_standard_xai_table(xai_dir)
+        if standard_table is not None:
+            summary = _summary_from_standard_table(
+                table_path=standard_table,
+                model_name=model_name,
+                top_k=top_k,
+            )
+            if summary.available:
+                return summary
+            last_unavailable = summary
 
-    legacy_table = _find_legacy_importance_table(latest_dir, model_name)
-    if legacy_table is None:
-        return _unavailable("xai tablosu bulunamadi")
-    return _summary_from_legacy_importance(
-        table_path=legacy_table,
-        model_name=model_name,
-        top_k=top_k,
+        legacy_table = _find_legacy_importance_table(xai_dir, model_name)
+        if legacy_table is not None:
+            summary = _summary_from_legacy_importance(
+                table_path=legacy_table,
+                model_name=model_name,
+                top_k=top_k,
+            )
+            if summary.available:
+                return summary
+            last_unavailable = summary
+
+    return last_unavailable or _unavailable("xai tablosu bulunamadi")
+
+
+def _candidate_xai_dirs(
+    *,
+    outputs_base: str,
+    symbol: str,
+    run_id: Optional[str] = None,
+    model_path: Optional[str] = None,
+) -> List[str]:
+    candidates: List[str] = []
+    if run_id:
+        candidates.append(os.path.join(outputs_base, symbol, "runs", str(run_id), "xai"))
+    model_xai_dir = _xai_dir_from_model_path(model_path)
+    if model_xai_dir:
+        candidates.append(model_xai_dir)
+    candidates.append(os.path.join(outputs_base, symbol, "latest", "xai"))
+
+    seen: set[str] = set()
+    unique: List[str] = []
+    for candidate in candidates:
+        normalized = os.path.abspath(candidate)
+        if normalized not in seen:
+            seen.add(normalized)
+            unique.append(candidate)
+    return unique
+
+
+def _xai_dir_from_model_path(model_path: Optional[str]) -> Optional[str]:
+    if not model_path:
+        return None
+    try:
+        path = Path(model_path).expanduser()
+        start = path if path.is_dir() else path.parent
+        for candidate in (start, *start.parents):
+            if candidate.parent.name == "runs":
+                return str(candidate / "xai")
+    except Exception:
+        return None
+    return None
+
+
+def _read_csv_table(table_path: str) -> pd.DataFrame:
+    attempts = (
+        {"sep": None, "engine": "python"},
+        {"sep": ";"},
+        {},
     )
+    last_error: Optional[Exception] = None
+    for kwargs in attempts:
+        try:
+            df = pd.read_csv(table_path, **kwargs)
+            if _looks_like_misparsed_semicolon_csv(df):
+                continue
+            return _normalize_columns(df)
+        except Exception as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    return pd.read_csv(table_path)
+
+
+def _looks_like_misparsed_semicolon_csv(df: pd.DataFrame) -> bool:
+    return len(df.columns) == 1 and ";" in str(df.columns[0])
+
+
+def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = [str(column).lstrip("\ufeff").strip() for column in df.columns]
+    return df
 
 
 def _find_standard_xai_table(latest_dir: str) -> Optional[str]:
@@ -114,9 +201,9 @@ def _find_legacy_importance_table(latest_dir: str, model_name: str) -> Optional[
 
 def _summary_from_standard_table(*, table_path: str, model_name: str, top_k: int) -> XaiProductSummary:
     try:
-        df = pd.read_csv(table_path)
-    except Exception:
-        return _unavailable("xai top reasons tablosu okunamadi")
+        df = _read_csv_table(table_path)
+    except Exception as exc:
+        return _unavailable(f"xai top reasons tablosu okunamadi: {type(exc).__name__}")
 
     required = {"Model", "Feature", "Readable_Feature", "Importance"}
     if df.empty or not required.issubset(df.columns):
@@ -144,9 +231,9 @@ def _summary_from_standard_table(*, table_path: str, model_name: str, top_k: int
 
 def _summary_from_legacy_importance(*, table_path: str, model_name: str, top_k: int) -> XaiProductSummary:
     try:
-        df = pd.read_csv(table_path)
-    except Exception:
-        return _unavailable("ozellik onem dosyasi okunamadi")
+        df = _read_csv_table(table_path)
+    except Exception as exc:
+        return _unavailable(f"ozellik onem dosyasi okunamadi: {type(exc).__name__}")
 
     importance_col = next((c for c in df.columns if "importance" in c.lower() or "mean" in c.lower()), None)
     feature_col = next((c for c in df.columns if "feature" in c.lower()), None)
