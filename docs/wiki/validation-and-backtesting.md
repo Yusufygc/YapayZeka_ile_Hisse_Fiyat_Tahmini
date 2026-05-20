@@ -2,7 +2,7 @@
 title: Validation and Backtesting
 type: concept
 status: active
-last_updated: 2026-05-16
+last_updated: 2026-05-20
 owner: llm
 source_count: 6
 ---
@@ -152,6 +152,14 @@ The engine records:
 - Drawdowns
 - Trade logs
 - Blocked/no-trade signal states
+
+Backtest summaries now feed the persistent registry before experiment logging.
+The workflow merges only the durable signal/trade fields into model metrics:
+`Net_Return`, `BuyHold_Return`, `Max_Drawdown`, `Trade_Count`, and
+`Signal_Diagnosis`. It deliberately does not overwrite prediction-side RMSE,
+directional accuracy, or model-selection Sharpe with the trading report values.
+This keeps final holdout untouched for tuning while still making eligibility
+and confidence decisions reflect the actual simulated trade count.
 
 With default simple-mode costs, `Transaction_Cost`, `Commission_Cost`, and
 `Slippage_Cost` remain zero. Non-zero cost accounting is still available by
