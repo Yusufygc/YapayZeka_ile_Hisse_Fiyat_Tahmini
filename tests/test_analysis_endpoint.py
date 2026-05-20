@@ -146,6 +146,53 @@ class TestAnalysisService:
         # Fresh veri, XAI yok → xai_unavailable ya da low_confidence (dir_acc güven mekanizmasına bağlı)
         assert result.analysis_status in ("xai_unavailable", "low_confidence", "ok")
 
+    def test_analysis_uses_best_model_run_id_for_xai_lookup(self):
+        from src.database.stock_model_db import StockModelDB
+
+        tmp = tempfile.mktemp(suffix=".db")
+        outputs = Path(tempfile.mkdtemp())
+        db = StockModelDB(tmp)
+        exp_id = db.log_experiment(
+            stock_symbol="ASELS",
+            model_name="LSTM",
+            metrics={"MAE": 1.0, "RMSE": 2.0, "Dir_Acc": 62.0, "Sharpe": 0.8, "Trade_Count": 10},
+            validation_mode="final_holdout",
+            is_production_candidate=True,
+            run_id="lstm-run",
+        )
+        db.log_forecast_run(
+            stock_symbol="ASELS",
+            model_name="LSTM",
+            source_experiment_id=exp_id,
+            last_observed_date="2026-05-19",
+            last_close=100.0,
+            horizon_days=5,
+            trend_label="flat",
+            weekly_expected_return=0.0,
+            trend_threshold=0.01,
+            rules_version="v1",
+            points=[{"target_date": "2026-05-20", "horizon_index": 1, "bounded_predicted_close": 100.0}],
+        )
+        latest_csv = outputs / "ASELS" / "latest" / "xai" / "csv"
+        run_csv = outputs / "ASELS" / "runs" / "lstm-run" / "xai" / "csv"
+        latest_csv.mkdir(parents=True)
+        run_csv.mkdir(parents=True)
+        latest_csv.joinpath("xai_top_reasons_wf.csv").write_text(
+            "Model;Feature;Readable_Feature;Feature_Group;Importance\n"
+            "NLinear;WrongFeature;Wrong feature;technical;0.4\n",
+            encoding="utf-8",
+        )
+        run_csv.joinpath("xai_top_reasons_wf.csv").write_text(
+            "Model;Feature;Readable_Feature;Feature_Group;Importance\n"
+            "LSTM;BestRunFeature;Best run feature;technical;0.5\n",
+            encoding="utf-8",
+        )
+
+        result = AnalysisService(db_path=tmp, outputs_base=str(outputs)).build("ASELS")
+
+        assert result.xai.available is True
+        assert result.xai.top_positive_reasons[0].feature_name == "BestRunFeature"
+
     def test_ensemble_forecast_source_metadata_surfaces(self):
         from src.database.stock_model_db import StockModelDB
 
