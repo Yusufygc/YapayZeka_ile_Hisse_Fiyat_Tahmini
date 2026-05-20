@@ -49,7 +49,7 @@ python -m pytest tests/test_forecasting.py -v
 | `test_forecast_workflows.py` | ForecastRunner workflow composition and forecast helper characterization |
 | `test_xai_strategies.py` | SHAP/LIME strategy behavior and fallback coverage |
 | `test_analysis_endpoint.py` | Analysis API status, refresh-job, forecast-source, and CORS contract coverage |
-| `test_operational_hardening.py` | Data updater failures, analysis refresh failures, and DB backup-reset |
+| `test_operational_hardening.py` | Data updater failures, analysis refresh failures, DB backup-reset, and backtest metric backfill |
 
 ## Static Tooling
 
@@ -140,12 +140,14 @@ The 2026-05-20 serving changes add targeted regression coverage for refresh job
 deduplication, matching forecasts to the current best experiment, stale/missing
 forecast refresh reloads, failed refresh reason propagation, local-only CORS
 defaults, recursive forecast state updates, artifact-sidecar requirements,
-production ensemble eligibility, and `AttentionLSTM v2` attention weights.
+production ensemble eligibility, `AttentionLSTM v2` attention weights, run-aware
+XAI lookup, semicolon/BOM CSV parsing, and backtest metric backfill.
 
 Focused command:
 
 ```powershell
 & 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_analysis_endpoint.py tests\test_forecasting.py tests\test_forecast_workflows.py tests\test_model_scope_production.py tests\test_operational_hardening.py -q
+& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_xai_product_summary.py tests\test_stock_model_db_repositories.py tests\test_operational_hardening.py tests\test_analysis_endpoint.py -q
 ```
 
 ## Graphify Knowledge Graph
