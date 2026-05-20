@@ -80,7 +80,19 @@ For Faz 2+, if user-specific scenario parameters are required a
   "xai": {
     "available": true,
     "method": "SHAP TreeExplainer",
-    "top_positive_reasons": [],
+    "top_positive_reasons": [
+      {
+        "feature_name": "RSI_14",
+        "human_label": "RSI 14: hissenin aşırı alım veya aşırı satım bölgesine yaklaşması",
+        "importance": 0.42,
+        "direction": "positive",
+        "feature_group": "technical",
+        "reason": "RSI 14 momentum tarafındaki kısa vadeli güçlenmeyi gösterdi.",
+        "method": "sequence",
+        "contribution": 0.08,
+        "approximate": true
+      }
+    ],
     "top_negative_reasons": [],
     "model_family_caveat": "Tree modeller için SHAP TreeExplainer güvenilirdir.",
     "caveat": "XAI, modelin tahmininde öne çıkan değişkenleri gösterir; nedensellik kanıtı değildir."
@@ -107,8 +119,10 @@ For Faz 2+, if user-specific scenario parameters are required a
 ```
 
 `forecast.ensemble_agreement`, `forecast.trend_context`, and
-`xai.model_family_caveat` are added in Faz 2. They may be `null` in Faz 1
-responses.
+`xai.model_family_caveat` are added in Faz 2. XAI factor fields
+`feature_group`, `reason`, `method`, `contribution`, and `approximate` are
+optional detail fields; older consumers can keep using `feature_name`,
+`human_label`, `importance`, and `direction`.
 
 `refresh_status`, `refresh_reason`, `refresh_job_id`, and `forecast_source` were
 added in the 2026-05-20 serving hardening phase. `forecast_source.type` is
