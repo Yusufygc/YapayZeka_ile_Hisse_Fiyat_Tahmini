@@ -482,6 +482,11 @@ def _build_xai_block(summary) -> XaiBlock:
                 human_label=f.human_label,
                 importance=f.importance,
                 direction=f.direction,
+                feature_group=f.feature_group,
+                reason=f.reason,
+                method=f.method,
+                contribution=f.contribution,
+                approximate=f.approximate,
             )
             for f in summary.top_positive_reasons
         ],
@@ -491,6 +496,11 @@ def _build_xai_block(summary) -> XaiBlock:
                 human_label=f.human_label,
                 importance=f.importance,
                 direction=f.direction,
+                feature_group=f.feature_group,
+                reason=f.reason,
+                method=f.method,
+                contribution=f.contribution,
+                approximate=f.approximate,
             )
             for f in summary.top_negative_reasons
         ],
