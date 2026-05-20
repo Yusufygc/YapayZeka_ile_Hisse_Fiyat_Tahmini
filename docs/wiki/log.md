@@ -1,4 +1,14 @@
-﻿## [2026-05-20] Bugfix | Best-model seçiminde son kayıt ezmesini engelle
+﻿## [2026-05-20] Bugfix | XAI okuma ve trade metriklerinin kalıcılaştırılması
+
+- XAI ürün özeti artık semicolon/BOM CSV dosyalarını okuyabiliyor ve en iyi
+  modelin `run_id` dizinini `latest/` öncesinde kullanıyor.
+- Backtest `Trade_Count`, `Signal_Diagnosis`, `Net_Return`, `BuyHold_Return`
+  ve `Max_Drawdown` alanları SQLite `experiments`/`best_models` kayıtlarına
+  kalıcı metrik olarak taşındı.
+- Mevcut run çıktıları için `db_maintenance backfill-run-metrics` bakım komutu
+  eklendi; ASELS üzerinde 20 rapordan 50 experiment satırı güncellendi.
+
+## [2026-05-20] Bugfix | Best-model seçiminde son kayıt ezmesini engelle
 
 - ASELS testinde `NLinear` son yazılan final-holdout adayı olduğu için daha
   yüksek skorlu `LSTM` kaydını `best_models` içinde ezdiği görüldü.
