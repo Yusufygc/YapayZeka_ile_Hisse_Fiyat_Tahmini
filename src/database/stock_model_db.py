@@ -160,6 +160,34 @@ CREATE INDEX IF NOT EXISTS idx_forecast_points_target_date
     ON forecast_points (target_date);
 """
 
+_CREATE_ANALYSIS_REFRESH_JOBS = """
+CREATE TABLE IF NOT EXISTS analysis_refresh_jobs (
+    job_id       TEXT PRIMARY KEY,
+    symbol       TEXT NOT NULL,
+    job_type     TEXT NOT NULL,
+    status       TEXT NOT NULL,
+    reason       TEXT NOT NULL,
+    started_at   TEXT,
+    finished_at  TEXT,
+    error        TEXT,
+    payload_json TEXT
+);
+"""
+
+_CREATE_IDX_REFRESH_JOBS_SYMBOL = """
+CREATE INDEX IF NOT EXISTS idx_analysis_refresh_jobs_symbol
+    ON analysis_refresh_jobs (symbol, status, started_at DESC);
+"""
+
+REQUIRED_SCHEMA_TABLES = (
+    "experiments",
+    "best_models",
+    "forecast_runs",
+    "forecast_points",
+    "forecast_accuracy_summary",
+    "analysis_refresh_jobs",
+)
+
 
 def compute_composite_score(metrics: Dict[str, float]) -> float:
     """
@@ -322,6 +350,7 @@ class StockModelDB:
         is_production_candidate: bool,
         selection_source: Optional[str],
         run_id: Optional[str],
+        ensemble_metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._ensure_repositories()
         return self.best_model_repository.update_production_best_model(
@@ -340,6 +369,7 @@ class StockModelDB:
             is_production_candidate=is_production_candidate,
             selection_source=selection_source,
             run_id=run_id,
+            ensemble_metadata=ensemble_metadata,
         )
 
     @staticmethod
@@ -469,6 +499,10 @@ class StockModelDB:
         status: str = "pending",
         run_at: Optional[str] = None,
         ensemble_direction_agreement: Optional[float] = None,
+        forecast_strategy: Optional[str] = None,
+        artifact_mode: Optional[str] = None,
+        forecast_warnings: Optional[List[str]] = None,
+        ensemble_metadata: Optional[Dict[str, Any]] = None,
     ) -> int:
         self._ensure_repositories()
         return self.forecast_repository.log_forecast_run(
@@ -486,6 +520,10 @@ class StockModelDB:
             status=status,
             run_at=run_at,
             ensemble_direction_agreement=ensemble_direction_agreement,
+            forecast_strategy=forecast_strategy,
+            artifact_mode=artifact_mode,
+            forecast_warnings=forecast_warnings,
+            ensemble_metadata=ensemble_metadata,
         )
 
     def get_latest_forecast(self, stock_symbol: str) -> Optional[Dict[str, Any]]:
@@ -511,6 +549,125 @@ class StockModelDB:
         return self.forecast_resolution_repository.get_rolling_resolution_accuracy(
             stock_symbol, days=days
         )
+
+    def create_or_get_refresh_job(
+        self,
+        *,
+        symbol: str,
+        reason: str,
+        job_type: str = "analysis_refresh",
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        import json as _json
+        import uuid as _uuid
+        from datetime import datetime as _datetime
+
+        symbol = symbol.upper()
+        payload_json = _json.dumps(payload or {}, ensure_ascii=False, sort_keys=True)
+        now = _datetime.now().isoformat(timespec="seconds")
+        with self._connect() as conn:
+            existing = conn.execute(
+                """
+                SELECT *
+                FROM analysis_refresh_jobs
+                WHERE symbol = ?
+                  AND reason = ?
+                  AND status IN ('queued', 'running')
+                ORDER BY started_at DESC
+                LIMIT 1
+                """,
+                (symbol, reason),
+            ).fetchone()
+            if existing is not None:
+                return dict(existing)
+
+            job_id = _uuid.uuid4().hex[:12]
+            conn.execute(
+                """
+                INSERT INTO analysis_refresh_jobs
+                    (job_id, symbol, job_type, status, reason, started_at, payload_json)
+                VALUES (?, ?, ?, 'queued', ?, ?, ?)
+                """,
+                (job_id, symbol, job_type, reason, now, payload_json),
+            )
+            return dict(conn.execute(
+                "SELECT * FROM analysis_refresh_jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone())
+
+    def update_refresh_job(
+        self,
+        job_id: str,
+        *,
+        status: str,
+        error: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None,
+        finish: bool = False,
+    ) -> None:
+        import json as _json
+        from datetime import datetime as _datetime
+
+        finished_at = _datetime.now().isoformat(timespec="seconds") if finish else None
+        payload_json = None if payload is None else _json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE analysis_refresh_jobs
+                SET status = ?,
+                    error = COALESCE(?, error),
+                    payload_json = COALESCE(?, payload_json),
+                    finished_at = COALESCE(?, finished_at)
+                WHERE job_id = ?
+                """,
+                (status, error, payload_json, finished_at, job_id),
+            )
+
+    def get_refresh_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM analysis_refresh_jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_latest_refresh_job(self) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM analysis_refresh_jobs
+                ORDER BY started_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_table_counts(self, tables: Optional[List[str]] = None) -> Dict[str, Optional[int]]:
+        tables = list(tables or REQUIRED_SCHEMA_TABLES)
+        counts: Dict[str, Optional[int]] = {}
+        with self._connect() as conn:
+            for table in tables:
+                try:
+                    counts[table] = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                except sqlite3.Error:
+                    counts[table] = None
+        return counts
+
+    def get_schema_status(self) -> Dict[str, Any]:
+        with self._connect() as conn:
+            existing = {
+                row["name"]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+        missing = [table for table in REQUIRED_SCHEMA_TABLES if table not in existing]
+        return {
+            "ok": not missing,
+            "required_tables": list(REQUIRED_SCHEMA_TABLES),
+            "missing_tables": missing,
+            "table_counts": self.get_table_counts(REQUIRED_SCHEMA_TABLES),
+        }
 
     def _refresh_forecast_accuracy(self, conn: sqlite3.Connection, run_id: int) -> None:
         self._ensure_repositories()

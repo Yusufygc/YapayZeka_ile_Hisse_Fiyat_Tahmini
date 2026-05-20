@@ -89,6 +89,23 @@ class ModelConfig:
                 "tune_on_fit": False,
                 "tune_n_trials": 12,
             },
+            "attention_lstm_v2_min_sequence_samples": 252,
+            "attention_lstm_v2": {
+                "units_1": 64,
+                "units_2": 32,
+                "dense_units": 32,
+                "dropout": 0.30,
+                "learning_rate": 0.0005,
+                "loss": "huber",
+                "epochs_single": 80,
+                "epochs_wf": 50,
+                "epochs_final": 50,
+                "patience": 12,
+                "lr_patience": 4,
+                "batch_size": 32,
+                "tune_on_fit": False,
+                "tune_n_trials": 12,
+            },
         },
         "experimental_sequence_baselines": {},
         "gradient_boosting": {"lightgbm_optional": True},
@@ -127,8 +144,9 @@ class ExecutionConfig:
     report_detail_level: str = "summary"  # "summary" veya "research"
     write_text_reports: bool = False
     write_markdown_reports: bool = True
-    write_xai_tables: bool = False
+    write_xai_tables: bool = True
     write_trade_logs: bool = False
+    auto_generate_forecast_after_training: bool = True
 
 @dataclass
 class PipelineConfig:

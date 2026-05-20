@@ -1,17 +1,9 @@
 # -*- coding: utf-8 -*-
-"""GET /analysis/{symbol} servis katmanı.
-
-AnalysisService.build(symbol) çağrısı:
-  1. StockModelDB'den en iyi modeli okur.
-  2. En son forecast'ı okur.
-  3. Veri tazeliğini kontrol eder.
-  4. Güven etiketi hesaplar.
-  5. XAI ürün özetini oluşturur.
-  6. AnalysisResponse payload'unu birleştirir.
-"""
+"""GET /analysis/{symbol} service layer."""
 from __future__ import annotations
 
 import os
+import json
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -22,12 +14,14 @@ from src.api.schemas.analysis import (
     DataBlock,
     ForecastBlock,
     ForecastPoint,
+    ForecastSourceBlock,
     ModelBlock,
     PerformanceBlock,
     XaiBlock,
     XaiFactorItem,
 )
 from src.api.services.analysis_freshness import compute_freshness
+from src.api.services.data_refresh_service import DataRefreshService, read_latest_market_row
 from src.pipeline.confidence_calculator import compute_confidence
 from src.xai.product_summary import build_xai_product_summary
 
@@ -58,9 +52,22 @@ class AnalysisService:
         self,
         db_path: Optional[str] = None,
         outputs_base: Optional[str] = None,
+        project_root: Optional[str] = None,
+        enable_background_refresh: Optional[bool] = None,
+        refresh_wait_timeout_seconds: Optional[float] = None,
     ) -> None:
-        self._db_path = db_path or _DB_PATH
-        self._outputs_base = outputs_base or _OUTPUTS_BASE
+        self._project_root = project_root or _PROJECT_ROOT
+        self._db_path = db_path or os.path.join(self._project_root, "data", "stock_models.db")
+        self._outputs_base = outputs_base or os.path.join(self._project_root, "outputs")
+        self._enable_background_refresh = (
+            self._db_path == os.path.join(self._project_root, "data", "stock_models.db")
+            if enable_background_refresh is None
+            else bool(enable_background_refresh)
+        )
+        if refresh_wait_timeout_seconds is None:
+            self._refresh_wait_timeout_seconds = 90.0 if self._enable_background_refresh else 0.0
+        else:
+            self._refresh_wait_timeout_seconds = float(refresh_wait_timeout_seconds)
 
     def _get_db(self):
         from src.database.stock_model_db import StockModelDB
@@ -70,10 +77,7 @@ class AnalysisService:
     def build(self, symbol: str) -> AnalysisResponse:
         symbol = symbol.upper()
         generated_at = _now_iso()
-
         db = self._get_db()
-
-        # ── 1. En iyi model ──────────────────────────────────────────────
         best = db.get_best_model(symbol)
         if best is None:
             return AnalysisResponse(
@@ -83,81 +87,287 @@ class AnalysisService:
                 disclaimer=INVESTMENT_DISCLAIMER,
             )
 
-        # ── 2. En son forecast ──────────────────────────────────────────
-        forecast_row = db.get_latest_forecast(symbol)
+        latest = (
+            _safe_latest_market_row(os.path.join(self._project_root, "data", f"{symbol}.csv"))
+            if self._enable_background_refresh
+            else None
+        )
+        forecast_row = _find_matching_forecast(
+            db=db,
+            symbol=symbol,
+            best=best,
+            latest_observed_date=None if latest is None else latest.date,
+        )
         if forecast_row is None:
+            job = _queue_refresh(
+                db=db,
+                project_root=self._project_root,
+                outputs_base=self._outputs_base,
+                start_background=self._enable_background_refresh,
+                wait_timeout_seconds=self._refresh_wait_timeout_seconds,
+                symbol=symbol,
+                best=best,
+                reason="missing_forecast_for_best_model",
+            )
+            if _job_status(job) == "completed":
+                refreshed = _reload_forecast_state(
+                    service=self,
+                    symbol=symbol,
+                    fallback_best=best,
+                )
+                if refreshed is not None:
+                    db, best, forecast_row = refreshed
+                    return _build_forecast_response(
+                        db=db,
+                        symbol=symbol,
+                        generated_at=generated_at,
+                        best=best,
+                        forecast_row=forecast_row,
+                        outputs_base=self._outputs_base,
+                        refresh_job=job,
+                        refresh_reason="missing_forecast_for_best_model",
+                    )
             return AnalysisResponse(
                 symbol=symbol,
                 analysis_status="no_forecast",
                 generated_at=generated_at,
                 model=_build_model_block(best),
+                performance=_build_performance_block(best),
                 disclaimer=INVESTMENT_DISCLAIMER,
+                refresh_status=_job_status(job),
+                refresh_reason=_refresh_reason(job, "missing_forecast_for_best_model"),
+                refresh_job_id=None if job is None else job.get("job_id"),
             )
 
-        # ── 3. Veri tazeliği ────────────────────────────────────────────
         last_observed = str(forecast_row.get("last_observed_date", "") or "")
         freshness = compute_freshness(last_observed)
+        stale_job = None
+        if freshness.status == "stale_data":
+            stale_job = _queue_refresh(
+                db=db,
+                project_root=self._project_root,
+                outputs_base=self._outputs_base,
+                start_background=self._enable_background_refresh,
+                wait_timeout_seconds=self._refresh_wait_timeout_seconds,
+                symbol=symbol,
+                best=best,
+                reason="stale_market_data",
+            )
+            if _job_status(stale_job) == "completed":
+                refreshed = _reload_forecast_state(
+                    service=self,
+                    symbol=symbol,
+                    fallback_best=best,
+                )
+                if refreshed is not None:
+                    db, best, forecast_row = refreshed
+                    return _build_forecast_response(
+                        db=db,
+                        symbol=symbol,
+                        generated_at=generated_at,
+                        best=best,
+                        forecast_row=forecast_row,
+                        outputs_base=self._outputs_base,
+                        refresh_job=stale_job,
+                        refresh_reason="stale_market_data",
+                    )
 
-        # ── 4. Performance block ─────────────────────────────────────────
-        perf = _build_performance_block(best)
-
-        # ── 4b. Rolling resolution accuracy (Adim 2.5) ──────────────────
-        rolling_acc = {}
-        try:
-            rolling_acc = db.get_rolling_resolution_accuracy(symbol, days=60)
-        except Exception:
-            pass
-        live_model_status = rolling_acc.get("model_status", "healthy")
-
-        # ── 5. Güven etiketi ────────────────────────────────────────────
-        conf_result = compute_confidence(
-            eligibility_status=str(best.get("eligibility_status", "eligible")),
-            data_freshness=freshness.status,
-            directional_accuracy=best.get("dir_acc"),
-            rmse_vs_benchmark=None,
-            signal_diagnosis=best.get("signal_diagnosis"),
-            stability_score=best.get("stability_score"),
-            model_status=live_model_status,
-        )
-        conf_block = ConfidenceBlock(
-            label=conf_result.label,
-            reasons=conf_result.reasons,
-            warnings=conf_result.warnings,
-        )
-
-        # ── 6. XAI özeti ────────────────────────────────────────────────
-        model_name = str(best.get("model_name", ""))
-        xai_summary = build_xai_product_summary(
+        return _build_forecast_response(
+            db=db,
             symbol=symbol,
-            model_name=model_name,
-            outputs_base=self._outputs_base,
-        )
-        xai_block = _build_xai_block(xai_summary)
-
-        # ── 7. Status kodu ──────────────────────────────────────────────
-        status = _resolve_status(
-            freshness=freshness.status,
-            xai_available=xai_summary.available,
-            confidence_label=conf_result.label,
-        )
-
-        return AnalysisResponse(
-            symbol=symbol,
-            analysis_status=status,
             generated_at=generated_at,
-            data=DataBlock(
-                last_observed_date=last_observed or None,
-                last_close=forecast_row.get("last_close"),
-                data_freshness=freshness.status,
-                staleness_days=freshness.staleness_days,
-            ),
-            model=_build_model_block(best),
-            forecast=_build_forecast_block(forecast_row),
-            performance=perf,
-            confidence=conf_block,
-            xai=xai_block,
-            disclaimer=INVESTMENT_DISCLAIMER,
+            best=best,
+            forecast_row=forecast_row,
+            outputs_base=self._outputs_base,
+            refresh_job=stale_job,
+            refresh_reason=None if stale_job is None else "stale_market_data",
         )
+
+
+def _safe_latest_market_row(data_file: str):
+    try:
+        return read_latest_market_row(data_file)
+    except Exception:
+        return None
+
+
+def _reload_forecast_state(
+    *,
+    service: AnalysisService,
+    symbol: str,
+    fallback_best: Dict[str, Any],
+):
+    db = service._get_db()
+    best = db.get_best_model(symbol) or fallback_best
+    latest = (
+        _safe_latest_market_row(os.path.join(service._project_root, "data", f"{symbol}.csv"))
+        if service._enable_background_refresh
+        else None
+    )
+    forecast_row = _find_matching_forecast(
+        db=db,
+        symbol=symbol,
+        best=best,
+        latest_observed_date=None if latest is None else latest.date,
+    )
+    if forecast_row is None:
+        return None
+    return db, best, forecast_row
+
+
+def _build_forecast_response(
+    *,
+    db,
+    symbol: str,
+    generated_at: str,
+    best: Dict[str, Any],
+    forecast_row: Dict[str, Any],
+    outputs_base: str,
+    refresh_job: Optional[Dict[str, Any]] = None,
+    refresh_reason: Optional[str] = None,
+) -> AnalysisResponse:
+    last_observed = str(forecast_row.get("last_observed_date", "") or "")
+    freshness = compute_freshness(last_observed)
+    perf = _build_performance_block(best)
+    live_model_status = _live_model_status(db, symbol)
+
+    conf_result = compute_confidence(
+        eligibility_status=str(best.get("eligibility_status", "eligible")),
+        data_freshness=freshness.status,
+        directional_accuracy=best.get("dir_acc"),
+        rmse_vs_benchmark=None,
+        signal_diagnosis=best.get("signal_diagnosis"),
+        stability_score=best.get("stability_score"),
+        model_status=live_model_status,
+    )
+    warnings = list(conf_result.warnings)
+    if freshness.warning:
+        warnings.append(freshness.warning)
+    conf_block = ConfidenceBlock(
+        label=conf_result.label,
+        reasons=conf_result.reasons,
+        warnings=warnings,
+    )
+
+    model_name = str(best.get("model_name", ""))
+    xai_summary = build_xai_product_summary(
+        symbol=symbol,
+        model_name=model_name,
+        outputs_base=outputs_base,
+    )
+    xai_block = _build_xai_block(xai_summary)
+    status = _resolve_status(
+        freshness=freshness.status,
+        xai_available=xai_summary.available,
+        confidence_label=conf_result.label,
+    )
+
+    return AnalysisResponse(
+        symbol=symbol,
+        analysis_status=status,
+        generated_at=generated_at,
+        data=DataBlock(
+            last_observed_date=last_observed or None,
+            last_close=forecast_row.get("last_close"),
+            data_freshness=freshness.status,
+            staleness_days=freshness.staleness_days,
+        ),
+        model=_build_model_block(best),
+        forecast=_build_forecast_block(forecast_row),
+        performance=perf,
+        confidence=conf_block,
+        xai=xai_block,
+        disclaimer=INVESTMENT_DISCLAIMER,
+        refresh_status=_job_status(refresh_job),
+        refresh_reason=_refresh_reason(refresh_job, refresh_reason),
+        refresh_job_id=None if refresh_job is None else refresh_job.get("job_id"),
+        forecast_source=_build_forecast_source_block(forecast_row),
+    )
+
+
+def _find_matching_forecast(
+    *,
+    db,
+    symbol: str,
+    best: Dict[str, Any],
+    latest_observed_date: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    best_experiment_id = best.get("experiment_id")
+    best_model_name = str(best.get("model_name", ""))
+    for row in db.get_forecast_history(symbol, limit=50):
+        if str(row.get("model_name", "")) != best_model_name:
+            continue
+        if best_experiment_id is not None and row.get("source_experiment_id") != best_experiment_id:
+            continue
+        if latest_observed_date and str(row.get("last_observed_date", ""))[:10] != latest_observed_date:
+            continue
+        return row
+    return None
+
+
+def _queue_refresh(
+    *,
+    db,
+    project_root: str,
+    outputs_base: str,
+    start_background: bool,
+    wait_timeout_seconds: float,
+    symbol: str,
+    best,
+    reason: str,
+):
+    try:
+        return DataRefreshService(
+            db=db,
+            project_root=project_root,
+            outputs_base=outputs_base,
+            start_background=start_background,
+        ).ensure_refresh_job(
+            symbol=symbol,
+            reason=reason,
+            best_model=best,
+            wait_timeout_seconds=wait_timeout_seconds,
+        )
+    except Exception:
+        return None
+
+
+def _job_status(job: Optional[Dict[str, Any]]) -> str:
+    if not job:
+        return "none"
+    status = str(job.get("status", "none"))
+    return "failed" if status == "error" else status
+
+
+def _job_payload(job: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not job:
+        return {}
+    raw = job.get("payload_json")
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(str(raw))
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _refresh_reason(job: Optional[Dict[str, Any]], fallback: Optional[str]) -> Optional[str]:
+    payload = _job_payload(job)
+    failure_reason = payload.get("failure_reason")
+    if failure_reason:
+        return str(failure_reason)
+    return fallback
+
+
+def _live_model_status(db, symbol: str) -> str:
+    try:
+        rolling_acc = db.get_rolling_resolution_accuracy(symbol, days=60)
+        return rolling_acc.get("model_status", "healthy")
+    except Exception:
+        return "healthy"
 
 
 def _build_model_block(best: Dict[str, Any]) -> ModelBlock:
@@ -185,6 +395,7 @@ def _build_performance_block(best: Dict[str, Any]) -> PerformanceBlock:
         hit_rate=best.get("hit_rate"),
         sharpe=best.get("sharpe"),
         composite_score=best.get("composite_score"),
+        stability_score=best.get("stability_score"),
     )
 
 
@@ -202,12 +413,58 @@ def _build_forecast_block(forecast_row: Dict[str, Any]) -> ForecastBlock:
     raw_agreement = forecast_row.get("ensemble_direction_agreement")
     return ForecastBlock(
         horizon_days=forecast_row.get("horizon_days"),
-        trend_label=forecast_row.get("trend_label"),
+        trend_label=_normalize_trend_label(forecast_row.get("trend_label")),
         weekly_expected_return=forecast_row.get("weekly_expected_return"),
         trend_threshold=forecast_row.get("trend_threshold"),
         ensemble_agreement=float(raw_agreement) if raw_agreement is not None else None,
         points=points,
     )
+
+
+def _build_forecast_source_block(forecast_row: Dict[str, Any]) -> ForecastSourceBlock:
+    ensemble_metadata = _json_dict(forecast_row.get("ensemble_metadata_json"))
+    warnings = _json_list(forecast_row.get("forecast_warnings_json"))
+    is_ensemble = bool(ensemble_metadata) or str(forecast_row.get("model_name", "")).startswith("Ensemble ")
+    return ForecastSourceBlock(
+        type="ensemble" if is_ensemble else "model",
+        model_name=forecast_row.get("model_name"),
+        source_experiment_id=forecast_row.get("source_experiment_id"),
+        run_at=forecast_row.get("run_at"),
+        last_observed_date=forecast_row.get("last_observed_date"),
+        method=None if not is_ensemble else str(ensemble_metadata.get("method") or ""),
+        members=list(ensemble_metadata.get("members") or []),
+        weights={str(k): float(v) for k, v in dict(ensemble_metadata.get("weights") or {}).items()},
+        source_experiment_ids=[
+            int(v) for v in list(ensemble_metadata.get("source_experiment_ids") or []) if v is not None
+        ],
+        forecast_strategy=forecast_row.get("forecast_strategy"),
+        artifact_mode=forecast_row.get("artifact_mode"),
+        warnings=warnings,
+    )
+
+
+def _json_dict(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(str(raw))
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _json_list(raw: Any) -> list:
+    if isinstance(raw, list):
+        return raw
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(str(raw))
+        return parsed if isinstance(parsed, list) else []
+    except Exception:
+        return []
 
 
 def _build_xai_block(summary) -> XaiBlock:
@@ -239,8 +496,13 @@ def _build_xai_block(summary) -> XaiBlock:
     )
 
 
+def _normalize_trend_label(value: Any) -> Optional[str]:
+    raw = str(value or "").strip().lower()
+    mapping = {"up": "up", "down": "down", "flat": "flat", "neutral": "flat"}
+    return mapping.get(raw, raw or None)
+
+
 def _resolve_status(*, freshness: str, xai_available: bool, confidence_label: str) -> str:
-    # Hiyerarşi: no_model > no_forecast > stale_data > xai_unavailable > low_confidence > ok
     if freshness == "stale_data":
         return "stale_data"
     if not xai_available:

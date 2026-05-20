@@ -10,7 +10,56 @@ import pandas as pd
 
 from src.evaluation.evaluator import compute_metrics, plot_comparison
 from src.evaluation.financial_metrics import compute_quantile_metrics
+from src.forecasting.artifacts import save_forecast_artifact_package
 from src.pipeline.evaluation_services import _OwnerBackedService
+
+_KERAS_MODELS = {"LSTM", "LSTM Lite", "AttentionLSTM v2"}
+
+
+def _write_forecast_artifact_sidecars(owner, *, model_name: str, model_path: str, tensors: dict, validation_mode: str) -> None:
+    if not model_path or "scaler_X" not in tensors or "scaler_y" not in tensors:
+        return
+    metadata = {
+        "model_name": model_name,
+        "validation_mode": validation_mode,
+        "feature_names": list(getattr(owner, "feature_names", []) or []),
+        "target_mode": owner.dataset_metadata.get("target_mode", "log_return"),
+        "feature_mode": owner.dataset_metadata.get("feature_mode", "stationary_features"),
+        "scaling_mode": owner.dataset_metadata.get("scaling_mode", "robust_x_standard_y_clip"),
+        "time_steps": owner.dataset_metadata.get("time_steps"),
+        "dataset_hash": owner.dataset_hash,
+        "run_id": owner.dataset_metadata.get("run_id"),
+        "clip_report": tensors.get("clip_report", {}),
+        "artifact_mode": "artifact_loaded",
+        "forecast_strategy": "recursive_direct_target",
+    }
+    try:
+        save_forecast_artifact_package(
+            model_path=model_path,
+            scaler_X=tensors["scaler_X"],
+            scaler_y=tensors["scaler_y"],
+            metadata=metadata,
+        )
+    except Exception as exc:
+        print(f"  [WARN] Forecast artifact sidecar yazilamadi ({model_name}): {exc}")
+
+
+def _write_attention_xai_if_available(owner, *, model_name: str, model, tensors: dict, suffix: str) -> None:
+    exporter = getattr(model, "export_attention_xai", None)
+    if exporter is None:
+        return
+    x_seq = tensors.get("X_test_seq")
+    if x_seq is None:
+        x_seq = tensors.get("X_train_seq")
+    if x_seq is None:
+        return
+    try:
+        out_dir = os.path.join(owner.xai_dir, "csv")
+        out_path = os.path.join(out_dir, f"xai_top_reasons_attention_{suffix}.csv")
+        exporter(x_seq, owner.feature_names, out_path, model_name=model_name)
+        print(f"  [OK] Attention XAI tablosu kaydedildi -> {out_path}")
+    except Exception as exc:
+        print(f"  [WARN] Attention XAI tablosu olusturulamadi ({model_name}): {exc}")
 
 
 class SingleSplitEvaluationWorkflow(_OwnerBackedService):
@@ -55,7 +104,7 @@ class SingleSplitEvaluationWorkflow(_OwnerBackedService):
                 self.dataset_metadata,
             )
 
-            model_ext = ".keras" if name in {"LSTM", "LSTM Lite"} else ".pkl"
+            model_ext = ".keras" if name in _KERAS_MODELS else ".pkl"
             model_filename = f"{name.replace(' ', '_').lower()}_model{model_ext}"
             model_path = os.path.join(self.models_dir, model_filename)
 
@@ -66,6 +115,20 @@ class SingleSplitEvaluationWorkflow(_OwnerBackedService):
                 model_path = ""
             else:
                 original_model.save(model_path)
+                _write_forecast_artifact_sidecars(
+                    self,
+                    model_name=name,
+                    model_path=model_path,
+                    tensors=self.latest_tensors,
+                    validation_mode="single_split",
+                )
+                _write_attention_xai_if_available(
+                    self,
+                    model_name=name,
+                    model=original_model,
+                    tensors=self.latest_tensors,
+                    suffix="latest",
+                )
 
             if self.stock_db is not None:
                 self.stock_db.log_experiment(
@@ -250,6 +313,7 @@ class WalkForwardEvaluationWorkflow(_OwnerBackedService):
         if self.stock_db is None:
             return
         for model_name, avg_metrics in wf_results.items():
+            is_prod_ensemble = model_name in {"Ensemble Inverse RMSE", "Ensemble Cash-Gated"}
             self.stock_db.log_experiment(
                 stock_symbol=self.stock_symbol,
                 model_name=model_name,
@@ -259,6 +323,9 @@ class WalkForwardEvaluationWorkflow(_OwnerBackedService):
                 dataset_hash=self.dataset_hash,
                 validation_mode="walk_forward",
                 dataset_metadata=self.dataset_metadata,
+                is_production_candidate=is_prod_ensemble,
+                selection_source="walk_forward_production_ensemble" if is_prod_ensemble else None,
+                run_id=self.dataset_metadata.get("run_id"),
             )
 
     def _plot_walk_forward_predictions(self, wf_predictions: dict, wf_y_true) -> None:
@@ -335,10 +402,24 @@ class FinalHoldoutEvaluationWorkflow(_OwnerBackedService):
             final_metadata,
         )
 
-        model_ext = ".keras" if model_name in {"LSTM", "LSTM Lite"} else ".pkl"
+        model_ext = ".keras" if model_name in _KERAS_MODELS else ".pkl"
         model_filename = f"{model_name.replace(' ', '_').lower()}_final_holdout_model{model_ext}"
         model_path = os.path.join(self.models_dir, model_filename)
         model.save(model_path)
+        _write_forecast_artifact_sidecars(
+            self,
+            model_name=model_name,
+            model_path=model_path,
+            tensors=tensors,
+            validation_mode="final_holdout",
+        )
+        _write_attention_xai_if_available(
+            self,
+            model_name=model_name,
+            model=model,
+            tensors=tensors,
+            suffix="final_holdout",
+        )
 
         if self.stock_db is not None:
             self.stock_db.log_experiment(

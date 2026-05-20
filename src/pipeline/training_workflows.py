@@ -38,6 +38,8 @@ class FinalHoldoutTrainingWorkflow(_OwnerBackedService):
                 model = self._make_lstm("final")
             elif model_name == "LSTM Lite":
                 model = self._make_lstm_lite("final")
+            elif model_name == "AttentionLSTM v2":
+                model = self._make_attention_lstm_v2("final")
             else:
                 model = cls()
             model.train(tensors["X_train_seq"], tensors["y_train_seq"])
@@ -138,6 +140,7 @@ class SingleSplitTrainingWorkflow(_OwnerBackedService):
         specs = (
             ("LSTM", lambda: self._make_lstm("single")),
             ("LSTM Lite", lambda: self._make_lstm_lite("single")),
+            ("AttentionLSTM v2", lambda: self._make_attention_lstm_v2("single")),
         )
         for model_name, factory in specs:
             if self._skip(model_name):
@@ -246,6 +249,7 @@ class WalkForwardTrainingWorkflow(_OwnerBackedService):
         specs = (
             ("LSTM", lambda: self._make_lstm("wf")),
             ("LSTM Lite", lambda: self._make_lstm_lite("wf")),
+            ("AttentionLSTM v2", lambda: self._make_attention_lstm_v2("wf")),
         )
         for model_name, factory in specs:
             if self._skip(model_name):

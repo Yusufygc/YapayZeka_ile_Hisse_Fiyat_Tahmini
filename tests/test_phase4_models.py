@@ -78,6 +78,25 @@ class Phase4ModelTests(unittest.TestCase):
         self.assertEqual(tuple(layer.b.shape), (1,))
         self.assertEqual(tuple(y.shape), (2, 3))
 
+    def test_attention_lstm_v2_attention_layer_returns_weights(self):
+        try:
+            import tensorflow as tf
+            from src.models.attention_lstm_v2_model import TemporalAttentionV2
+        except Exception as exc:
+            self.skipTest(f"tensorflow minimal runtime'da kurulu degil: {exc}")
+
+        layer = TemporalAttentionV2()
+        x = tf.ones((2, 4, 3), dtype=tf.float32)
+        context, weights = layer(x)
+
+        self.assertEqual(tuple(context.shape), (2, 3))
+        self.assertEqual(tuple(weights.shape), (2, 4, 1))
+        np.testing.assert_allclose(
+            tf.reduce_sum(weights, axis=1).numpy(),
+            np.ones((2, 1)),
+            atol=1e-6,
+        )
+
     def test_prophet_model_uses_available_macro_regressors(self):
         import src.models.prophet_model as prophet_module
         from src.models.prophet_model import ProphetModel

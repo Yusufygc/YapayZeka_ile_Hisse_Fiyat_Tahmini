@@ -5,10 +5,14 @@ import shutil
 
 import numpy as np
 import pandas as pd
+import pytest
+from sklearn.preprocessing import StandardScaler
 
 from src.database.stock_model_db import StockModelDB
+from src.forecasting.artifacts import save_forecast_artifact_package
 from src.forecasting.bist_rules import BistMarketRules
 from src.forecasting.runner import ForecastRunner
+from src.models.linear_model import RidgeReturnModel
 from src.pipeline.data_manager import DataManager
 
 
@@ -190,10 +194,36 @@ def test_forecast_runner_creates_five_bist_bounded_points(monkeypatch):
     )
     db_path = os.path.join(data_dir, "stock_models.db")
     db = StockModelDB(db_path)
+    models_dir = os.path.join(project_root, "outputs", "TEST", "models")
+    os.makedirs(models_dir, exist_ok=True)
+    model_path = os.path.join(models_dir, "ridge_return_final_holdout_model.pkl")
+    X = np.linspace(0.0, 1.0, 44).reshape(-1, 1)
+    y = np.full((44, 1), 0.01)
+    scaler_X = StandardScaler().fit(X)
+    scaler_y = StandardScaler().fit(y)
+    model = RidgeReturnModel()
+    model.train(scaler_X.transform(X), scaler_y.transform(y))
+    model.save(model_path)
+    save_forecast_artifact_package(
+        model_path=model_path,
+        scaler_X=scaler_X,
+        scaler_y=scaler_y,
+        metadata={
+            "model_name": "Ridge Return",
+            "feature_names": ["Feature"],
+            "target_mode": "log_return",
+            "feature_mode": "stationary_features",
+            "scaling_mode": "robust_x_standard_y_clip",
+            "dataset_hash": "test_hash",
+            "forecast_strategy": "recursive_direct_target",
+            "artifact_mode": "artifact_loaded",
+        },
+    )
     db.log_experiment(
         "TEST",
         "Ridge Return",
         {"RMSE": 1.0, "MAE": 1.0, "MAPE": 1.0, "Dir_Acc": 60.0, "Sharpe": 0.5, "Hit_Rate": 55.0},
+        model_path=model_path,
         validation_mode="final_holdout",
         dataset_metadata={
             "target_mode": "log_return",
@@ -237,3 +267,45 @@ def test_forecast_runner_creates_five_bist_bounded_points(monkeypatch):
     assert len(result.points) == 5
     for point in result.points:
         assert point["lower_band"] <= point["bounded_predicted_close"] <= point["upper_band"]
+    assert latest["forecast_strategy"] == "recursive_direct_target"
+    assert latest["artifact_mode"] == "artifact_loaded"
+
+
+def test_forecast_runner_fails_when_artifact_missing(monkeypatch):
+    project_root = _workspace_tmp("missing_artifact")
+    data_dir = os.path.join(project_root, "data")
+    os.makedirs(data_dir, exist_ok=True)
+    data_file = os.path.join(data_dir, "TEST.csv")
+    pd.DataFrame({
+        "Date": pd.date_range("2026-03-01", periods=45, freq="B"),
+        "Close": np.linspace(100.0, 120.0, 45),
+    }).to_csv(data_file, index=False)
+    db_path = os.path.join(data_dir, "stock_models.db")
+    db = StockModelDB(db_path)
+    db.log_experiment(
+        "TEST",
+        "Ridge Return",
+        {"RMSE": 1.0, "MAE": 1.0, "MAPE": 1.0, "Dir_Acc": 60.0, "Sharpe": 0.5, "Hit_Rate": 55.0},
+        validation_mode="final_holdout",
+        dataset_metadata={
+            "target_mode": "log_return",
+            "feature_mode": "stationary_features",
+            "scaling_mode": "robust_x_standard_y_clip",
+        },
+        is_production_candidate=True,
+        selection_source="test_final_holdout",
+    )
+
+    def fake_ingest(self):
+        self.df = pd.DataFrame({
+            "Date": pd.date_range("2026-03-02", periods=45, freq="B"),
+            "Close": np.linspace(100.0, 120.0, 45),
+            "Feature": np.linspace(0.0, 1.0, 45),
+        })
+        self.feature_names = ["Feature"]
+
+    monkeypatch.setattr(DataManager, "ingest_and_engineer", fake_ingest)
+    runner = ForecastRunner(project_root=project_root, db_path=db_path)
+
+    with pytest.raises(Exception, match="artifact model file not found"):
+        runner.run_symbol(symbol="TEST", data_file=data_file, horizon_days=5, use_macro=False)

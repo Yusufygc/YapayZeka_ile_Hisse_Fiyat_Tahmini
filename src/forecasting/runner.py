@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from src.database.stock_model_db import StockModelDB
+from src.forecasting.bist_calendar import ensure_bist_calendar
 from src.forecasting.bist_rules import BistMarketRules
 from src.forecasting.persistence import ForecastPersistence
 from src.forecasting.workflows import (
@@ -34,7 +35,7 @@ class ForecastResult:
 
 
 class ForecastRunner:
-    """Train the selected production model and persist BIST-compliant forecasts."""
+    """Load production artifacts and persist BIST-compliant forecasts."""
 
     def __init__(
         self,
@@ -46,8 +47,10 @@ class ForecastRunner:
     ) -> None:
         self.project_root = os.path.abspath(project_root)
         self.db = StockModelDB(db_path or os.path.join(self.project_root, "data", "stock_models.db"))
+        resolved_calendar_path = calendar_path or os.path.join(self.project_root, "data", "meta", "bist_calendar.csv")
+        ensure_bist_calendar(resolved_calendar_path, years_back=5, years_forward=1)
         self.rules = BistMarketRules(
-            calendar_path or os.path.join(self.project_root, "data", "meta", "bist_calendar.csv")
+            resolved_calendar_path
         )
         self.model_config = model_config or ModelConfig()
         self.persistence = ForecastPersistence(self.db)
@@ -228,6 +231,25 @@ class ForecastRunner:
                 min_val_samples=int(cfg.get("min_validation_samples", 32)),
                 tune_on_fit=bool(cfg.get("tune_on_fit", False)),
                 tune_n_trials=int(cfg.get("tune_n_trials", 12)),
+            )
+        if model_name == "AttentionLSTM v2":
+            from src.models.attention_lstm_v2_model import AttentionLSTMV2Model
+            cfg = self._deep_stage_config("attention_lstm_v2", stage)
+            return AttentionLSTMV2Model(
+                units_1=int(cfg.get("units_1", 64)),
+                units_2=int(cfg.get("units_2", 32)),
+                dense_units=int(cfg.get("dense_units", 32)),
+                epochs=int(cfg.get("epochs", 80)),
+                patience=int(cfg.get("patience", 12)),
+                dropout_rate=float(cfg.get("dropout", 0.30)),
+                batch_size=int(cfg.get("batch_size", 32)),
+                learning_rate=float(cfg.get("learning_rate", 0.0005)),
+                lr_patience=int(cfg.get("lr_patience", 4)),
+                validation_ratio=float(cfg.get("validation_ratio", 0.1)),
+                min_val_samples=int(cfg.get("min_validation_samples", 32)),
+                tune_on_fit=bool(cfg.get("tune_on_fit", False)),
+                tune_n_trials=int(cfg.get("tune_n_trials", 12)),
+                loss=str(cfg.get("loss", "huber")),
             )
         raise KeyError(f"Bilinmeyen model adi: {model_name}")
 

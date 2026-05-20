@@ -138,6 +138,9 @@ class ForecastingPipeline:
         self.run_dataset_metadata = {}
         self.run_dataset_hash = "N/A"
         self.report_detail_level = e.report_detail_level
+        self.auto_generate_forecast_after_training = bool(
+            getattr(e, "auto_generate_forecast_after_training", True)
+        )
 
     @staticmethod
     def _slugify_model_name(model_name: str) -> str:
@@ -399,6 +402,36 @@ class ForecastingPipeline:
         shutil.copytree(run_dir, latest_dir)
         print(f"  [OK] Latest output senkronlandi -> {latest_dir}")
 
+    def _auto_generate_forecast_after_training(self) -> None:
+        if not self.auto_generate_forecast_after_training:
+            return
+        try:
+            from src.forecasting.bist_calendar import default_calendar_path, ensure_bist_calendar
+            from src.forecasting.runner import ForecastRunner
+
+            calendar_path = default_calendar_path(self.project_root)
+            ensure_bist_calendar(calendar_path, years_back=5, years_forward=1)
+            runner = ForecastRunner(
+                project_root=self.project_root,
+                db_path=self.stock_db.db_path,
+                calendar_path=calendar_path,
+                model_config=self._cfg.models,
+            )
+            result = runner.run_symbol(
+                symbol=self.stock_symbol,
+                data_file=self.data_file,
+                horizon_days=5,
+                use_macro=bool(self._cfg.data.use_macro),
+                auto_update_data=False,
+                auto_update_interactive=False,
+            )
+            print(
+                "  [OK] Training sonrasi forecast uretildi -> "
+                f"run_id={result.run_id} model={result.model_name}"
+            )
+        except Exception as exc:
+            print(f"  [WARN] Training sonrasi forecast uretilemedi: {exc}")
+
     def run_all(self) -> None:
         self.setup_environment()
 
@@ -498,6 +531,7 @@ class ForecastingPipeline:
                 except Exception as exc:
                     print(f"  [WARN] Final holdout degerlendirmesi basarisiz, atlaniyor: {exc}")
 
+        self._auto_generate_forecast_after_training()
         self._write_run_manifest()
         self._sync_latest_output()
         print("\n  [OK] Pipeline completed successfully!")

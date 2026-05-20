@@ -85,6 +85,21 @@ class XaiBlock(BaseModel):
     caveat: str = ""
 
 
+class ForecastSourceBlock(BaseModel):
+    type: str = "model"
+    model_name: Optional[str] = None
+    source_experiment_id: Optional[int] = None
+    run_at: Optional[str] = None
+    last_observed_date: Optional[str] = None
+    method: Optional[str] = None
+    members: List[str] = []
+    weights: Dict[str, float] = {}
+    source_experiment_ids: List[int] = []
+    forecast_strategy: Optional[str] = None
+    artifact_mode: Optional[str] = None
+    warnings: List[str] = []
+
+
 class AnalysisResponse(BaseModel):
     symbol: str
     analysis_status: str = "ok"
@@ -96,3 +111,7 @@ class AnalysisResponse(BaseModel):
     confidence: ConfidenceBlock = ConfidenceBlock()
     xai: XaiBlock = XaiBlock()
     disclaimer: str = ""
+    refresh_status: Literal["none", "queued", "running", "completed", "failed"] = "none"
+    refresh_reason: Optional[str] = None
+    refresh_job_id: Optional[str] = None
+    forecast_source: Optional[ForecastSourceBlock] = None

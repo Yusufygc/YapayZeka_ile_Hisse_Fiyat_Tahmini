@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 
 
 _PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-_PYTEST_TMP_ROOT = os.path.join(_PROJECT_ROOT, "outputs", "_pytest_tmp")
+_PYTEST_TMP_ROOT = os.path.join(_PROJECT_ROOT, ".codex_tmp", "pytest")
 os.makedirs(_PYTEST_TMP_ROOT, exist_ok=True)
 os.environ.setdefault("TMP", _PYTEST_TMP_ROOT)
 os.environ.setdefault("TEMP", _PYTEST_TMP_ROOT)

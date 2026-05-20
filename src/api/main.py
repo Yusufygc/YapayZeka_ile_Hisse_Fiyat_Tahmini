@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 import sys
 import uuid
+import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -48,6 +49,7 @@ except ImportError as exc:
 
 from src.database.stock_model_db import StockModelDB
 from src.api.routers.analysis import router as analysis_router
+from src.api.runtime_config import get_cors_settings
 
 # ─────────────────────────────────────────────────────────────────────────────
 # App ve DB başlatma
@@ -66,9 +68,11 @@ app = FastAPI(
 )
 
 # CORS — aynı makinedeki başka servisler (React dashboard, Merge_PortfoySim vb.)
+_CORS_SETTINGS = get_cors_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_CORS_SETTINGS.allow_origins,
+    allow_origin_regex=_CORS_SETTINGS.allow_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -82,6 +86,21 @@ def _get_db() -> StockModelDB:
     return StockModelDB(_DB_PATH)
 
 
+def _parse_payload_json(job: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not job:
+        return None
+    raw = job.get("payload_json")
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(str(raw))
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic şemaları
 # ─────────────────────────────────────────────────────────────────────────────
@@ -90,6 +109,7 @@ class RunRequest(PydanticModel):
     mode: str = "walk_forward"
     models: Optional[List[str]] = None
     data_dir: str = "data"
+    auto_update_data: bool = True
 
 
 class RunStatus(PydanticModel):
@@ -120,17 +140,36 @@ def health_check() -> Dict[str, Any]:
     """
     try:
         db = _get_db()
-        leaders = db.get_leaderboard(top_n=1)
-        db_ok = True
+        schema = db.get_schema_status()
+        latest_refresh = db.get_latest_refresh_job()
+        db_ok = bool(schema.get("ok"))
         total_symbols = len(db.get_leaderboard(top_n=9999))
     except Exception as exc:
         db_ok = False
         total_symbols = 0
+        schema = {"ok": False, "missing_tables": [], "table_counts": {}, "error": str(exc)}
+        latest_refresh = None
 
     return {
         "status": "ok" if db_ok else "degraded",
         "db_path": _DB_PATH,
         "db_accessible": db_ok,
+        "schema": schema,
+        "latest_refresh_job": None
+        if latest_refresh is None
+        else {
+            **latest_refresh,
+            "payload": _parse_payload_json(latest_refresh),
+        },
+        "cors": {
+            "mode": _CORS_SETTINGS.mode,
+            "allow_origins": _CORS_SETTINGS.allow_origins,
+            "allow_origin_regex": _CORS_SETTINGS.allow_origin_regex,
+        },
+        "runtime": {
+            "project_root": _PROJECT_ROOT,
+            "python": sys.executable,
+        },
         "registered_symbols": total_symbols,
         "timestamp": datetime.now().isoformat(),
     }
@@ -287,12 +326,25 @@ def trigger_pipeline(
             if not os.path.exists(data_file):
                 raise FileNotFoundError(f"Veri dosyası bulunamadı: {data_file}")
 
-            from src.pipeline.orchestrator import ForecastingPipeline
-            pipeline = ForecastingPipeline(
-                data_file=data_file,
-                validation_mode=request.mode,
-                selected_models=request.models,
+            from src.pipeline.config import (
+                DataConfig,
+                ExecutionConfig,
+                ModelConfig,
+                PipelineConfig,
+                ValidationConfig,
             )
+            from src.pipeline.orchestrator import ForecastingPipeline
+
+            pipeline = ForecastingPipeline(cfg=PipelineConfig(
+                data=DataConfig(
+                    data_file=data_file,
+                    auto_update_data=bool(request.auto_update_data),
+                    auto_update_interactive=False,
+                ),
+                validation=ValidationConfig(validation_mode=request.mode),
+                models=ModelConfig(selected_models=request.models),
+                execution=ExecutionConfig(),
+            ))
             pipeline.run_all()
             _jobs[job_id]["status"] = "completed"
         except Exception as exc:
@@ -325,6 +377,22 @@ def get_run_status(job_id: str) -> Dict[str, Any]:
             detail=f"Job '{job_id}' bulunamadı. Geçerli job listesi: {list(_jobs.keys())}",
         )
     return job
+
+
+@app.get("/refresh/status/{job_id}", tags=["Analiz"])
+def get_refresh_status(job_id: str) -> Dict[str, Any]:
+    """Return analysis auto-refresh job status."""
+    try:
+        db = _get_db()
+        job = db.get_refresh_job(job_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Refresh job not found: {job_id}")
+    return {
+        **job,
+        "payload": _parse_payload_json(job),
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -3,12 +3,17 @@
 /models
 /docs/*
 !/docs/glossary.md
+!/docs/wiki/
+!/docs/wiki/*.md
+/docs/wiki/.obsidian/
 .codex
 graphify-out
 _make_report.py
 rapor.docx
 tools
-
+.claude
+kalinanYer.md
+kalinanYer1.md
 /stock_models.db
 /data/stock_models.db
 # SQLite WAL/SHM journal dosyaları (tüm .db türleri)

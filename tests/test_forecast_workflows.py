@@ -4,6 +4,7 @@
 import os
 
 import numpy as np
+import pandas as pd
 
 from src.forecasting.runner import ForecastRunner
 from src.forecasting.workflows import (
@@ -73,3 +74,46 @@ def test_model_resolver_forced_model_uses_best_metadata_when_available(tmp_path)
     assert selection["model_name"] == "XGBoost"
     assert selection["target_mode"] == "log_return"
     assert selection["source_experiment_id"] is not None
+
+
+def test_recursive_forecast_updates_feature_state_between_horizons(tmp_path):
+    runner = _runner(tmp_path)
+    generator = runner.forecast_point_generator
+
+    class Predictor:
+        def predict(self, model_name, model, context):
+            return float(context["latest_X"][0, 0])
+
+    class Scaler:
+        def transform(self, values):
+            return np.asarray(values, dtype=float)
+
+    frame = pd.DataFrame({
+        "Date": pd.date_range("2026-05-01", periods=3, freq="B"),
+        "Close": [100.0, 101.0, 102.0],
+        "LogRet_Lag_1": [0.0, 0.01, 0.02],
+    })
+    context = {
+        "features": ["LogRet_Lag_1"],
+        "target_mode": "log_return",
+        "scaler_X": Scaler(),
+        "scaler_y": Scaler(),
+        "latest_X": np.array([[0.02]]),
+        "latest_X_s": np.array([[0.02]]),
+        "latest_seq": None,
+        "last_close": 102.0,
+        "last_observed_date": pd.Timestamp("2026-05-05"),
+        "feature_frame": frame,
+        "time_steps": 2,
+    }
+
+    points = generator.roll_forward_recursive(
+        model_name="Ridge Return",
+        model=object(),
+        context=context,
+        predictor=Predictor(),
+        horizon_days=2,
+    )
+
+    assert len(points) == 2
+    assert points[0]["predicted_return"] != points[1]["predicted_return"]

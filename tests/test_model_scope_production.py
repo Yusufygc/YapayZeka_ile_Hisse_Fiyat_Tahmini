@@ -52,6 +52,34 @@ def test_selected_lstm_lite_scope_keeps_only_lstm_lite_as_candidate():
     ) == {"LSTM Lite", "Naive Last Value", "Naive Zero Return"}
 
 
+def test_selected_attention_lstm_v2_is_opt_in_candidate_only():
+    tmp = _workspace_tmp("trainer_attention_v2_scope")
+    default_trainer = ModelTrainer(
+        stock_symbol="TEST",
+        tracker=ExperimentTracker(tmp),
+        feature_names=["f1"],
+        selected_models=None,
+        dataset_metadata={"target_mode": "log_return"},
+    )
+    selected_trainer = ModelTrainer(
+        stock_symbol="TEST",
+        tracker=ExperimentTracker(tmp),
+        feature_names=["f1"],
+        selected_models=["AttentionLSTM v2"],
+        dataset_metadata={"target_mode": "log_return"},
+    )
+
+    assert "AttentionLSTM v2" not in default_trainer.candidate_models
+    assert selected_trainer.candidate_models == {"AttentionLSTM v2"}
+
+
+def test_reportable_models_include_only_production_ensembles():
+    assert reportable_model_names(
+        ["Ensemble Inverse RMSE", "Ensemble Meta-Stacker", "Ensemble Cash-Gated"],
+        {"LSTM"},
+    ) == {"Ensemble Inverse RMSE", "Ensemble Cash-Gated"}
+
+
 def test_select_best_model_ignores_benchmarks_and_non_candidates():
     metrics = {
         "Naive Last Value": {
@@ -122,3 +150,41 @@ def test_best_models_latest_final_holdout_production_candidate_wins():
     assert latest_best["model_name"] == "Ridge Return"
     assert latest_best["validation_mode"] == "final_holdout"
     assert latest_best["run_id"] == "run_2"
+
+
+def test_production_ensemble_can_be_best_with_metadata():
+    tmp = _workspace_tmp("db_ensemble_policy")
+    db = StockModelDB(os.path.join(tmp, "stock_models.db"))
+    metadata = {
+        "target_mode": "log_return",
+        "feature_mode": "stationary_features",
+        "scaling_mode": "robust_x_standard_y_clip",
+    }
+
+    exp_id = db.log_experiment(
+        "TEST",
+        "Ensemble Inverse RMSE",
+        {
+            "RMSE": 0.8,
+            "MAE": 0.8,
+            "MAPE": 1.0,
+            "Dir_Acc": 60.0,
+            "Sharpe": 0.5,
+            "Hit_Rate": 60.0,
+            "RMSE_vs_benchmark": 0.95,
+            "Trade_Count": 8,
+            "Ensemble_Method": "Inverse RMSE",
+            "Ensemble_Weights": '{"Ridge Return": 0.4, "LSTM": 0.6}',
+        },
+        validation_mode="walk_forward",
+        dataset_metadata=metadata,
+        is_production_candidate=True,
+        selection_source="walk_forward_production_ensemble",
+        run_id="run_ens",
+    )
+
+    best = db.get_best_model("TEST")
+    assert best["experiment_id"] == exp_id
+    assert best["model_name"] == "Ensemble Inverse RMSE"
+    assert best["eligibility_status"] == "eligible"
+    assert "Ridge Return" in best["ensemble_metadata_json"]

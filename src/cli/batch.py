@@ -84,7 +84,11 @@ def _run_single_stock(args_dict: Dict[str, Any]) -> Dict[str, Any]:
         )
 
         pipeline_cfg = PipelineConfig(
-            data=DataConfig(data_file=data_file),
+            data=DataConfig(
+                data_file=data_file,
+                auto_update_data=True,
+                auto_update_interactive=False,
+            ),
             validation=ValidationConfig(validation_mode=mode),
             models=ModelConfig(
                 selected_models=selected_models,

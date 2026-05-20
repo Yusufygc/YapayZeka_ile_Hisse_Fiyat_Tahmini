@@ -27,6 +27,10 @@ class ForecastPersistence:
         points: List[Dict[str, Any]],
         status: str = "pending",
         ensemble_direction_agreement: Optional[float] = None,
+        forecast_strategy: Optional[str] = None,
+        artifact_mode: Optional[str] = None,
+        forecast_warnings: Optional[List[str]] = None,
+        ensemble_metadata: Optional[Dict[str, Any]] = None,
     ) -> int:
         return self.db.log_forecast_run(
             stock_symbol=stock_symbol,
@@ -42,4 +46,8 @@ class ForecastPersistence:
             points=points,
             status=status,
             ensemble_direction_agreement=ensemble_direction_agreement,
+            forecast_strategy=forecast_strategy,
+            artifact_mode=artifact_mode,
+            forecast_warnings=forecast_warnings,
+            ensemble_metadata=ensemble_metadata,
         )

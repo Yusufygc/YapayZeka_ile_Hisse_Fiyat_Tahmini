@@ -34,6 +34,7 @@ _CANONICAL_ORDER: tuple[str, ...] = (
     "Random Forest",
     "LSTM",
     "LSTM Lite",
+    "AttentionLSTM v2",
 )
 
 
@@ -116,7 +117,10 @@ def is_benchmark_model(model_name: str) -> bool:
 
 
 def is_selection_candidate(model_name: str, candidate_models_iter: Iterable[str] | None) -> bool:
-    return str(model_name) in set(candidate_models_iter or [])
+    name = str(model_name)
+    if name in {"Ensemble Inverse RMSE", "Ensemble Cash-Gated"}:
+        return True
+    return name in set(candidate_models_iter or [])
 
 
 def report_group(model_name: str, candidate_models_iter: Iterable[str] | None) -> str:
@@ -136,7 +140,11 @@ def reportable_model_names(model_names: Iterable[str], candidate_models_iter: It
     return {
         str(name)
         for name in model_names
-        if str(name) in candidates or is_benchmark_model(str(name))
+        if (
+            str(name) in candidates
+            or is_benchmark_model(str(name))
+            or str(name) in {"Ensemble Inverse RMSE", "Ensemble Cash-Gated"}
+        )
     }
 
 

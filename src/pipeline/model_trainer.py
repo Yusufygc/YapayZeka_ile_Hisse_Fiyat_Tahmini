@@ -103,7 +103,12 @@ class ModelTrainer:
     def _make_lstm_lite(self, stage: str):
         return model_factory.make_lstm_lite(self.deep_config, stage)
 
+    def _make_attention_lstm_v2(self, stage: str):
+        return model_factory.make_attention_lstm_v2(self.deep_config, stage)
+
     def _min_sequence_samples_for(self, model_name: str) -> int:
+        if model_name == "AttentionLSTM v2":
+            return int(self.deep_config.get("attention_lstm_v2_min_sequence_samples", 252))
         if model_name == "LSTM Lite":
             return int(self.deep_config.get("lstm_lite_min_sequence_samples", 252))
         return int(self.deep_config.get("min_sequence_samples", 64))

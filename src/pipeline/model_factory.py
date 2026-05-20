@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Callable
 
 from src.models.arima_model import ARIMAModel
+from src.models.attention_lstm_v2_model import AttentionLSTMV2Model
 from src.models.lstm_lite_model import LSTMLiteModel
 from src.models.lstm_model import AttentionLSTMModel
 from src.models.random_forest_model import RandomForestModel
@@ -65,10 +66,27 @@ def build_deep_config(config: dict) -> dict:
             "tune_on_fit": False,
             "tune_n_trials": 12,
         },
+        "attention_lstm_v2_min_sequence_samples": 252,
+        "attention_lstm_v2": {
+            "units_1": 64,
+            "units_2": 32,
+            "dense_units": 32,
+            "dropout": 0.30,
+            "learning_rate": 0.0005,
+            "loss": "huber",
+            "epochs_single": 80,
+            "epochs_wf": 50,
+            "epochs_final": 50,
+            "patience": 12,
+            "lr_patience": 4,
+            "batch_size": 32,
+            "tune_on_fit": False,
+            "tune_n_trials": 12,
+        },
     }
     merged = dict(default)
     merged.update({key: value for key, value in config.items() if key not in {"lstm", "lstm_lite"}})
-    for section in ("lstm", "lstm_lite"):
+    for section in ("lstm", "lstm_lite", "attention_lstm_v2"):
         section_cfg = dict(default[section])
         section_cfg.update(config.get(section, {}))
         merged[section] = section_cfg
@@ -129,6 +147,26 @@ def make_lstm_lite(deep_config: dict, stage: str) -> LSTMLiteModel:
         min_val_samples=int(deep_config.get("min_validation_samples", 32)),
         tune_on_fit=bool(cfg.get("tune_on_fit", False)),
         tune_n_trials=int(cfg.get("tune_n_trials", 12)),
+    )
+
+
+def make_attention_lstm_v2(deep_config: dict, stage: str) -> AttentionLSTMV2Model:
+    cfg = deep_config["attention_lstm_v2"]
+    return AttentionLSTMV2Model(
+        units_1=int(cfg.get("units_1", 64)),
+        units_2=int(cfg.get("units_2", 32)),
+        dense_units=int(cfg.get("dense_units", 32)),
+        epochs=int(cfg.get(f"epochs_{stage}", cfg.get("epochs_single", 80))),
+        patience=int(cfg.get("patience", 12)),
+        dropout_rate=float(cfg.get("dropout", 0.30)),
+        batch_size=int(cfg.get("batch_size", 32)),
+        learning_rate=float(cfg.get("learning_rate", 0.0005)),
+        lr_patience=int(cfg.get("lr_patience", 4)),
+        validation_ratio=float(deep_config.get("validation_ratio", 0.1)),
+        min_val_samples=int(deep_config.get("min_validation_samples", 32)),
+        tune_on_fit=bool(cfg.get("tune_on_fit", False)),
+        tune_n_trials=int(cfg.get("tune_n_trials", 12)),
+        loss=str(cfg.get("loss", "huber")),
     )
 
 

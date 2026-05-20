@@ -16,6 +16,41 @@ from typing import Any, Dict, List, Optional
 
 from src.database import stock_model_db as schema
 
+PRODUCTION_ENSEMBLE_METHODS = {"Inverse RMSE", "Cash-Gated"}
+
+
+def _parse_jsonish(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    if value in (None, ""):
+        return None
+    try:
+        return json.loads(str(value).replace("'", '"'))
+    except Exception:
+        return value
+
+
+def _ensemble_metadata_for(
+    model_name: str,
+    metrics: Dict[str, Any],
+    dataset_metadata: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    if not str(model_name).startswith("Ensemble "):
+        return None
+    method = str(metrics.get("Ensemble_Method") or str(model_name).replace("Ensemble ", ""))
+    weights = _parse_jsonish(metrics.get("Ensemble_Weights"))
+    source_ids = _parse_jsonish(metrics.get("Ensemble_Source_Experiment_IDs"))
+    return {
+        "type": "ensemble",
+        "method": method,
+        "production_method": method in PRODUCTION_ENSEMBLE_METHODS,
+        "members": list(weights.keys()) if isinstance(weights, dict) else [],
+        "weights": weights if isinstance(weights, dict) else {},
+        "source_experiment_ids": source_ids if isinstance(source_ids, list) else [],
+        "source_run_ids": _parse_jsonish(metrics.get("Ensemble_Source_Run_IDs")) or [],
+        "run_id": dataset_metadata.get("run_id"),
+    }
+
 
 class SchemaRepository:
     def __init__(self, db) -> None:
@@ -30,10 +65,12 @@ class SchemaRepository:
             conn.execute(schema._CREATE_FORECAST_RUNS)
             conn.execute(schema._CREATE_FORECAST_POINTS)
             conn.execute(schema._CREATE_FORECAST_ACCURACY)
+            conn.execute(schema._CREATE_ANALYSIS_REFRESH_JOBS)
             self.ensure_column(conn, "forecast_runs", "run_key", "TEXT")
             conn.execute(schema._CREATE_IDX_FORECAST_SYMBOL)
             conn.execute(schema._CREATE_IDX_FORECAST_RUN_KEY)
             conn.execute(schema._CREATE_IDX_FORECAST_POINTS_DATE)
+            conn.execute(schema._CREATE_IDX_REFRESH_JOBS_SYMBOL)
             self._ensure_experiment_columns(conn)
             self._ensure_best_model_columns(conn)
             self._ensure_forecast_run_columns(conn)
@@ -54,10 +91,15 @@ class SchemaRepository:
         self.ensure_column(conn, "experiments", "selection_source", "TEXT")
         self.ensure_column(conn, "experiments", "run_id", "TEXT")
         self.ensure_column(conn, "experiments", "stability_score", "REAL")
+        self.ensure_column(conn, "experiments", "ensemble_metadata_json", "TEXT")
 
     def _ensure_forecast_run_columns(self, conn: sqlite3.Connection) -> None:
         self.ensure_column(conn, "forecast_runs", "ensemble_direction_agreement", "REAL")
         self.ensure_column(conn, "forecast_runs", "live_status", "TEXT NOT NULL DEFAULT 'healthy'")
+        self.ensure_column(conn, "forecast_runs", "forecast_strategy", "TEXT")
+        self.ensure_column(conn, "forecast_runs", "artifact_mode", "TEXT")
+        self.ensure_column(conn, "forecast_runs", "forecast_warnings_json", "TEXT")
+        self.ensure_column(conn, "forecast_runs", "ensemble_metadata_json", "TEXT")
 
     def _ensure_best_model_columns(self, conn: sqlite3.Connection) -> None:
         self.ensure_column(conn, "best_models", "target_mode", "TEXT NOT NULL DEFAULT 'price'")
@@ -69,6 +111,7 @@ class SchemaRepository:
         self.ensure_column(conn, "best_models", "selection_source", "TEXT")
         self.ensure_column(conn, "best_models", "eligibility_status", "TEXT NOT NULL DEFAULT 'eligible'")
         self.ensure_column(conn, "best_models", "eligibility_reason", "TEXT NOT NULL DEFAULT ''")
+        self.ensure_column(conn, "best_models", "ensemble_metadata_json", "TEXT")
 
     def migrate_legacy_production_candidates(self, conn: sqlite3.Connection) -> None:
         placeholders = ",".join("?" for _ in schema.BENCHMARK_MODELS)
@@ -92,7 +135,10 @@ class SchemaRepository:
             WHERE experiment_id NOT IN (
                 SELECT id
                 FROM experiments
-                WHERE validation_mode = 'final_holdout'
+                WHERE (
+                    validation_mode = 'final_holdout'
+                    OR model_name IN ('Ensemble Inverse RMSE', 'Ensemble Cash-Gated')
+                )
                   AND COALESCE(is_production_candidate, 0) = 1
             )
             """
@@ -101,7 +147,10 @@ class SchemaRepository:
             """
             SELECT DISTINCT stock_symbol
             FROM experiments
-            WHERE validation_mode = 'final_holdout'
+            WHERE (
+                validation_mode = 'final_holdout'
+                OR model_name IN ('Ensemble Inverse RMSE', 'Ensemble Cash-Gated')
+            )
               AND COALESCE(is_production_candidate, 0) = 1
             """
         ).fetchall()
@@ -117,7 +166,10 @@ class SchemaRepository:
             SELECT *
             FROM experiments
             WHERE stock_symbol = ?
-              AND validation_mode = 'final_holdout'
+              AND (
+                  validation_mode = 'final_holdout'
+                  OR model_name IN ('Ensemble Inverse RMSE', 'Ensemble Cash-Gated')
+              )
               AND COALESCE(is_production_candidate, 0) = 1
             ORDER BY trained_at DESC, id DESC
             LIMIT 1
@@ -149,10 +201,12 @@ class ExperimentRepository:
         trained_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         dataset_metadata = dataset_metadata or {}
         run_id = run_id or dataset_metadata.get("run_id")
+        ensemble_metadata = _ensemble_metadata_for(model_name, metrics, dataset_metadata)
         experiment_id = self._insert_experiment(
             stock_symbol, model_name, metrics, model_path, features or [],
             dataset_hash, validation_mode, dataset_metadata,
             is_production_candidate, selection_source, run_id, composite, trained_at,
+            ensemble_metadata,
         )
         self.best_models.update_production_best_model(
             stock_symbol=stock_symbol,
@@ -170,6 +224,7 @@ class ExperimentRepository:
             is_production_candidate=bool(is_production_candidate),
             selection_source=selection_source,
             run_id=run_id,
+            ensemble_metadata=ensemble_metadata,
         )
         print(
             f"  [DB] {stock_symbol} | {model_name:15s} -> "
@@ -194,6 +249,7 @@ class ExperimentRepository:
         run_id: Optional[str],
         composite: float,
         trained_at: str,
+        ensemble_metadata: Optional[Dict[str, Any]] = None,
     ) -> int:
         stability = self.db._optional_float(metrics.get("Stability_Score"))
         with self.db._connect() as conn:
@@ -204,9 +260,9 @@ class ExperimentRepository:
                      mae, rmse, mape, dir_acc, sharpe, hit_rate,
                      composite_score, model_path, features, dataset_hash,
                      is_production_candidate, selection_source, run_id, trained_at,
-                     stability_score)
+                     stability_score, ensemble_metadata_json)
                 VALUES
-                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     stock_symbol, model_name, validation_mode,
@@ -220,6 +276,7 @@ class ExperimentRepository:
                     dataset_hash, int(bool(is_production_candidate)),
                     selection_source, run_id, trained_at,
                     stability,
+                    json.dumps(ensemble_metadata, ensure_ascii=False) if ensemble_metadata else None,
                 ),
             )
             return int(cursor.lastrowid)
@@ -331,8 +388,14 @@ class BestModelRepository:
         is_production_candidate: bool,
         selection_source: Optional[str],
         run_id: Optional[str],
+        ensemble_metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        if validation_mode != "final_holdout" or not is_production_candidate:
+        is_prod_ensemble = (
+            str(model_name).startswith("Ensemble ")
+            and ensemble_metadata
+            and bool(ensemble_metadata.get("production_method"))
+        )
+        if (validation_mode != "final_holdout" and not is_prod_ensemble) or not is_production_candidate:
             return
         from src.pipeline.selection_guard import evaluate_best_model_eligibility
 
@@ -340,6 +403,9 @@ class BestModelRepository:
             "model_name": model_name,
             "is_production_candidate": int(is_production_candidate),
             "Trade_Count": metrics.get("Trade_Count", 0),
+            "RMSE_vs_benchmark": metrics.get("RMSE_vs_benchmark"),
+            "Validation_Mode": validation_mode,
+            "ensemble_metadata": ensemble_metadata,
         }
         eligibility_status, eligibility_reason = evaluate_best_model_eligibility(eligibility_row)
 
@@ -366,6 +432,7 @@ class BestModelRepository:
                 selection_source=selection_source,
                 eligibility_status=eligibility_status,
                 eligibility_reason=eligibility_reason,
+                ensemble_metadata=ensemble_metadata,
             )
             self._print_best_update(stock_symbol, model_name, experiment_id, existing)
 
@@ -381,6 +448,16 @@ class BestModelRepository:
 
     @staticmethod
     def upsert_best_from_row(conn: sqlite3.Connection, row) -> None:
+        from src.pipeline.selection_guard import evaluate_best_model_eligibility
+
+        ensemble_metadata = _parse_jsonish(row["ensemble_metadata_json"])
+        eligibility_status, eligibility_reason = evaluate_best_model_eligibility({
+            "model_name": row["model_name"],
+            "is_production_candidate": row["is_production_candidate"],
+            "Trade_Count": row["trade_count"] if "trade_count" in row.keys() else 0,
+            "RMSE_vs_benchmark": row["rmse_vs_benchmark"] if "rmse_vs_benchmark" in row.keys() else None,
+            "ensemble_metadata": ensemble_metadata,
+        })
         BestModelRepository.upsert_best_from_values(
             conn=conn,
             stock_symbol=row["stock_symbol"],
@@ -404,6 +481,9 @@ class BestModelRepository:
             dataset_hash=row["dataset_hash"],
             run_id=row["run_id"],
             selection_source=row["selection_source"],
+            eligibility_status=eligibility_status,
+            eligibility_reason=eligibility_reason,
+            ensemble_metadata=ensemble_metadata,
         )
 
     @staticmethod
@@ -426,7 +506,11 @@ class BestModelRepository:
         selection_source: Optional[str],
         eligibility_status: str = "eligible",
         eligibility_reason: str = "",
+        ensemble_metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
+        ensemble_metadata_json = (
+            json.dumps(ensemble_metadata, ensure_ascii=False) if ensemble_metadata else None
+        )
         conn.execute(
             """
             INSERT INTO best_models
@@ -435,8 +519,8 @@ class BestModelRepository:
                  dataset_hash, run_id, selection_source,
                  mae, rmse, mape, dir_acc, sharpe, hit_rate,
                  model_path, updated_at,
-                 eligibility_status, eligibility_reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 eligibility_status, eligibility_reason, ensemble_metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(stock_symbol) DO UPDATE SET
                 model_name          = excluded.model_name,
                 experiment_id       = excluded.experiment_id,
@@ -457,7 +541,8 @@ class BestModelRepository:
                 model_path          = excluded.model_path,
                 updated_at          = excluded.updated_at,
                 eligibility_status  = excluded.eligibility_status,
-                eligibility_reason  = excluded.eligibility_reason
+                eligibility_reason  = excluded.eligibility_reason,
+                ensemble_metadata_json = excluded.ensemble_metadata_json
             """,
             (
                 stock_symbol, model_name, experiment_id, composite_score,
@@ -466,7 +551,7 @@ class BestModelRepository:
                 metrics.get("MAE"), metrics.get("RMSE"), metrics.get("MAPE"),
                 metrics.get("Dir_Acc"), metrics.get("Sharpe"), metrics.get("Hit_Rate"),
                 model_path, updated_at,
-                eligibility_status, eligibility_reason,
+                eligibility_status, eligibility_reason, ensemble_metadata_json,
             ),
         )
 
@@ -514,6 +599,10 @@ class ForecastRepository:
         status: str = "pending",
         run_at: Optional[str] = None,
         ensemble_direction_agreement: Optional[float] = None,
+        forecast_strategy: Optional[str] = None,
+        artifact_mode: Optional[str] = None,
+        forecast_warnings: Optional[List[str]] = None,
+        ensemble_metadata: Optional[Dict[str, Any]] = None,
     ) -> int:
         stock_symbol = stock_symbol.upper()
         run_at = run_at or datetime.now().isoformat(timespec="seconds")
@@ -527,6 +616,10 @@ class ForecastRepository:
                 run_at, last_observed_date, last_close, horizon_days,
                 trend_label, weekly_expected_return, trend_threshold, rules_version, status,
                 ensemble_direction_agreement=ensemble_direction_agreement,
+                forecast_strategy=forecast_strategy,
+                artifact_mode=artifact_mode,
+                forecast_warnings=forecast_warnings,
+                ensemble_metadata=ensemble_metadata,
             )
             run_id = int(conn.execute(
                 "SELECT id FROM forecast_runs WHERE run_key = ?",
@@ -542,6 +635,10 @@ class ForecastRepository:
         last_observed_date, last_close, horizon_days, trend_label,
         weekly_expected_return, trend_threshold, rules_version, status,
         ensemble_direction_agreement=None,
+        forecast_strategy=None,
+        artifact_mode=None,
+        forecast_warnings=None,
+        ensemble_metadata=None,
     ) -> None:
         conn.execute(
             """
@@ -549,8 +646,10 @@ class ForecastRepository:
                 (run_key, stock_symbol, model_name, source_experiment_id,
                  run_at, last_observed_date, last_close, horizon_days,
                  trend_label, weekly_expected_return, trend_threshold,
-                 rules_version, status, ensemble_direction_agreement)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 rules_version, status, ensemble_direction_agreement,
+                 forecast_strategy, artifact_mode, forecast_warnings_json,
+                 ensemble_metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_key) DO UPDATE SET
                 run_at                       = excluded.run_at,
                 last_close                   = excluded.last_close,
@@ -558,7 +657,11 @@ class ForecastRepository:
                 weekly_expected_return       = excluded.weekly_expected_return,
                 trend_threshold              = excluded.trend_threshold,
                 status                       = excluded.status,
-                ensemble_direction_agreement = excluded.ensemble_direction_agreement
+                ensemble_direction_agreement = excluded.ensemble_direction_agreement,
+                forecast_strategy            = excluded.forecast_strategy,
+                artifact_mode                 = excluded.artifact_mode,
+                forecast_warnings_json       = excluded.forecast_warnings_json,
+                ensemble_metadata_json       = excluded.ensemble_metadata_json
             """,
             (
                 run_key, stock_symbol, model_name, source_experiment_id, run_at,
@@ -566,6 +669,10 @@ class ForecastRepository:
                 trend_label, float(weekly_expected_return), float(trend_threshold),
                 rules_version, status,
                 float(ensemble_direction_agreement) if ensemble_direction_agreement is not None else None,
+                forecast_strategy,
+                artifact_mode,
+                json.dumps(forecast_warnings or [], ensure_ascii=False),
+                json.dumps(ensemble_metadata, ensure_ascii=False) if ensemble_metadata else None,
             ),
         )
 
@@ -781,9 +888,12 @@ class ForecastResolutionRepository:
         import pandas as pd
 
         df = pd.read_csv(csv_path)
-        if "Date" not in df.columns or "Close" not in df.columns:
-            raise ValueError("CSV must include Date and Close columns.")
-        df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
+        date_col = _find_column(df.columns, ["Date", "Tarih"])
+        close_col = _find_column(df.columns, ["Close", "Kapanış", "Kapanis", "Adj Close", "Düzeltilmiş_Kapanış"])
+        if date_col is None or close_col is None:
+            raise ValueError("CSV must include Date/Tarih and Close/Kapanış columns.")
+        df["Date"] = pd.to_datetime(df[date_col], dayfirst=True, errors="coerce").dt.strftime("%Y-%m-%d")
+        df["Close"] = pd.to_numeric(df[close_col], errors="coerce")
         actuals = {
             row["Date"]: float(row["Close"])
             for _, row in df.dropna(subset=["Date", "Close"]).iterrows()
@@ -863,3 +973,12 @@ class ForecastResolutionRepository:
             "resolved_count": len(rows),
             "model_status": model_status,
         }
+
+
+def _find_column(columns, candidates: list[str]) -> Optional[str]:
+    lookup = {str(col).strip().lower(): str(col) for col in columns}
+    for candidate in candidates:
+        found = lookup.get(candidate.strip().lower())
+        if found is not None:
+            return found
+    return None

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """GET /analysis/{symbol} endpoint testleri — tüm status kod senaryoları."""
 import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -84,6 +85,50 @@ class TestAnalysisService:
         result = svc.build("TUPRS")
         assert result.analysis_status == "no_forecast"
         assert result.model.model_name == "XGBoost"
+        assert result.refresh_status == "queued"
+        assert result.refresh_reason == "missing_forecast_for_best_model"
+        assert result.refresh_job_id
+
+    def test_forecast_must_match_best_model_source_experiment(self):
+        from src.database.stock_model_db import StockModelDB
+
+        tmp = tempfile.mktemp(suffix=".db")
+        db = StockModelDB(tmp)
+        exp_id = db.log_experiment(
+            stock_symbol="ASELS",
+            model_name="LSTM Lite",
+            metrics={"MAE": 1.0, "RMSE": 2.0, "Dir_Acc": 58.0, "Sharpe": 0.4, "Trade_Count": 10},
+            validation_mode="final_holdout",
+            is_production_candidate=True,
+            run_id="lstm-run",
+        )
+        arima_exp_id = db.log_experiment(
+            stock_symbol="ASELS",
+            model_name="ARIMA",
+            metrics={"MAE": 2.0, "RMSE": 3.0, "Dir_Acc": 48.0, "Sharpe": -0.1, "Trade_Count": 10},
+            validation_mode="walk_forward",
+            is_production_candidate=False,
+            run_id="arima-run",
+        )
+        db.log_forecast_run(
+            stock_symbol="ASELS",
+            model_name="ARIMA",
+            source_experiment_id=arima_exp_id,
+            last_observed_date="2026-05-19",
+            last_close=100.0,
+            horizon_days=5,
+            trend_label="UP",
+            weekly_expected_return=0.02,
+            trend_threshold=0.01,
+            rules_version="v1",
+            points=[{"target_date": "2026-05-20", "horizon_index": 1, "bounded_predicted_close": 102.0}],
+        )
+
+        result = AnalysisService(db_path=tmp, outputs_base=tempfile.mkdtemp()).build("ASELS")
+        assert exp_id
+        assert result.analysis_status == "no_forecast"
+        assert result.model.model_name == "LSTM Lite"
+        assert result.forecast.points == []
 
     def test_stale_data_status(self):
         # 2020'den kalma bir tarih → kesinlikle stale
@@ -100,6 +145,60 @@ class TestAnalysisService:
         result = svc.build("TUPRS")
         # Fresh veri, XAI yok → xai_unavailable ya da low_confidence (dir_acc güven mekanizmasına bağlı)
         assert result.analysis_status in ("xai_unavailable", "low_confidence", "ok")
+
+    def test_ensemble_forecast_source_metadata_surfaces(self):
+        from src.database.stock_model_db import StockModelDB
+
+        tmp = tempfile.mktemp(suffix=".db")
+        db = StockModelDB(tmp)
+        exp_id = db.log_experiment(
+            stock_symbol="ASELS",
+            model_name="Ensemble Inverse RMSE",
+            metrics={
+                "MAE": 1.0,
+                "RMSE": 2.0,
+                "Dir_Acc": 58.0,
+                "Sharpe": 0.4,
+                "Trade_Count": 10,
+                "RMSE_vs_benchmark": 0.95,
+                "Ensemble_Method": "Inverse RMSE",
+                "Ensemble_Weights": '{"Ridge Return": 0.4, "LSTM": 0.6}',
+            },
+            validation_mode="walk_forward",
+            is_production_candidate=True,
+            selection_source="walk_forward_production_ensemble",
+            run_id="ens-run",
+        )
+        db.log_forecast_run(
+            stock_symbol="ASELS",
+            model_name="Ensemble Inverse RMSE",
+            source_experiment_id=exp_id,
+            last_observed_date="2026-05-19",
+            last_close=100.0,
+            horizon_days=5,
+            trend_label="UP",
+            weekly_expected_return=0.02,
+            trend_threshold=0.01,
+            rules_version="v1",
+            points=[{"target_date": "2026-05-20", "horizon_index": 1, "bounded_predicted_close": 102.0}],
+            forecast_strategy="ensemble_recursive_direct_target",
+            artifact_mode="artifact_loaded",
+            forecast_warnings=["frozen_exogenous_features"],
+            ensemble_metadata={
+                "method": "Inverse RMSE",
+                "members": ["Ridge Return", "LSTM"],
+                "weights": {"Ridge Return": 0.4, "LSTM": 0.6},
+                "source_experiment_ids": [1, 2],
+            },
+        )
+
+        result = AnalysisService(db_path=tmp, outputs_base=tempfile.mkdtemp()).build("ASELS")
+
+        assert result.forecast_source is not None
+        assert result.forecast_source.type == "ensemble"
+        assert result.forecast_source.method == "Inverse RMSE"
+        assert result.forecast_source.weights["LSTM"] == 0.6
+        assert result.forecast_source.forecast_strategy == "ensemble_recursive_direct_target"
 
     def test_disclaimer_always_present(self):
         tmp_db = _make_db_with_model()
@@ -127,6 +226,175 @@ class TestAnalysisService:
             assert result.forecast.horizon_days == 5
             assert len(result.forecast.points) == 1
 
+    def test_refresh_job_deduplicates_queued_work(self):
+        from src.database.stock_model_db import StockModelDB
+
+        tmp = tempfile.mktemp(suffix=".db")
+        db = StockModelDB(tmp)
+        first = db.create_or_get_refresh_job(symbol="TUPRS", reason="missing_forecast_for_best_model")
+        second = db.create_or_get_refresh_job(symbol="TUPRS", reason="missing_forecast_for_best_model")
+        assert first["job_id"] == second["job_id"]
+        assert db.get_refresh_job(first["job_id"])["status"] == "queued"
+
+    def test_missing_forecast_completed_refresh_reloads_forecast(self, monkeypatch):
+        from src.database.stock_model_db import StockModelDB
+
+        project_root = Path(tempfile.mkdtemp())
+        data_dir = project_root / "data"
+        data_dir.mkdir(parents=True)
+        (data_dir / "ASELS.csv").write_text("Date,Close\n2026-05-19,100.0\n", encoding="utf-8")
+
+        tmp = tempfile.mktemp(suffix=".db")
+        db = StockModelDB(tmp)
+        exp_id = db.log_experiment(
+            stock_symbol="ASELS",
+            model_name="LSTM Lite",
+            metrics={"MAE": 1.0, "RMSE": 2.0, "Dir_Acc": 60.0, "Sharpe": 0.5, "Trade_Count": 10},
+            validation_mode="final_holdout",
+            is_production_candidate=True,
+            run_id="lstm-run",
+        )
+
+        def fake_refresh(self, *, symbol, reason, best_model=None, wait_timeout_seconds=0.0):
+            self.db.log_forecast_run(
+                stock_symbol=symbol,
+                model_name=best_model["model_name"],
+                source_experiment_id=best_model["experiment_id"],
+                last_observed_date="2026-05-19",
+                last_close=100.0,
+                horizon_days=5,
+                trend_label="up",
+                weekly_expected_return=0.02,
+                trend_threshold=0.01,
+                rules_version="v1",
+                points=[{"target_date": "2026-05-20", "horizon_index": 1, "bounded_predicted_close": 102.0}],
+            )
+            return {"job_id": "job-sync", "status": "completed", "reason": reason}
+
+        monkeypatch.setattr(
+            "src.api.services.analysis_service.DataRefreshService.ensure_refresh_job",
+            fake_refresh,
+        )
+        result = AnalysisService(
+            db_path=tmp,
+            outputs_base=tempfile.mkdtemp(),
+            project_root=str(project_root),
+            enable_background_refresh=True,
+            refresh_wait_timeout_seconds=90,
+        ).build("ASELS")
+
+        assert exp_id
+        assert result.analysis_status != "no_forecast"
+        assert result.refresh_status == "completed"
+        assert result.forecast_source.source_experiment_id == exp_id
+        assert len(result.forecast.points) == 1
+
+    def test_missing_forecast_timeout_keeps_refresh_status(self, monkeypatch):
+        project_root = Path(tempfile.mkdtemp())
+        data_dir = project_root / "data"
+        data_dir.mkdir(parents=True)
+        (data_dir / "ASELS.csv").write_text("Date,Close\n2026-05-19,100.0\n", encoding="utf-8")
+
+        tmp_db = _make_db_with_model(symbol="ASELS", model_name="LSTM Lite", with_forecast=False)
+
+        def fake_refresh(self, *, symbol, reason, best_model=None, wait_timeout_seconds=0.0):
+            return {"job_id": "job-running", "status": "running", "reason": reason}
+
+        monkeypatch.setattr(
+            "src.api.services.analysis_service.DataRefreshService.ensure_refresh_job",
+            fake_refresh,
+        )
+        result = AnalysisService(
+            db_path=tmp_db,
+            outputs_base=tempfile.mkdtemp(),
+            project_root=str(project_root),
+            enable_background_refresh=True,
+            refresh_wait_timeout_seconds=0.01,
+        ).build("ASELS")
+
+        assert result.analysis_status == "no_forecast"
+        assert result.refresh_status == "running"
+        assert result.refresh_job_id == "job-running"
+
+    def test_stale_forecast_completed_refresh_reloads_current_forecast(self, monkeypatch):
+        project_root = Path(tempfile.mkdtemp())
+        data_dir = project_root / "data"
+        data_dir.mkdir(parents=True)
+        csv_path = data_dir / "ASELS.csv"
+        csv_path.write_text("Date,Close\n2020-01-01,100.0\n", encoding="utf-8")
+
+        tmp_db = _make_db_with_model(
+            symbol="ASELS",
+            model_name="LSTM Lite",
+            with_forecast=True,
+            freshness_date="2020-01-01",
+        )
+
+        def fake_refresh(self, *, symbol, reason, best_model=None, wait_timeout_seconds=0.0):
+            csv_path.write_text("Date,Close\n2026-05-19,110.0\n", encoding="utf-8")
+            self.db.log_forecast_run(
+                stock_symbol=symbol,
+                model_name=best_model["model_name"],
+                source_experiment_id=best_model["experiment_id"],
+                last_observed_date="2026-05-19",
+                last_close=110.0,
+                horizon_days=5,
+                trend_label="flat",
+                weekly_expected_return=0.0,
+                trend_threshold=0.01,
+                rules_version="v1",
+                points=[{"target_date": "2026-05-20", "horizon_index": 1, "bounded_predicted_close": 110.0}],
+            )
+            return {"job_id": "job-stale-sync", "status": "completed", "reason": reason}
+
+        monkeypatch.setattr(
+            "src.api.services.analysis_service.DataRefreshService.ensure_refresh_job",
+            fake_refresh,
+        )
+        result = AnalysisService(
+            db_path=tmp_db,
+            outputs_base=tempfile.mkdtemp(),
+            project_root=str(project_root),
+            enable_background_refresh=True,
+            refresh_wait_timeout_seconds=90,
+        ).build("ASELS")
+
+        assert result.refresh_status == "completed"
+        assert result.data.last_observed_date == "2026-05-19"
+        assert result.data.last_close == 110.0
+
+    def test_missing_forecast_failed_refresh_surfaces_failure_reason(self, monkeypatch):
+        project_root = Path(tempfile.mkdtemp())
+        data_dir = project_root / "data"
+        data_dir.mkdir(parents=True)
+        (data_dir / "ASELS.csv").write_text("Date,Close\n2026-05-19,100.0\n", encoding="utf-8")
+
+        tmp_db = _make_db_with_model(symbol="ASELS", model_name="LSTM Lite", with_forecast=False)
+
+        def fake_refresh(self, *, symbol, reason, best_model=None, wait_timeout_seconds=0.0):
+            return {
+                "job_id": "job-failed",
+                "status": "failed",
+                "reason": reason,
+                "payload_json": '{"failure_reason":"data_update_failed"}',
+            }
+
+        monkeypatch.setattr(
+            "src.api.services.analysis_service.DataRefreshService.ensure_refresh_job",
+            fake_refresh,
+        )
+        result = AnalysisService(
+            db_path=tmp_db,
+            outputs_base=tempfile.mkdtemp(),
+            project_root=str(project_root),
+            enable_background_refresh=True,
+            refresh_wait_timeout_seconds=90,
+        ).build("ASELS")
+
+        assert result.analysis_status == "no_forecast"
+        assert result.refresh_status == "failed"
+        assert result.refresh_reason == "data_update_failed"
+
 
 class TestAnalysisRouter:
     def test_endpoint_importable(self):
@@ -137,3 +405,11 @@ class TestAnalysisRouter:
         from src.api.routers.analysis import router
         routes = {r.path for r in router.routes}
         assert "/analysis/{symbol}" in routes
+
+    def test_cors_defaults_are_local_only(self):
+        from src.api.runtime_config import get_cors_settings
+
+        settings = get_cors_settings()
+        assert "*" not in settings.allow_origins
+        assert settings.allow_origin_regex
+        assert settings.mode in {"local-only", "local-plus-env"}
