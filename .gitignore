@@ -118,3 +118,4 @@ cover/
 pyproject.toml
 .codex_tmp/
 yeniTasarim/
+.graphifyignore
