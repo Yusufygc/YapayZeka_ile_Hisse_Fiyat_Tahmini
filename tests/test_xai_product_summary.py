@@ -120,3 +120,56 @@ class TestBuildXaiProductSummary:
         assert result.top_positive_reasons[0].feature_name == "A"
         # ascending sort → en düşük önem değeri (J) ilk sıradadır
         assert result.top_negative_reasons[0].feature_name == "J"
+
+    def test_standard_top_reasons_reads_semicolon_csv(self):
+        tmpdir = tempfile.mkdtemp()
+        xai_csv = os.path.join(tmpdir, "ASELS", "latest", "xai", "csv")
+        os.makedirs(xai_csv)
+        _write_csv(
+            xai_csv,
+            "xai_top_reasons_wf.csv",
+            """
+            Model;Feature;Readable_Feature;Feature_Group;Importance;Contribution;Direction;Reason;Method;Approximate
+            LSTM;Return;Gunluk getiri;technical;0.12;0.03;positive;reason;sequence;True
+            LSTM;RSI_14;RSI;technical;-0.05;-0.01;negative;reason;sequence;True
+            """,
+        )
+
+        result = build_xai_product_summary("ASELS", "LSTM", outputs_base=tmpdir)
+
+        assert result.available is True
+        assert result.top_positive_reasons[0].feature_name == "Return"
+        assert result.top_negative_reasons[0].feature_name == "RSI_14"
+
+    def test_run_id_xai_lookup_preferred_over_stale_latest(self):
+        tmpdir = tempfile.mkdtemp()
+        latest_csv = os.path.join(tmpdir, "ASELS", "latest", "xai", "csv")
+        run_csv = os.path.join(tmpdir, "ASELS", "runs", "lstm-run", "xai", "csv")
+        os.makedirs(latest_csv)
+        os.makedirs(run_csv)
+        _write_csv(
+            latest_csv,
+            "xai_top_reasons_wf.csv",
+            """
+            Model;Feature;Readable_Feature;Feature_Group;Importance;Contribution;Direction;Reason;Method;Approximate
+            NLinear;NFeature;N feature;technical;0.20;0.02;positive;reason;sequence;True
+            """,
+        )
+        _write_csv(
+            run_csv,
+            "xai_top_reasons_wf.csv",
+            """
+            Model;Feature;Readable_Feature;Feature_Group;Importance;Contribution;Direction;Reason;Method;Approximate
+            LSTM;LFeature;L feature;technical;0.30;0.03;positive;reason;sequence;True
+            """,
+        )
+
+        result = build_xai_product_summary(
+            "ASELS",
+            "LSTM",
+            outputs_base=tmpdir,
+            run_id="lstm-run",
+        )
+
+        assert result.available is True
+        assert result.top_positive_reasons[0].feature_name == "LFeature"
