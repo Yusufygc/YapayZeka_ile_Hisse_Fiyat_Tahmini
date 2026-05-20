@@ -14,6 +14,22 @@ from src.forecasting.artifacts import save_forecast_artifact_package
 from src.pipeline.evaluation_services import _OwnerBackedService
 
 _KERAS_MODELS = {"LSTM", "LSTM Lite", "AttentionLSTM v2"}
+_BACKTEST_REGISTRY_FIELDS = (
+    "Net_Return",
+    "BuyHold_Return",
+    "Max_Drawdown",
+    "Trade_Count",
+    "Signal_Diagnosis",
+)
+
+
+def _merge_backtest_metrics(model_metrics_by_model: dict, backtest_results: dict) -> None:
+    backtest_metrics = (backtest_results or {}).get("metrics") or {}
+    for model_name, model_metrics in model_metrics_by_model.items():
+        bt_metrics = backtest_metrics.get(model_name) or {}
+        for field in _BACKTEST_REGISTRY_FIELDS:
+            if field in bt_metrics:
+                model_metrics[field] = bt_metrics[field]
 
 
 def _write_forecast_artifact_sidecars(owner, *, model_name: str, model_path: str, tensors: dict, validation_mode: str) -> None:
@@ -92,6 +108,12 @@ class SingleSplitEvaluationWorkflow(_OwnerBackedService):
         self.single_backtest_inputs = self._filter_reportable_models(self.single_backtest_inputs, metrics)
         metrics = self._attach_leakage_guard_metadata(metrics)
         metrics = self._attach_model_family_metadata(metrics)
+        backtest_results = self._run_backtests(
+            self.single_backtest_inputs,
+            suffix="latest",
+            model_metrics_by_model=metrics,
+        )
+        _merge_backtest_metrics(metrics, backtest_results)
         self.latest_model_metrics["latest"] = metrics
 
         for name, model_metrics in metrics.items():
@@ -142,11 +164,6 @@ class SingleSplitEvaluationWorkflow(_OwnerBackedService):
                     dataset_metadata=self.dataset_metadata,
                 )
 
-        backtest_results = self._run_backtests(
-            self.single_backtest_inputs,
-            suffix="latest",
-            model_metrics_by_model=metrics,
-        )
         xai_payload = self._get_xai_single_split(trained_models, tensors=self.latest_tensors)
 
         # ── Tahmin karşılaştırma grafikleri ─────────────────────────
@@ -210,7 +227,6 @@ class WalkForwardEvaluationWorkflow(_OwnerBackedService):
         )
         wf_results = self._attach_leakage_guard_metadata(wf_results)
         wf_results = self._attach_model_family_metadata(wf_results)
-        self.latest_model_metrics["wf"] = wf_results
         best_model_name = self._select_best_model(wf_results)
         if best_model_name:
             print(f"\n  [INFO] Walk-forward secim modeli: {best_model_name}")
@@ -222,13 +238,14 @@ class WalkForwardEvaluationWorkflow(_OwnerBackedService):
         print(df_wf)
 
         self._attach_stability_scores(wf_results, enriched_fold_metrics)
-        self._log_walk_forward_experiments(wf_results)
-
         backtest_results = self._run_backtests(
             signal_evaluation_backtest_inputs or {},
             suffix="wf",
             model_metrics_by_model=wf_results,
         )
+        _merge_backtest_metrics(wf_results, backtest_results)
+        self.latest_model_metrics["wf"] = wf_results
+        self._log_walk_forward_experiments(wf_results)
         xai_payload = self._get_xai_walk_forward(wf_predictions, wf_y_true, wf_backtest_inputs or {})
 
         self._plot_walk_forward_predictions(wf_predictions, wf_y_true)
@@ -386,21 +403,11 @@ class FinalHoldoutEvaluationWorkflow(_OwnerBackedService):
         metrics = self._attach_model_family_metadata(metrics)
         metrics[model_name]["Selection_Source"] = "walk_forward_composite_score"
         metrics[model_name]["Evaluation_Set_Name"] = "untouched_final_holdout"
-        self.latest_model_metrics["final_holdout"] = metrics
 
         final_metadata = dict(self.dataset_metadata)
         final_metadata["validation_mode"] = "final_holdout"
         final_metadata["protocol_stage"] = "final_holdout_evaluation"
         final_metadata["selected_by"] = "walk_forward_composite_score"
-
-        self.tracker.log_run(
-            model_name,
-            {"validation": "final_holdout", "selected_by": "walk_forward"},
-            metrics[model_name],
-            self.feature_names,
-            self.dataset_hash,
-            final_metadata,
-        )
 
         model_ext = ".keras" if model_name in _KERAS_MODELS else ".pkl"
         model_filename = f"{model_name.replace(' ', '_').lower()}_final_holdout_model{model_ext}"
@@ -420,21 +427,6 @@ class FinalHoldoutEvaluationWorkflow(_OwnerBackedService):
             tensors=tensors,
             suffix="final_holdout",
         )
-
-        if self.stock_db is not None:
-            self.stock_db.log_experiment(
-                stock_symbol=self.stock_symbol,
-                model_name=model_name,
-                metrics=metrics[model_name],
-                model_path=model_path,
-                features=self.feature_names,
-                dataset_hash=self.dataset_hash,
-                validation_mode="final_holdout",
-                dataset_metadata=final_metadata,
-                is_production_candidate=bool(metrics[model_name].get("Candidate_For_Selection", False)),
-                selection_source="walk_forward_composite_score",
-                run_id=self.dataset_metadata.get("run_id"),
-            )
 
         quantiles_df = None
         if quantile_price is not None:
@@ -462,6 +454,33 @@ class FinalHoldoutEvaluationWorkflow(_OwnerBackedService):
         )
 
         # ── Final holdout grafikleri ─────────────────────────────────
+        _merge_backtest_metrics(metrics, backtest_results)
+        self.latest_model_metrics["final_holdout"] = metrics
+
+        self.tracker.log_run(
+            model_name,
+            {"validation": "final_holdout", "selected_by": "walk_forward"},
+            metrics[model_name],
+            self.feature_names,
+            self.dataset_hash,
+            final_metadata,
+        )
+
+        if self.stock_db is not None:
+            self.stock_db.log_experiment(
+                stock_symbol=self.stock_symbol,
+                model_name=model_name,
+                metrics=metrics[model_name],
+                model_path=model_path,
+                features=self.feature_names,
+                dataset_hash=self.dataset_hash,
+                validation_mode="final_holdout",
+                dataset_metadata=final_metadata,
+                is_production_candidate=bool(metrics[model_name].get("Candidate_For_Selection", False)),
+                selection_source="walk_forward_composite_score",
+                run_id=self.dataset_metadata.get("run_id"),
+            )
+
         try:
             plot_comparison(
                 y_true_price,
