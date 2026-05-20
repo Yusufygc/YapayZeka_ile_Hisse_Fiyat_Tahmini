@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from src.api.constants import XAI_CAVEAT
-from src.xai.feature_dictionary import describe_feature
+from src.xai.feature_dictionary import describe_feature, feature_group
 
 _TREE_MODELS = {"XGBoost", "Random Forest", "LightGBM Return", "Random Forest Return"}
 _LINEAR_MODELS = {"Ridge Return", "ElasticNet Return"}
@@ -37,6 +37,11 @@ class XaiFeatureFactor:
     human_label: str
     importance: float
     direction: str
+    feature_group: Optional[str] = None
+    reason: Optional[str] = None
+    method: Optional[str] = None
+    contribution: Optional[float] = None
+    approximate: Optional[bool] = None
 
 
 @dataclass
@@ -264,23 +269,67 @@ def _summary_from_feature_frame(
 ) -> XaiProductSummary:
     if df.empty:
         return _unavailable("xai tablosu bos")
-    work = df.copy().sort_values(importance_col, ascending=False)
+    work = df.copy()
+    work[importance_col] = pd.to_numeric(work[importance_col], errors="coerce")
+    work.dropna(subset=[importance_col], inplace=True)
+    if work.empty:
+        return _unavailable("xai onem degerleri okunamadi")
+
+    contribution_col = "Contribution" if "Contribution" in work.columns else None
+    if contribution_col is not None:
+        work["_xai_contribution"] = pd.to_numeric(work[contribution_col], errors="coerce")
+    else:
+        work["_xai_contribution"] = pd.NA
+
+    direction_col = "Direction" if "Direction" in work.columns else None
+    if direction_col is not None:
+        direction_text = work[direction_col].astype(str).str.strip().str.lower()
+    else:
+        direction_text = pd.Series([""] * len(work), index=work.index)
+
+    positive_direction = direction_text.isin({"positive", "up", "buy", "hold", "long"})
+    negative_direction = direction_text.isin({"negative", "down", "sell", "exit", "short"})
+    has_direction_signal = bool((positive_direction | negative_direction).any())
+    has_contribution_signal = bool(work["_xai_contribution"].notna().any())
+
+    if has_contribution_signal:
+        positive_mask = work["_xai_contribution"].fillna(0) > 0
+        negative_mask = work["_xai_contribution"].fillna(0) < 0
+    elif has_direction_signal:
+        positive_mask = positive_direction
+        negative_mask = negative_direction
+    else:
+        positive_mask = work[importance_col] > 0
+        negative_mask = work[importance_col] < 0
+
+    work["_xai_sort_importance"] = work[importance_col].abs()
+    work.sort_values("_xai_sort_importance", ascending=False, inplace=True)
 
     def _factor(row: Any, direction: str) -> XaiFeatureFactor:
         feature = str(row[feature_col])
-        label = str(row.get(label_col) or describe_feature(feature))
+        label = _resolved_label(feature, row.get(label_col))
+        contribution = _optional_float(row.get("Contribution"))
+        method = _optional_text(row.get("Method"))
+        reason = _optional_text(row.get("Reason"))
+        group = _resolved_group(feature, row.get("Feature_Group"))
+        approximate = _optional_bool(row.get("Approximate"))
         return XaiFeatureFactor(
             feature_name=feature,
             human_label=label,
-            importance=float(row[importance_col]),
+            importance=abs(float(row[importance_col])),
             direction=direction,
+            feature_group=group,
+            reason=reason,
+            method=method,
+            contribution=contribution,
+            approximate=approximate,
         )
 
-    positives = work[work[importance_col] > 0].head(top_k)
-    negatives = work[work[importance_col] < 0].sort_values(importance_col).head(top_k)
+    positives = work[positive_mask].head(top_k)
+    negatives = work[negative_mask].head(top_k)
     if negatives.empty and not positives.empty:
         top_positive = [_factor(row, "positive") for _, row in positives.head(top_k).iterrows()]
-        top_negative = [_factor(row, "negative") for _, row in work.tail(top_k).sort_values(importance_col).iterrows()]
+        top_negative = [_factor(row, "negative") for _, row in work.tail(top_k).iloc[::-1].iterrows()]
     else:
         top_positive = [_factor(row, "positive") for _, row in positives.iterrows()]
         top_negative = [_factor(row, "negative") for _, row in negatives.iterrows()]
@@ -294,3 +343,46 @@ def _summary_from_feature_frame(
         model_family_caveat=_model_family_caveat(model_name),
         caveat=XAI_CAVEAT,
     )
+
+
+def _optional_text(value: Any) -> Optional[str]:
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _resolved_label(feature: str, raw_label: Any) -> str:
+    label = _optional_text(raw_label)
+    if label and "teknik veya makro sinyal" not in label.lower():
+        return label
+    return describe_feature(feature)
+
+
+def _resolved_group(feature: str, raw_group: Any) -> Optional[str]:
+    group = _optional_text(raw_group)
+    if not group or group.lower() == "other":
+        return feature_group(feature)
+    return group
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    if value is None or pd.isna(value):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_bool(value: Any) -> Optional[bool]:
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "evet"}:
+        return True
+    if text in {"false", "0", "no", "hayir", "hayır"}:
+        return False
+    return None
