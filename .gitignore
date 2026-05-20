@@ -20,9 +20,13 @@ kalinanYer1.md
 *.db-wal
 *.db-shm
 *.github
+
+logs
 # Optuna warm-start SQLite dosyaları (makineye özgü, otomatik yeniden oluşturulur)
 optuna_studies*.db
 optuna_studies_*.db
+
+
 
 # Feature cache (ham veriden otomatik yeniden oluşturulur)
 data/feature_cache/
