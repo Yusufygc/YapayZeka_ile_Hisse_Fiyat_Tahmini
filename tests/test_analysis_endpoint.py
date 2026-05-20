@@ -178,13 +178,13 @@ class TestAnalysisService:
         latest_csv.mkdir(parents=True)
         run_csv.mkdir(parents=True)
         latest_csv.joinpath("xai_top_reasons_wf.csv").write_text(
-            "Model;Feature;Readable_Feature;Feature_Group;Importance\n"
-            "NLinear;WrongFeature;Wrong feature;technical;0.4\n",
+            "Model;Feature;Readable_Feature;Feature_Group;Importance;Contribution;Direction;Reason;Method;Approximate\n"
+            "NLinear;WrongFeature;Wrong feature;technical;0.4;0.02;positive;wrong reason;sequence;True\n",
             encoding="utf-8",
         )
         run_csv.joinpath("xai_top_reasons_wf.csv").write_text(
-            "Model;Feature;Readable_Feature;Feature_Group;Importance\n"
-            "LSTM;BestRunFeature;Best run feature;technical;0.5\n",
+            "Model;Feature;Readable_Feature;Feature_Group;Importance;Contribution;Direction;Reason;Method;Approximate\n"
+            "LSTM;BestRunFeature;Best run feature;technical;0.5;0.03;positive;best run reason;sequence;True\n",
             encoding="utf-8",
         )
 
@@ -192,6 +192,10 @@ class TestAnalysisService:
 
         assert result.xai.available is True
         assert result.xai.top_positive_reasons[0].feature_name == "BestRunFeature"
+        assert result.xai.top_positive_reasons[0].feature_group == "technical"
+        assert result.xai.top_positive_reasons[0].reason == "best run reason"
+        assert result.xai.top_positive_reasons[0].contribution == pytest.approx(0.03)
+        assert result.xai.top_positive_reasons[0].approximate is True
 
     def test_ensemble_forecast_source_metadata_surfaces(self):
         from src.database.stock_model_db import StockModelDB
