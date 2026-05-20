@@ -140,6 +140,33 @@ class TestBuildXaiProductSummary:
         assert result.available is True
         assert result.top_positive_reasons[0].feature_name == "Return"
         assert result.top_negative_reasons[0].feature_name == "RSI_14"
+        assert result.top_positive_reasons[0].feature_group == "technical"
+        assert result.top_positive_reasons[0].reason == "reason"
+        assert result.top_positive_reasons[0].method == "sequence"
+        assert result.top_positive_reasons[0].contribution == pytest.approx(0.03)
+        assert result.top_positive_reasons[0].approximate is True
+
+    def test_walk_forward_summary_has_specific_non_generic_label(self):
+        tmpdir = tempfile.mkdtemp()
+        xai_csv = os.path.join(tmpdir, "ASELS", "latest", "xai", "csv")
+        os.makedirs(xai_csv)
+        _write_csv(
+            xai_csv,
+            "xai_top_reasons_wf.csv",
+            """
+            Model;Feature;Readable_Feature;Feature_Group;Importance;Contribution;Direction;Reason;Method;Approximate
+            LSTM;WalkForward_Summary;;model_summary;1.0;-0.02;negative;Son pencerede tahmin zayıfladı.;rule_based;False
+            """,
+        )
+
+        result = build_xai_product_summary("ASELS", "LSTM", outputs_base=tmpdir)
+
+        assert result.available is True
+        factor = result.top_negative_reasons[0]
+        assert factor.feature_name == "WalkForward_Summary"
+        assert "walk-forward" in factor.human_label.lower()
+        assert "teknik veya makro" not in factor.human_label.lower()
+        assert factor.reason == "Son pencerede tahmin zayıfladı."
 
     def test_run_id_xai_lookup_preferred_over_stale_latest(self):
         tmpdir = tempfile.mkdtemp()
