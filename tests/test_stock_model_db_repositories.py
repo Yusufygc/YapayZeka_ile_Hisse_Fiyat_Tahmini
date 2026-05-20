@@ -62,6 +62,42 @@ def test_production_best_update_is_preserved(tmp_path):
     assert best["target_mode"] == "log_return"
 
 
+def test_trade_metrics_are_persisted_to_experiments_and_best_models(tmp_path):
+    db = _db(tmp_path)
+
+    exp_id = db.log_experiment(
+        stock_symbol="TEST",
+        model_name="LSTM",
+        metrics={
+            "RMSE": 1.0,
+            "MAE": 1.0,
+            "MAPE": 1.0,
+            "Dir_Acc": 60.0,
+            "Sharpe": 0.6,
+            "Hit_Rate": 60.0,
+            "RMSE_vs_benchmark": 0.8,
+            "Net_Return": 0.12,
+            "BuyHold_Return": 0.05,
+            "Max_Drawdown": -0.03,
+            "Trade_Count": 7,
+            "Signal_Diagnosis": "ok",
+        },
+        validation_mode="final_holdout",
+        is_production_candidate=True,
+        run_id="run_trade",
+    )
+
+    experiment = db.get_experiments(stock_symbol="TEST", limit=1)[0]
+    best = db.get_best_model("TEST")
+
+    assert experiment["id"] == exp_id
+    assert experiment["trade_count"] == 7
+    assert experiment["signal_diagnosis"] == "ok"
+    assert best["trade_count"] == 7
+    assert best["signal_diagnosis"] == "ok"
+    assert best["eligibility_status"] == "eligible"
+
+
 def test_forecast_repository_keeps_run_idempotency_and_resolution(tmp_path):
     db = _db(tmp_path)
     points = [
