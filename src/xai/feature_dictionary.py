@@ -10,58 +10,66 @@ import re
 
 def describe_feature(feature_name: str) -> str:
     """Return a plain Turkish explanation for a feature name."""
+    if feature_name == "WalkForward_Summary":
+        return "walk-forward pencerelerindeki genel model davranışı"
     if feature_name == "RSI_14":
-        return "hissenin asiri alim veya asiri satim bolgesine yaklasip yaklasmadigi"
+        return "RSI 14: hissenin aşırı alım veya aşırı satım bölgesine yaklaşması"
     if feature_name in {"Return", "Log_Return"}:
-        return "hissenin son donemdeki fiyat degisimi"
+        return "son fiyat getirisi: hissenin yakın dönem fiyat değişimi"
     if feature_name == "Relative_Strength":
-        return "hissenin BIST100'e gore daha guclu veya zayif hareket etmesi"
+        return "BIST100 göreli güç: hissenin endekse göre güçlü veya zayıf kalması"
 
     ma_match = re.match(r"^(SMA|EMA)_(\d+)_rel$", feature_name)
     if ma_match:
         ma_type, window = ma_match.groups()
-        avg_name = "basit ortalamasina" if ma_type == "SMA" else "agirlikli ortalamasina"
-        return f"fiyatin son {window} gunluk {avg_name} gore konumu"
+        avg_name = "basit hareketli ortalamasına" if ma_type == "SMA" else "üssel hareketli ortalamasına"
+        return f"{ma_type} {window}: fiyatın {window} günlük {avg_name} göre konumu"
 
     if re.match(r"^RollStd_\d+_norm$", feature_name):
         window = feature_name.split("_")[1]
-        return f"son {window} gundeki oynakligin artip azalmadigi"
+        return f"volatilite {window}: son {window} gündeki oynaklığın artıp azalması"
 
     if re.match(r"^BB_Width_\d+$", feature_name):
         window = feature_name.split("_")[-1]
-        return f"son {window} gunde fiyat bandinin genisleyip daralmasi"
+        return f"Bollinger bant genişliği {window}: fiyat bandının genişleyip daralması"
 
     if feature_name.startswith("LogRet_Lag"):
-        return "gecmis gun getirilerinin bugunku tahmine etkisi"
+        return "gecikmeli getiri: geçmiş gün getirilerinin bugünkü tahmine etkisi"
     if feature_name.startswith("OBV"):
-        return "hacim akisi ile fiyat yonunun birlikte guclenip guclenmedigi"
+        return "OBV hacim akışı: hacim ile fiyat yönünün birlikte güçlenmesi"
     if feature_name.startswith("VWAP"):
-        return "fiyatin hacim agirlikli ortalamaya gore konumu"
+        return "VWAP: fiyatın hacim ağırlıklı ortalamaya göre konumu"
     if feature_name.startswith("Market_Regime"):
-        return "fiyatin SMA-200'e gore piyasa rejimi sinyali"
+        return "piyasa rejimi: fiyatın SMA-200'e göre trend konumu"
     if feature_name.startswith("MACD"):
-        return "momentumun guclenip zayifladigi"
+        return "MACD: momentumun güçlenip zayıflaması"
     if feature_name.startswith("USDTRY"):
-        return "kur tarafindaki hareketin hisse uzerindeki olasi etkisi"
+        return "USDTRY: kur hareketinin hisse üzerindeki olası etkisi"
     if feature_name.startswith("BIST100"):
-        return "genel BIST100 piyasa hareketinin hisseye etkisi"
+        return "BIST100: genel endeks hareketinin hisseye etkisi"
     if feature_name.startswith("Rate"):
-        return "faiz seviyesindeki veya faiz degisimindeki baski"
+        return "faiz: faiz seviyesi veya faiz değişiminin piyasa baskısı"
     if feature_name.startswith("CPI"):
-        return "enflasyon tarafindaki degisimin piyasa algisina etkisi"
+        return "enflasyon: TÜFE değişiminin piyasa algısına etkisi"
     if feature_name == "Real_Rate":
-        return "reel faiz kosullarinin risk istahina etkisi"
+        return "reel faiz: reel faiz koşullarının risk iştahına etkisi"
+    if feature_name.startswith("ATR"):
+        return "ATR: fiyat oynaklığı ve günlük hareket aralığı"
+    if feature_name.startswith("Stoch"):
+        return "Stokastik osilatör: kısa vadeli momentum ve aşırı bölge sinyali"
+    if feature_name.startswith("Signal_"):
+        return f"sinyal kuralı: {feature_name.replace('Signal_', '').replace('_', ' ').lower()}"
 
     labels = {
-        "Open": "gunun acilis fiyat seviyesi",
-        "High": "gun icinde gorulen en yuksek fiyat seviyesi",
-        "Low": "gun icinde gorulen en dusuk fiyat seviyesi",
-        "Volume": "islem hacmindeki degisim",
+        "Open": "açılış fiyat seviyesi",
+        "High": "gün içi en yüksek fiyat seviyesi",
+        "Low": "gün içi en düşük fiyat seviyesi",
+        "Volume": "işlem hacmindeki değişim",
     }
     if feature_name in labels:
         return labels[feature_name]
 
-    return "modelin kullandigi teknik veya makro sinyal"
+    return f"okunabilir etiketi olmayan model sinyali: {feature_name}"
 
 
 def feature_group(feature_name: str) -> str:
@@ -78,6 +86,10 @@ def feature_group(feature_name: str) -> str:
         return "market_relative"
     if feature_name.startswith(("USDTRY", "Rate", "CPI")) or feature_name == "Real_Rate":
         return "macro"
+    if feature_name.startswith("Signal_"):
+        return "signal"
+    if feature_name == "WalkForward_Summary":
+        return "model_summary"
     if feature_name.startswith(("SMA", "EMA", "MACD", "RSI", "Return", "Log_Return", "Stoch")):
         return "technical"
     if feature_name in {"Open", "High", "Low", "Volume"}:
