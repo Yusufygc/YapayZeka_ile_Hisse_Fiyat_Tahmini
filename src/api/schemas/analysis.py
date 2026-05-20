@@ -74,6 +74,11 @@ class XaiFactorItem(BaseModel):
     human_label: str
     importance: float
     direction: str
+    feature_group: Optional[str] = None
+    reason: Optional[str] = None
+    method: Optional[str] = None
+    contribution: Optional[float] = None
+    approximate: Optional[bool] = None
 
 
 class XaiBlock(BaseModel):
