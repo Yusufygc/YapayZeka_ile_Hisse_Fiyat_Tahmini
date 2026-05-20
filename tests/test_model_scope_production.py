@@ -102,7 +102,7 @@ def test_select_best_model_ignores_benchmarks_and_non_candidates():
     assert MetricsReportingService._select_best_model(metrics) == "LSTM"
 
 
-def test_best_models_latest_final_holdout_production_candidate_wins():
+def test_best_models_highest_scored_final_holdout_candidate_wins():
     tmp = _workspace_tmp("db_policy")
     db = StockModelDB(os.path.join(tmp, "stock_models.db"))
     metadata = {
@@ -123,7 +123,15 @@ def test_best_models_latest_final_holdout_production_candidate_wins():
     first_id = db.log_experiment(
         "TEST",
         "ElasticNet Return",
-        {"RMSE": 1.0, "MAE": 1.0, "MAPE": 1.0, "Dir_Acc": 55.0, "Sharpe": 0.4, "Hit_Rate": 55.0},
+        {
+            "RMSE": 1.0,
+            "MAE": 1.0,
+            "MAPE": 1.0,
+            "Dir_Acc": 55.0,
+            "Sharpe": 0.4,
+            "Hit_Rate": 55.0,
+            "Trade_Count": 10,
+        },
         validation_mode="final_holdout",
         dataset_metadata=metadata,
         is_production_candidate=True,
@@ -137,19 +145,51 @@ def test_best_models_latest_final_holdout_production_candidate_wins():
     second_id = db.log_experiment(
         "TEST",
         "Ridge Return",
-        {"RMSE": 2.0, "MAE": 2.0, "MAPE": 2.0, "Dir_Acc": 45.0, "Sharpe": -0.2, "Hit_Rate": 45.0},
+        {
+            "RMSE": 2.0,
+            "MAE": 2.0,
+            "MAPE": 2.0,
+            "Dir_Acc": 45.0,
+            "Sharpe": -0.2,
+            "Hit_Rate": 45.0,
+            "Trade_Count": 10,
+        },
         validation_mode="final_holdout",
         dataset_metadata=metadata,
         is_production_candidate=True,
         selection_source="wf_selection",
         run_id="run_2",
     )
+    lower_score_best = db.get_best_model("TEST")
+
+    assert second_id
+    assert lower_score_best["experiment_id"] == first_id
+    assert lower_score_best["model_name"] == "ElasticNet Return"
+
+    third_id = db.log_experiment(
+        "TEST",
+        "LSTM",
+        {
+            "RMSE": 0.1,
+            "MAE": 0.1,
+            "MAPE": 0.1,
+            "Dir_Acc": 90.0,
+            "Sharpe": 5.0,
+            "Hit_Rate": 90.0,
+            "Trade_Count": 10,
+        },
+        validation_mode="final_holdout",
+        dataset_metadata=metadata,
+        is_production_candidate=True,
+        selection_source="wf_selection",
+        run_id="run_3",
+    )
     latest_best = db.get_best_model("TEST")
 
-    assert latest_best["experiment_id"] == second_id
-    assert latest_best["model_name"] == "Ridge Return"
+    assert latest_best["experiment_id"] == third_id
+    assert latest_best["model_name"] == "LSTM"
     assert latest_best["validation_mode"] == "final_holdout"
-    assert latest_best["run_id"] == "run_2"
+    assert latest_best["run_id"] == "run_3"
 
 
 def test_production_ensemble_can_be_best_with_metadata():

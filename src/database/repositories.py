@@ -155,12 +155,12 @@ class SchemaRepository:
             """
         ).fetchall()
         for stock_row in stocks:
-            row = self._latest_production_experiment(conn, stock_row["stock_symbol"])
+            row = self._best_production_experiment(conn, stock_row["stock_symbol"])
             if row is not None:
                 BestModelRepository.upsert_best_from_row(conn, row)
 
     @staticmethod
-    def _latest_production_experiment(conn: sqlite3.Connection, stock_symbol: str):
+    def _best_production_experiment(conn: sqlite3.Connection, stock_symbol: str):
         return conn.execute(
             """
             SELECT *
@@ -171,7 +171,7 @@ class SchemaRepository:
                   OR model_name IN ('Ensemble Inverse RMSE', 'Ensemble Cash-Gated')
               )
               AND COALESCE(is_production_candidate, 0) = 1
-            ORDER BY trained_at DESC, id DESC
+            ORDER BY composite_score DESC, trained_at DESC, id DESC
             LIMIT 1
             """,
             (stock_symbol,),
@@ -411,9 +411,19 @@ class BestModelRepository:
 
         with self.db._connect() as conn:
             existing = conn.execute(
-                "SELECT model_name, experiment_id FROM best_models WHERE stock_symbol = ?",
+                """
+                SELECT model_name, experiment_id, composite_score, eligibility_status
+                FROM best_models
+                WHERE stock_symbol = ?
+                """,
                 (stock_symbol,),
             ).fetchone()
+            if not self._should_replace_existing_best(
+                existing,
+                new_score=float(composite_score or 0.0),
+                new_eligibility=eligibility_status,
+            ):
+                return
             self.upsert_best_from_values(
                 conn=conn,
                 stock_symbol=stock_symbol,
@@ -435,6 +445,23 @@ class BestModelRepository:
                 ensemble_metadata=ensemble_metadata,
             )
             self._print_best_update(stock_symbol, model_name, experiment_id, existing)
+
+    @staticmethod
+    def _should_replace_existing_best(
+        existing,
+        *,
+        new_score: float,
+        new_eligibility: str,
+    ) -> bool:
+        if existing is None:
+            return True
+        existing_eligibility = str(existing["eligibility_status"] or "")
+        existing_score = float(existing["composite_score"] or 0.0)
+        if existing_eligibility == "eligible" and new_eligibility != "eligible":
+            return False
+        if existing_eligibility != "eligible" and new_eligibility == "eligible":
+            return True
+        return new_score > existing_score
 
     @staticmethod
     def _print_best_update(stock_symbol: str, model_name: str, experiment_id: int, existing) -> None:

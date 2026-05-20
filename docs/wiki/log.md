@@ -1,4 +1,14 @@
-﻿## [2026-05-20] Wiki Update | Operasyonel sertleştirme, forecast artifact ve analiz refresh
+﻿## [2026-05-20] Bugfix | Best-model seçiminde son kayıt ezmesini engelle
+
+- ASELS testinde `NLinear` son yazılan final-holdout adayı olduğu için daha
+  yüksek skorlu `LSTM` kaydını `best_models` içinde ezdiği görüldü.
+- `BestModelRepository` artık mevcut best ile yeni adayı eligibility ve
+  `composite_score` üzerinden karşılaştırıyor; aynı eligibility sınıfında yüksek
+  skor kazanıyor, eligible kayıt ineligible kayıtla ezilmiyor.
+- Schema refresh akışı da latest experiment yerine en yüksek skorlu production
+  experiment satırından `best_models` kaydını yeniden kuracak şekilde düzeltildi.
+
+## [2026-05-20] Wiki Update | Operasyonel sertleştirme, forecast artifact ve analiz refresh
 
 - Analiz API'si için yerel-first CORS, JSON loglama, SQLite tabanlı
   `analysis_refresh_jobs`, `/refresh/status/{job_id}` ve stale/missing forecast
@@ -249,4 +259,3 @@
   active core for default runs, demote unstable or expensive models to the
   research shelf, and use diagnostics before deleting model families.
 - Linked the new page from the wiki index.
-

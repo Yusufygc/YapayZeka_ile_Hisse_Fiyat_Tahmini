@@ -81,6 +81,17 @@ Main tables:
 | `forecast_accuracy_summary` | Resolved forecast accuracy summary |
 | `analysis_refresh_jobs` | Non-blocking analysis refresh job state |
 
+Best-model maintenance uses score-aware replacement. A final-holdout production
+candidate or curated production ensemble updates `best_models` only when it
+beats the current row under the selection guard:
+
+- an `eligible` candidate can replace an ineligible current best;
+- an ineligible candidate cannot replace an eligible current best;
+- within the same eligibility class, the higher `composite_score` wins.
+
+Schema refresh reconstructs `best_models` from the highest-scored production
+experiment per symbol, not from the latest inserted experiment.
+
 ## Analysis Refresh Jobs
 
 `analysis_refresh_jobs` records API-triggered refresh work. Jobs are de-duplicated
