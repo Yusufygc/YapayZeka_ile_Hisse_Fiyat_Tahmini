@@ -254,6 +254,8 @@ def _build_forecast_response(
         symbol=symbol,
         model_name=model_name,
         outputs_base=outputs_base,
+        run_id=best.get("run_id"),
+        model_path=best.get("model_path"),
     )
     xai_block = _build_xai_block(xai_summary)
     status = _resolve_status(
@@ -394,6 +396,7 @@ def _build_performance_block(best: Dict[str, Any]) -> PerformanceBlock:
         directional_accuracy=best.get("dir_acc"),
         hit_rate=best.get("hit_rate"),
         sharpe=best.get("sharpe"),
+        rmse_vs_benchmark=best.get("rmse_vs_benchmark"),
         composite_score=best.get("composite_score"),
         stability_score=best.get("stability_score"),
     )
