@@ -63,3 +63,45 @@ def test_db_maintenance_backup_reset_creates_clean_schema(tmp_path):
     assert result["schema_ok"] is True
     assert result["table_counts"]["experiments"] == 0
     assert result["table_counts"]["analysis_refresh_jobs"] == 0
+
+
+def test_db_maintenance_backfills_trade_metrics_from_backtest_reports(tmp_path):
+    from src.cli.db_maintenance import backfill_run_metrics
+    from src.database.stock_model_db import StockModelDB
+
+    db_path = tmp_path / "stock_models.db"
+    db = StockModelDB(str(db_path))
+    exp_id = db.log_experiment(
+        stock_symbol="ASELS",
+        model_name="LSTM",
+        metrics={"RMSE": 1.0, "MAE": 1.0, "Dir_Acc": 62.0, "Sharpe": 0.8},
+        validation_mode="final_holdout",
+        is_production_candidate=True,
+        run_id="run_1",
+    )
+    outputs = tmp_path / "outputs"
+    report_dir = outputs / "ASELS" / "runs" / "run_1" / "csv"
+    report_dir.mkdir(parents=True)
+    (report_dir / "backtest_report_final_holdout.csv").write_text(
+        "\n".join([
+            "Model;Net_Return;BuyHold_Return;Max_Drawdown;Trade_Count;Signal_Diagnosis",
+            "LSTM;0.12;0.05;-0.03;1;insufficient_trades",
+        ]),
+        encoding="utf-8",
+    )
+
+    first = backfill_run_metrics(db_path=db_path, outputs_base=outputs, symbol="ASELS")
+    second = backfill_run_metrics(db_path=db_path, outputs_base=outputs, symbol="ASELS")
+
+    refreshed = StockModelDB(str(db_path))
+    experiment = refreshed.get_experiments(stock_symbol="ASELS", limit=1)[0]
+    best = refreshed.get_best_model("ASELS")
+
+    assert exp_id
+    assert first["updated_rows"] == 1
+    assert second["updated_rows"] == 1
+    assert experiment["trade_count"] == 1
+    assert experiment["signal_diagnosis"] == "insufficient_trades"
+    assert best["trade_count"] == 1
+    assert best["eligibility_status"] == "insufficient_trades"
+    assert "Trade sayisi (1)" in best["eligibility_reason"]
