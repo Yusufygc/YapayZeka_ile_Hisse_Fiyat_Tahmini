@@ -30,6 +30,25 @@ def _parse_jsonish(value: Any) -> Any:
         return value
 
 
+def _optional_float(value: Any) -> Optional[float]:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _optional_int(value: Any) -> Optional[int]:
+    float_value = _optional_float(value)
+    return None if float_value is None else int(float_value)
+
+
+def _optional_text(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
 def _ensemble_metadata_for(
     model_name: str,
     metrics: Dict[str, Any],
@@ -92,6 +111,12 @@ class SchemaRepository:
         self.ensure_column(conn, "experiments", "run_id", "TEXT")
         self.ensure_column(conn, "experiments", "stability_score", "REAL")
         self.ensure_column(conn, "experiments", "ensemble_metadata_json", "TEXT")
+        self.ensure_column(conn, "experiments", "rmse_vs_benchmark", "REAL")
+        self.ensure_column(conn, "experiments", "net_return", "REAL")
+        self.ensure_column(conn, "experiments", "buyhold_return", "REAL")
+        self.ensure_column(conn, "experiments", "max_drawdown", "REAL")
+        self.ensure_column(conn, "experiments", "trade_count", "INTEGER")
+        self.ensure_column(conn, "experiments", "signal_diagnosis", "TEXT")
 
     def _ensure_forecast_run_columns(self, conn: sqlite3.Connection) -> None:
         self.ensure_column(conn, "forecast_runs", "ensemble_direction_agreement", "REAL")
@@ -112,6 +137,12 @@ class SchemaRepository:
         self.ensure_column(conn, "best_models", "eligibility_status", "TEXT NOT NULL DEFAULT 'eligible'")
         self.ensure_column(conn, "best_models", "eligibility_reason", "TEXT NOT NULL DEFAULT ''")
         self.ensure_column(conn, "best_models", "ensemble_metadata_json", "TEXT")
+        self.ensure_column(conn, "best_models", "rmse_vs_benchmark", "REAL")
+        self.ensure_column(conn, "best_models", "net_return", "REAL")
+        self.ensure_column(conn, "best_models", "buyhold_return", "REAL")
+        self.ensure_column(conn, "best_models", "max_drawdown", "REAL")
+        self.ensure_column(conn, "best_models", "trade_count", "INTEGER")
+        self.ensure_column(conn, "best_models", "signal_diagnosis", "TEXT")
 
     def migrate_legacy_production_candidates(self, conn: sqlite3.Connection) -> None:
         placeholders = ",".join("?" for _ in schema.BENCHMARK_MODELS)
@@ -161,7 +192,7 @@ class SchemaRepository:
 
     @staticmethod
     def _best_production_experiment(conn: sqlite3.Connection, stock_symbol: str):
-        return conn.execute(
+        rows = conn.execute(
             """
             SELECT *
             FROM experiments
@@ -172,10 +203,22 @@ class SchemaRepository:
               )
               AND COALESCE(is_production_candidate, 0) = 1
             ORDER BY composite_score DESC, trained_at DESC, id DESC
-            LIMIT 1
             """,
             (stock_symbol,),
-        ).fetchone()
+        ).fetchall()
+        if not rows:
+            return None
+
+        def _rank(row) -> tuple[int, float, str, int]:
+            status, _ = BestModelRepository.eligibility_from_experiment_row(row)
+            return (
+                1 if status == "eligible" else 0,
+                float(row["composite_score"] or 0.0),
+                str(row["trained_at"] or ""),
+                int(row["id"] or 0),
+            )
+
+        return max(rows, key=_rank)
 
 
 class ExperimentRepository:
@@ -258,11 +301,12 @@ class ExperimentRepository:
                 INSERT INTO experiments
                     (stock_symbol, model_name, validation_mode, target_mode, feature_mode, scaling_mode,
                      mae, rmse, mape, dir_acc, sharpe, hit_rate,
+                     rmse_vs_benchmark, net_return, buyhold_return, max_drawdown, trade_count, signal_diagnosis,
                      composite_score, model_path, features, dataset_hash,
                      is_production_candidate, selection_source, run_id, trained_at,
                      stability_score, ensemble_metadata_json)
                 VALUES
-                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     stock_symbol, model_name, validation_mode,
@@ -272,6 +316,12 @@ class ExperimentRepository:
                     metrics.get("MAE"), metrics.get("RMSE"),
                     metrics.get("MAPE"), metrics.get("Dir_Acc"),
                     metrics.get("Sharpe"), metrics.get("Hit_Rate"),
+                    _optional_float(metrics.get("RMSE_vs_benchmark")),
+                    _optional_float(metrics.get("Net_Return")),
+                    _optional_float(metrics.get("BuyHold_Return")),
+                    _optional_float(metrics.get("Max_Drawdown")),
+                    _optional_int(metrics.get("Trade_Count")),
+                    _optional_text(metrics.get("Signal_Diagnosis")),
                     composite, model_path, json.dumps(features, ensure_ascii=False),
                     dataset_hash, int(bool(is_production_candidate)),
                     selection_source, run_id, trained_at,
@@ -474,17 +524,22 @@ class BestModelRepository:
             )
 
     @staticmethod
-    def upsert_best_from_row(conn: sqlite3.Connection, row) -> None:
+    def eligibility_from_experiment_row(row) -> tuple[str, str]:
         from src.pipeline.selection_guard import evaluate_best_model_eligibility
 
         ensemble_metadata = _parse_jsonish(row["ensemble_metadata_json"])
-        eligibility_status, eligibility_reason = evaluate_best_model_eligibility({
+        return evaluate_best_model_eligibility({
             "model_name": row["model_name"],
             "is_production_candidate": row["is_production_candidate"],
             "Trade_Count": row["trade_count"] if "trade_count" in row.keys() else 0,
             "RMSE_vs_benchmark": row["rmse_vs_benchmark"] if "rmse_vs_benchmark" in row.keys() else None,
             "ensemble_metadata": ensemble_metadata,
         })
+
+    @staticmethod
+    def upsert_best_from_row(conn: sqlite3.Connection, row) -> None:
+        ensemble_metadata = _parse_jsonish(row["ensemble_metadata_json"])
+        eligibility_status, eligibility_reason = BestModelRepository.eligibility_from_experiment_row(row)
         BestModelRepository.upsert_best_from_values(
             conn=conn,
             stock_symbol=row["stock_symbol"],
@@ -498,6 +553,12 @@ class BestModelRepository:
                 "Dir_Acc": row["dir_acc"],
                 "Sharpe": row["sharpe"],
                 "Hit_Rate": row["hit_rate"],
+                "RMSE_vs_benchmark": row["rmse_vs_benchmark"] if "rmse_vs_benchmark" in row.keys() else None,
+                "Net_Return": row["net_return"] if "net_return" in row.keys() else None,
+                "BuyHold_Return": row["buyhold_return"] if "buyhold_return" in row.keys() else None,
+                "Max_Drawdown": row["max_drawdown"] if "max_drawdown" in row.keys() else None,
+                "Trade_Count": row["trade_count"] if "trade_count" in row.keys() else None,
+                "Signal_Diagnosis": row["signal_diagnosis"] if "signal_diagnosis" in row.keys() else None,
             },
             model_path=row["model_path"] or "",
             updated_at=row["trained_at"],
@@ -545,9 +606,10 @@ class BestModelRepository:
                  target_mode, feature_mode, scaling_mode, validation_mode,
                  dataset_hash, run_id, selection_source,
                  mae, rmse, mape, dir_acc, sharpe, hit_rate,
+                 rmse_vs_benchmark, net_return, buyhold_return, max_drawdown, trade_count, signal_diagnosis,
                  model_path, updated_at,
                  eligibility_status, eligibility_reason, ensemble_metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(stock_symbol) DO UPDATE SET
                 model_name          = excluded.model_name,
                 experiment_id       = excluded.experiment_id,
@@ -565,6 +627,12 @@ class BestModelRepository:
                 dir_acc             = excluded.dir_acc,
                 sharpe              = excluded.sharpe,
                 hit_rate            = excluded.hit_rate,
+                rmse_vs_benchmark   = excluded.rmse_vs_benchmark,
+                net_return          = excluded.net_return,
+                buyhold_return      = excluded.buyhold_return,
+                max_drawdown        = excluded.max_drawdown,
+                trade_count         = excluded.trade_count,
+                signal_diagnosis    = excluded.signal_diagnosis,
                 model_path          = excluded.model_path,
                 updated_at          = excluded.updated_at,
                 eligibility_status  = excluded.eligibility_status,
@@ -577,6 +645,12 @@ class BestModelRepository:
                 dataset_hash, run_id, selection_source,
                 metrics.get("MAE"), metrics.get("RMSE"), metrics.get("MAPE"),
                 metrics.get("Dir_Acc"), metrics.get("Sharpe"), metrics.get("Hit_Rate"),
+                _optional_float(metrics.get("RMSE_vs_benchmark")),
+                _optional_float(metrics.get("Net_Return")),
+                _optional_float(metrics.get("BuyHold_Return")),
+                _optional_float(metrics.get("Max_Drawdown")),
+                _optional_int(metrics.get("Trade_Count")),
+                _optional_text(metrics.get("Signal_Diagnosis")),
                 model_path, updated_at,
                 eligibility_status, eligibility_reason, ensemble_metadata_json,
             ),
