@@ -92,6 +92,25 @@ beats the current row under the selection guard:
 Schema refresh reconstructs `best_models` from the highest-scored production
 experiment per symbol, not from the latest inserted experiment.
 
+As of 2026-05-20, signal/trade quality fields are first-class SQLite metrics.
+`experiments` and `best_models` both carry `rmse_vs_benchmark`, `net_return`,
+`buyhold_return`, `max_drawdown`, `trade_count`, and `signal_diagnosis`.
+Final-holdout, walk-forward, and single-split workflows merge the selected
+backtest fields into the metrics dict before tracker/DB logging, while keeping
+prediction metrics such as RMSE and directional accuracy as the primary model
+selection fields.
+
+Existing run outputs can be backfilled without retraining:
+
+```powershell
+& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m src.cli.db_maintenance backfill-run-metrics --symbol ASELS
+```
+
+The command reads run-scoped `csv/backtest_report_{suffix}.csv` files, tolerates
+semicolon-delimited UTF-8/BOM CSVs, updates matching `experiments` rows by
+`symbol + run_id + model_name + validation_mode`, then rebuilds `best_models`
+with the selection guard.
+
 ## Analysis Refresh Jobs
 
 `analysis_refresh_jobs` records API-triggered refresh work. Jobs are de-duplicated
@@ -202,6 +221,12 @@ provided with `AI_CORE_CORS_ORIGINS`.
 `source_experiment_id` and latest observed date, the service queues a refresh
 with reason `missing_forecast_for_best_model`. Stale forecasts queue
 `stale_market_data`.
+
+XAI summaries are resolved against the current best model's run first. The API
+passes `best_models.run_id` and `model_path` into `build_xai_product_summary()`,
+which searches `outputs/{SYMBOL}/runs/{RUN_ID}/xai` before falling back to
+`latest/xai`. This avoids stale `latest/` XAI tables from a later non-best run
+masking the best model's explanations.
 
 The current job tracker is in-memory. For production multi-process deployment,
 the API comments note that Redis would be more appropriate.
