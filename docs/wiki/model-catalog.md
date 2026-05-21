@@ -61,6 +61,7 @@ the registry has no `TFT` `ModelSpec`; any remaining TFT names in old
 - `LSTM`
 - `LSTM Lite`
 - `AttentionLSTM v2`
+- `Prophet-ML/DL Hybrid`
 
 Not all candidates are equally recommended for production. Some are legacy or
 comparison-oriented.
@@ -73,9 +74,14 @@ comparison-oriented.
 |---|---|---|
 | `Prophet` | `src/models/prophet_model.py` | Legacy/comparison; optional dependency |
 | `ARIMA` | `src/models/arima_model.py` | Legacy/comparison; mostly y-only |
+| `Prophet-ML/DL Hybrid` | `src/models/prophet_hybrid_model.py` | Candidate; Prophet trend combined with ML/DL base models |
 
 `ModelTrainer` treats Prophet and ARIMA as legacy due to walk-forward support and
 literature/practical limitations documented in code comments.
+
+`Prophet-ML/DL Hybrid` combines Prophet's trend modeling with base model return predictions. It supports two modes:
+- `trend_gate`: Uses Prophet's trend slope as a binary filter (flats base prediction if slope <= 0).
+- `residual_decomp`: Decomposes scaled prices using Prophet's trend, trains the base model on residual returns, and adds base residual predictions to the trend's returns.
 
 ### Linear Return Models
 
@@ -122,6 +128,12 @@ and `TemporalAttentionV2` weights. Evaluation exports attention-based XAI rows
 to `xai/csv/xai_top_reasons_attention_*.csv` when the model supports the
 exporter. Its initial minimum sequence threshold is
 `attention_lstm_v2_min_sequence_samples=252`.
+
+`AttentionLSTM v2` and `LSTM Lite` support enhanced regularization options to improve deep learning model quality on small datasets:
+- **Cell Type**: Supports both standard `LSTM` and lightweight `GRU` cells to prevent overfitting.
+- **L2 Regularization**: Adds `kernel_regularizer` and `recurrent_regularizer` options using `l2_rate`.
+- **AdamW Optimizer**: Uses Adam with Weight Decay (`AdamW`) for better generalization behavior.
+- **Expanded Optuna HPO**: Automates searching for `cell_type`, `l2_rate`, and `optimizer_type` when `tune_on_fit=True`.
 
 #### LSTM Audit Notes
 

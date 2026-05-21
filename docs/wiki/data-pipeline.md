@@ -65,9 +65,12 @@ Feature generation is split across:
 The project favors stationary or normalized features:
 
 - Relative moving-average features instead of raw moving-average price levels.
-- Normalized ATR and MACD-style features.
+- Normalized ATR (`NATR_14`) and MACD-style features (`MACD_norm`, `MACD_Signal_norm`, `MACD_Diff_norm`).
 - Log-return lags instead of raw close lags.
+- Stationary momentum and volume indicators like Money Flow Index (`MFI_14`), Average Directional Index (`ADX_14`), and Chaikin Money Flow (`CMF_20`).
 - Macro lag controls for rate and CPI data to avoid lookahead.
+- Sektörel Göreli Güç (`Sector_Relative_Strength`), calculating the difference between target stock return and its corresponding sector index return (falling back to BIST100 if the index is missing).
+- Reduced correlation pruning threshold from `0.98` to `0.88` for stricter feature filtering.
 
 `MacroPipeline.get_macro_features()` now acts as an orchestration layer around
 separate cache refresh, cache loading, date filtering, monthly release-lag,

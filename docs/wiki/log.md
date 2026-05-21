@@ -1,3 +1,19 @@
+## [2026-05-21] Feature | Özellik Mühendisliği İyileştirmeleri ve Sektörel Göreli Güç Entegrasyonu
+
+- Durağan olmayan `BIST100_Norm` ve `USDTRY_MA7` özellikleri temizlendi.
+- default `correlation_threshold` değeri `0.98`'den `0.88`'e çekilerek daha sıkı özellik seçimi sağlandı.
+- `NATR_14` (Normalized Average True Range), `MFI_14` (Money Flow Index), `ADX_14` (Average Directional Index) ve `CMF_20` (Chaikin Money Flow) durağan teknik göstergeleri sisteme entegre edildi.
+- Hisse senetleri için sektörel eşleşme tablosu (`_SYMBOL_SECTORS`) kuruldu ve `Sector_Relative_Strength` (Hisse_Return - Sektör_Return) özelliği eklendi (fallback olarak `BIST100_Return` kullanıldı).
+- `tests/test_feature_improvements.py` üzerinden yeni özelliklerin doğruluğu test edildi.
+
+## [2026-05-21] Feature | Derin Öğrenme Modellerinin İyileştirilmesi ve Prophet-ML/DL Hybrid Model Entegrasyonu
+
+- `AttentionLSTM v2` ve `LSTM Lite` modellerine L2 regularizer (`l2_rate`), hücre tipi seçimi (`cell_type`: GRU/LSTM), AdamW optimizer seçeneği (`optimizer_type`) ve genişletilmiş Optuna HPO aralığı eklendi.
+- Fiyat trendlerini Prophet ile çıkarıp residual'ları (artıkları) makine öğrenmesi veya derin öğrenme modelleriyle tahmin eden hibrit `Prophet-ML/DL Hybrid` modeli (`ProphetHybridModel`) hem `trend_gate` hem de `residual_decomp` modlarıyla geliştirildi ve `model_registry`'ye eklendi.
+- `ProphetHybridModel` için model serileştirme/kaydetme desteği joblib ile çoklu dosya (base model + prophet model) olarak kuruldu.
+- Geriye dönük model scope uyumluluk testi (`tests/test_scope_backward_compat.py`) yeni hibrit modeli kapsayacak şekilde güncellendi.
+- `docs/wiki/model-catalog.md` dokümantasyonu yeni model mimarisi detaylarıyla güncellendi.
+
 ## [2026-05-21] Refactor | Kod Kalitesi ve Güvenlik Sertleştirmesi (Hardening)
 
 - Legacy `repositories.py` (1085 satır) kaldırılarak mantıksal modüllerine bölündü (`src/database/repositories/` paketi altında `schema.py`, `experiment.py`, `best_model.py`, `forecast.py`, `forecast_resolution.py`).
