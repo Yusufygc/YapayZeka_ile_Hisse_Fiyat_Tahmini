@@ -228,3 +228,41 @@ def test_production_ensemble_can_be_best_with_metadata():
     assert best["model_name"] == "Ensemble Inverse RMSE"
     assert best["eligibility_status"] == "eligible"
     assert "Ridge Return" in best["ensemble_metadata_json"]
+
+
+def test_production_seq_attention_ensemble_can_be_best_with_metadata():
+    tmp = _workspace_tmp("db_seq_ensemble_policy")
+    db = StockModelDB(os.path.join(tmp, "stock_models.db"))
+    metadata = {
+        "target_mode": "log_return",
+        "feature_mode": "stationary_features",
+        "scaling_mode": "robust_x_standard_y_clip",
+    }
+
+    exp_id = db.log_experiment(
+        "TEST",
+        "Ensemble Seq-Attention Inverse RMSE",
+        {
+            "RMSE": 0.75,
+            "MAE": 0.75,
+            "MAPE": 0.9,
+            "Dir_Acc": 62.0,
+            "Sharpe": 0.6,
+            "Hit_Rate": 62.0,
+            "RMSE_vs_benchmark": 0.90,
+            "Trade_Count": 9,
+            "Ensemble_Method": "Seq-Attention Inverse RMSE",
+            "Ensemble_Weights": '{"LSTM": 0.5, "AttentionLSTM v2": 0.5}',
+        },
+        validation_mode="walk_forward",
+        dataset_metadata=metadata,
+        is_production_candidate=True,
+        selection_source="walk_forward_production_ensemble",
+        run_id="run_seq_ens",
+    )
+
+    best = db.get_best_model("TEST")
+    assert best["experiment_id"] == exp_id
+    assert best["model_name"] == "Ensemble Seq-Attention Inverse RMSE"
+    assert best["eligibility_status"] == "eligible"
+    assert "AttentionLSTM v2" in best["ensemble_metadata_json"]

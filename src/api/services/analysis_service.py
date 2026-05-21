@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -75,6 +76,8 @@ class AnalysisService:
         return StockModelDB(self._db_path)
 
     def build(self, symbol: str) -> AnalysisResponse:
+        if not re.match(r"^[A-Z0-9]{1,10}$", symbol.upper()):
+            raise ValueError(f"Invalid symbol format: {symbol}")
         symbol = symbol.upper()
         generated_at = _now_iso()
         db = self._get_db()

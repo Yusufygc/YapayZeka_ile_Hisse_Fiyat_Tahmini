@@ -1,4 +1,21 @@
-﻿## [2026-05-20] Bugfix | XAI okuma ve trade metriklerinin kalıcılaştırılması
+## [2026-05-21] Refactor | Kod Kalitesi ve Güvenlik Sertleştirmesi (Hardening)
+
+- Legacy `repositories.py` (1085 satır) kaldırılarak mantıksal modüllerine bölündü (`src/database/repositories/` paketi altında `schema.py`, `experiment.py`, `best_model.py`, `forecast.py`, `forecast_resolution.py`).
+- `orchestrator.py` içindeki dosya yazma, raporlama ve manifest hazırlama işlevleri `src/pipeline/artifacts.py` modülüne taşındı.
+- Dış sınır giriş parametreleri için regex doğrulama (`^[A-Z0-9]{1,10}$`) analysis_service.py ve data_refresh_service.py dosyalarına eklendi.
+- Arka plan thread'lerinin kaynak tüketimini sınırlamak için `ThreadPoolExecutor(max_workers=4)` yapısı kuruldu.
+- requirements.txt paket bağımlılıkları mevcut ortama göre sürümleriyle sabitlendi (pinning).
+- Boş hata yakalama blokları log uyarılarıyla güncellendi ve timezone-naive datetime kullanımları timezone-aware (UTC) datetime'lara geçirildi.
+- `docs/wiki/code-quality-and-refactoring.md` kılavuzu oluşturuldu, `docs/wiki/index.md` güncellendi ve `RULES.md` dosyasına kod kalitesi sınırları eklendi.
+
+## [2026-05-20] Feature | AttentionLSTM v2 Entegrasyonu ve Seq-Attention Ensemble Modelleri
+
+- `AttentionLSTM v2` modeli deep sequence modeli olarak prediction engine'e, `PredictionService`'e ve XAI `SEQ_MODELS` listesine (`src/xai/explainer.py`) kaydedilerek tabular model muamelesi görmesi engellendi.
+- Sadece sequence modellerinden (`LSTM`, `LSTM Lite`, `AttentionLSTM v2`) oluşan `Ensemble Seq-Attention Equal` ve `Ensemble Seq-Attention Inverse RMSE` ensemble modelleri eklendi.
+- Yeni `Seq-Attention Inverse RMSE` ensemble modeli database repository listesine, model scope'a ve selection guard whitelist'e eklenerek eligible production ensemble leader'ı yapıldı.
+- `tests/test_analysis_endpoint.py`, `tests/test_model_scope_production.py` ve `tests/test_reporting_metrics.py` üzerinde yeni testler eklenip tüm testler başarıyla koşuldu.
+
+## [2026-05-20] Bugfix | XAI okuma ve trade metriklerinin kalıcılaştırılması
 
 - XAI ürün özeti artık semicolon/BOM CSV dosyalarını okuyabiliyor ve en iyi
   modelin `run_id` dizinini `latest/` öncesinde kullanıyor.

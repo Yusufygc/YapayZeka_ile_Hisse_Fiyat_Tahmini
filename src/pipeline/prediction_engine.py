@@ -28,7 +28,7 @@ except ImportError:  # pragma: no cover
         return np.asarray(prev_close, dtype=float).ravel() * (1.0 + np.asarray(returns, dtype=float).ravel())
 
 
-_SEQ_MODELS = {"LSTM", "LSTM Lite", "AttentionLSTM", "DLinear", "NLinear"}
+_SEQ_MODELS = {"LSTM", "LSTM Lite", "AttentionLSTM", "AttentionLSTM v2", "DLinear", "NLinear"}
 _TREE_MODELS = {"XGBoost", "Random Forest", "Ridge Return", "ElasticNet Return", "LightGBM Return"}
 
 
@@ -170,7 +170,7 @@ class _PredictionEngineMixin:
                 cg_target = None
                 cg_preds = sharpe_preds
 
-        for name, pred_price, pred_target in [
+        ensemble_tuples = [
             (equal_name, equal_preds, equal_target),
             (inv_name, inverse_preds, inverse_target),
             (sharpe_name, sharpe_preds, sharpe_target),
@@ -178,7 +178,30 @@ class _PredictionEngineMixin:
             (hier_name, hier_preds, hier_target),
             (stk_name, stk_preds, stk_target),
             (cg_name, cg_preds, cg_target),
-        ]:
+        ]
+
+        # Seq-Attention ensembles
+        seq_attn_models = {"LSTM", "LSTM Lite", "AttentionLSTM v2"}
+        seq_attn_preds = {name: preds for name, preds in base_preds.items() if name in seq_attn_models}
+        if len(seq_attn_preds) >= 2:
+            seq_equal_name = "Ensemble Seq-Attention Equal"
+            seq_inv_name = "Ensemble Seq-Attention Inverse RMSE"
+
+            seq_equal_preds = EnsembleModel().combine(seq_attn_preds)
+            seq_inv_weights = EnsembleModel.optimize_inverse_rmse(np.asarray(self.y_true_aligned), seq_attn_preds)
+            seq_inv_preds = EnsembleModel(seq_inv_weights).combine(seq_attn_preds)
+
+            self.ensemble_weights[seq_equal_name] = {name: round(1.0 / len(seq_attn_preds), 6) for name in seq_attn_preds}
+            self.ensemble_weights[seq_inv_name] = seq_inv_weights
+
+            seq_base_targets = {name: base_targets[name] for name in seq_attn_preds if name in base_targets}
+            seq_equal_target = EnsembleModel().combine(seq_base_targets) if len(seq_base_targets) >= 2 else None
+            seq_inv_target = self._weighted_average(seq_base_targets, seq_inv_weights) if len(seq_base_targets) >= 2 else None
+
+            ensemble_tuples.append((seq_equal_name, seq_equal_preds, seq_equal_target))
+            ensemble_tuples.append((seq_inv_name, seq_inv_preds, seq_inv_target))
+
+        for name, pred_price, pred_target in ensemble_tuples:
             k = min(len(pred_price), len(self.y_true_aligned), len(self.prev_close_aligned))
             self.predictions[name] = np.asarray(pred_price)[-k:]
             if pred_target is not None:
@@ -294,7 +317,7 @@ class _PredictionEngineMixin:
                 cg_target = None
                 cg_preds = sharpe_preds
 
-        for name, pred_price, pred_target in [
+        ensemble_tuples = [
             (equal_name, equal_preds, equal_target),
             (inv_name, inverse_preds, inverse_target),
             (sharpe_name, sharpe_preds, sharpe_target),
@@ -302,7 +325,30 @@ class _PredictionEngineMixin:
             (hier_name, hier_preds, hier_target),
             (stk_name, stk_preds, stk_target),
             (cg_name, cg_preds, cg_target),
-        ]:
+        ]
+
+        # Seq-Attention ensembles
+        seq_attn_models = {"LSTM", "LSTM Lite", "AttentionLSTM v2"}
+        seq_attn_preds = {name: preds for name, preds in base_preds.items() if name in seq_attn_models}
+        if len(seq_attn_preds) >= 2:
+            seq_equal_name = "Ensemble Seq-Attention Equal"
+            seq_inv_name = "Ensemble Seq-Attention Inverse RMSE"
+
+            seq_equal_preds = EnsembleModel().combine(seq_attn_preds)
+            seq_inv_weights = EnsembleModel.optimize_inverse_rmse(np.asarray(wf_y_true), seq_attn_preds)
+            seq_inv_preds = EnsembleModel(seq_inv_weights).combine(seq_attn_preds)
+
+            self.ensemble_weights[seq_equal_name] = {name: round(1.0 / len(seq_attn_preds), 6) for name in seq_attn_preds}
+            self.ensemble_weights[seq_inv_name] = seq_inv_weights
+
+            seq_base_targets = {name: base_targets[name] for name in seq_attn_preds if name in base_targets}
+            seq_equal_target = EnsembleModel().combine(seq_base_targets) if len(seq_base_targets) >= 2 else None
+            seq_inv_target = self._weighted_average(seq_base_targets, seq_inv_weights) if len(seq_base_targets) >= 2 else None
+
+            ensemble_tuples.append((seq_equal_name, seq_equal_preds, seq_equal_target))
+            ensemble_tuples.append((seq_inv_name, seq_inv_preds, seq_inv_target))
+
+        for name, pred_price, pred_target in ensemble_tuples:
             k = min(len(pred_price), len(np.asarray(wf_y_true).ravel()))
             wf_predictions[name] = np.asarray(pred_price)[-k:]
             y_true_price = np.asarray(wf_y_true).ravel()[-k:]

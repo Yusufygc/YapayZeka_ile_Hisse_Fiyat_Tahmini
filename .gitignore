@@ -119,3 +119,6 @@ pyproject.toml
 .codex_tmp/
 yeniTasarim/
 .graphifyignore
+pytest_temp/
+.pytest_tmp_codex_lstm_lite/
+

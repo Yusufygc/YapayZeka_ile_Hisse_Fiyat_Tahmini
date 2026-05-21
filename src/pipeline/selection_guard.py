@@ -13,7 +13,7 @@ EligibilityStatus = Literal[
 ]
 
 MIN_TRADES_DEFAULT = 6
-PRODUCTION_ENSEMBLE_METHODS = {"Inverse RMSE", "Cash-Gated"}
+PRODUCTION_ENSEMBLE_METHODS = {"Inverse RMSE", "Cash-Gated", "Seq-Attention Inverse RMSE"}
 
 
 def compute_eligibility(

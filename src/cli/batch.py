@@ -114,8 +114,8 @@ def _run_single_stock(args_dict: Dict[str, Any]) -> Dict[str, Any]:
                     "sharpe": best.get("sharpe"),
                     "rmse": best.get("rmse"),
                 }
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"  [WARNING] Veritabanindan en iyi model okunamadi ({symbol}): {exc}")
 
         result["status"] = "ok"
 

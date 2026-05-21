@@ -17,7 +17,7 @@ from src.xai.strategies import SequenceContributionStrategy, TabularContribution
 
 TREE_MODELS = {"XGBoost", "Random Forest", "LightGBM Return"}
 LINEAR_MODELS = {"Ridge Return", "ElasticNet Return"}
-SEQ_MODELS = {"LSTM", "LSTM Lite", "AttentionLSTM", "DLinear", "NLinear"}
+SEQ_MODELS = {"LSTM", "LSTM Lite", "AttentionLSTM", "AttentionLSTM v2", "DLinear", "NLinear"}
 BASELINE_MODELS = {"Naive Last Value", "Naive Zero Return", "Naive Drift", "ARIMA", "Prophet"}
 
 
@@ -65,7 +65,7 @@ class XAIExplainer:
                     model_top, model_daily = self._explain_linear_model(
                         model_name, model, tensors, predictions, prediction_targets, y_true_aligned
                     )
-                elif model_name in {"LSTM", "LSTM Lite", "AttentionLSTM"}:
+                elif model_name in {"LSTM", "LSTM Lite", "AttentionLSTM", "AttentionLSTM v2"}:
                     model_top, model_daily = self._explain_sequence_permutation(
                         model_name, model, tensors, predictions, prediction_targets, y_true_aligned
                     )

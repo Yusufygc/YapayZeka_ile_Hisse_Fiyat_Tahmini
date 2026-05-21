@@ -9,9 +9,12 @@ compute_quality_flags(): ham OHLCV DataFrame'inden kalite sinyalleri üretir.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 _PSI_THRESHOLD = 0.25
 _PSI_N_BINS = 10
@@ -90,8 +93,8 @@ def compute_quality_flags(
                 max_gap = int(gaps.max()) if len(gaps) > 0 else 0
                 if max_gap > _SURVIVORSHIP_GAP_DAYS:
                     survivorship_warning = True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(f"Error calculating survivorship warning: {exc}")
 
     # ── PSI ──────────────────────────────────────────────────────────────
     psi_scores: Dict[str, float] = {}
@@ -102,8 +105,8 @@ def compute_quality_flags(
             psi_scores = compute_psi(train_df, holdout_df)
             psi_max = max(psi_scores.values(), default=0.0)
             psi_high = psi_max > _PSI_THRESHOLD
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(f"Error computing PSI: {exc}")
 
     # ── Clip rate ────────────────────────────────────────────────────────
     clip_rate = 0.0
@@ -111,8 +114,8 @@ def compute_quality_flags(
         clip_rate = float(
             df.attrs.get("clip_report", {}).get("train_clip_rate_pct", 0.0) or 0.0
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(f"Error reading clip rate: {exc}")
 
     return {
         "corporate_action_anomaly": corporate_action_anomaly,

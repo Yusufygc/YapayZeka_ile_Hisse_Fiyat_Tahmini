@@ -118,7 +118,7 @@ def is_benchmark_model(model_name: str) -> bool:
 
 def is_selection_candidate(model_name: str, candidate_models_iter: Iterable[str] | None) -> bool:
     name = str(model_name)
-    if name in {"Ensemble Inverse RMSE", "Ensemble Cash-Gated"}:
+    if name in {"Ensemble Inverse RMSE", "Ensemble Cash-Gated", "Ensemble Seq-Attention Inverse RMSE"}:
         return True
     return name in set(candidate_models_iter or [])
 
@@ -143,7 +143,7 @@ def reportable_model_names(model_names: Iterable[str], candidate_models_iter: It
         if (
             str(name) in candidates
             or is_benchmark_model(str(name))
-            or str(name) in {"Ensemble Inverse RMSE", "Ensemble Cash-Gated"}
+            or str(name) in {"Ensemble Inverse RMSE", "Ensemble Cash-Gated", "Ensemble Seq-Attention Inverse RMSE"}
         )
     }
 

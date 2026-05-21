@@ -216,6 +216,39 @@ class ReportingMetricsTests(unittest.TestCase):
         self.assertIn("Ensemble Equal Weight", manager.single_backtest_inputs)
         np.testing.assert_allclose(manager.predictions["Ensemble Equal Weight"], np.array([9.5, 10.5, 11.5]))
 
+    def test_single_split_seq_attention_ensemble(self):
+        manager = EvaluationManager.__new__(EvaluationManager)
+        manager.ensemble_enabled = True
+        manager.ensemble_weights = {}
+        manager.y_true_aligned = np.array([10.0, 11.0, 12.0])
+        manager.prev_close_aligned = np.array([9.5, 10.5, 11.5])
+        manager.predictions = {
+            "LSTM": np.array([10.0, 11.0, 12.0]),
+            "AttentionLSTM v2": np.array([9.0, 10.0, 11.0]),
+        }
+        manager.prediction_targets = {
+            "LSTM": np.array([0.01, 0.02, 0.03]),
+            "AttentionLSTM v2": np.array([0.00, 0.01, 0.02]),
+        }
+        manager.single_backtest_inputs = {
+            "LSTM": {
+                "dates": pd.date_range("2024-01-01", periods=3),
+                "prediction_dates": pd.date_range("2024-01-01", periods=3),
+                "y_true_price": np.array([10.0, 11.0, 12.0]),
+                "pred_price": np.array([10.0, 11.0, 12.0]),
+                "prev_close": np.array([9.5, 10.5, 11.5]),
+                "pred_target": np.array([0.01, 0.02, 0.03]),
+                "y_true_target": np.array([0.01, 0.02, 0.03]),
+            }
+        }
+
+        manager._add_single_split_ensembles()
+
+        self.assertIn("Ensemble Seq-Attention Equal", manager.predictions)
+        self.assertIn("Ensemble Seq-Attention Inverse RMSE", manager.predictions)
+        self.assertIn("Ensemble Seq-Attention Equal", manager.single_backtest_inputs)
+        np.testing.assert_allclose(manager.predictions["Ensemble Seq-Attention Equal"], np.array([9.5, 10.5, 11.5]))
+
 
 if __name__ == "__main__":
     unittest.main()

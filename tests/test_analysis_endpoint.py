@@ -28,9 +28,13 @@ def _make_db_with_model(
     model_name: str = "XGBoost",
     dir_acc: float = 56.0,
     with_forecast: bool = True,
-    freshness_date: str = "2026-05-19",
+    freshness_date: str = None,
 ):
     from src.database.stock_model_db import StockModelDB
+    from datetime import datetime
+
+    if freshness_date is None:
+        freshness_date = datetime.now().date().isoformat()
 
     tmp = tempfile.mktemp(suffix=".db")
     db = StockModelDB(tmp)

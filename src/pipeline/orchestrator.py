@@ -11,7 +11,10 @@ import re
 import subprocess
 import sys
 import warnings
-from datetime import datetime
+import logging
+from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 from typing import Any, Dict, List, Optional, Tuple
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
@@ -25,7 +28,11 @@ from src.pipeline.evaluation_manager import EvaluationManager
 from src.pipeline.model_scope import BENCHMARK_MODELS, normalize_candidate_models, resolve_candidates
 from src.pipeline.model_trainer import ModelTrainer
 from src.utils.reproducibility import set_global_seed
-from src.utils.reporting_utils import write_csv_and_aligned_view
+from src.pipeline.artifacts import (
+    write_window_selection_decision,
+    write_validation_and_quality_reports,
+    write_run_manifest,
+)
 
 
 class ForecastingPipeline:
@@ -248,147 +255,13 @@ class ForecastingPipeline:
         return rows
 
     def _write_window_selection_decision(self, comparison_df: Any, save_path: str) -> str:
-        import pandas as _pd
-
-        if not isinstance(comparison_df, _pd.DataFrame):
-            comparison_df = _pd.DataFrame(comparison_df)
-        decision_path = os.path.splitext(save_path)[0] + "_decision.md"
-        os.makedirs(os.path.dirname(decision_path), exist_ok=True)
-        best = comparison_df.iloc[0].to_dict() if not comparison_df.empty else {}
-        with open(decision_path, "w", encoding="utf-8") as handle:
-            handle.write("# Training Window Selection Decision\n\n")
-            handle.write("Final holdout used for selection: `False`\n\n")
-            if best:
-                handle.write("## Selected Row\n\n")
-                for key, value in best.items():
-                    handle.write(f"- `{key}`: `{value}`\n")
-        return decision_path
+        return write_window_selection_decision(comparison_df, save_path)
 
     def _write_validation_and_quality_reports(self) -> None:
-        try:
-            vp_df = self.data_manager.get_validation_protocol_data()
-            if vp_df is not None and not vp_df.empty:
-                vp_path = os.path.join(self.outputs_dir, "validation_protocol_report.csv")
-                write_csv_and_aligned_view(
-                    vp_df,
-                    vp_path,
-                    columns=[
-                        "Split",
-                        "Protocol",
-                        "Window_Type",
-                        "Train_Rows",
-                        "Test_Rows",
-                        "Train_Date_Start",
-                        "Train_Date_End",
-                        "Test_Date_Start",
-                        "Test_Date_End",
-                        "Scaler_Fit_Start",
-                        "Scaler_Fit_End",
-                        "Features_Count",
-                        "Selection_Set",
-                        "Evaluation_Set",
-                        "Final_Holdout_Used_For_Selection",
-                    ],
-                )
-                print(f"  [OK] Validation protocol raporu kaydedildi -> {vp_path}")
-
-            dq_reports = self.data_manager.get_data_quality_reports()
-            summary_rows = []
-            for report_name, report_data in dq_reports.items():
-                if not report_data:
-                    continue
-                summary_rows.append({
-                    "Report": report_name,
-                    "Row_Count": len(report_data) if hasattr(report_data, "__len__") else 1,
-                    "Status": "available",
-                })
-                if self.report_detail_level == "research":
-                    import pandas as _pd
-
-                    dq_df = _pd.DataFrame(report_data)
-                    dq_path = os.path.join(self.outputs_dir, f"data_quality_{report_name}.csv")
-                    write_csv_and_aligned_view(dq_df, dq_path)
-
-            if summary_rows:
-                import pandas as _pd
-
-                summary_path = os.path.join(self.outputs_dir, "data_quality_summary.csv")
-                write_csv_and_aligned_view(_pd.DataFrame(summary_rows), summary_path)
-                print(f"  [OK] Data quality ozet raporu kaydedildi -> {summary_path}")
-        except Exception as exc:
-            print(f"  [WARN] Validation/data quality raporlari kaydedilemedi: {exc}")
+        write_validation_and_quality_reports(self)
 
     def _write_run_manifest(self) -> None:
-        def _md5_file(path: str) -> str:
-            h = hashlib.md5()
-            try:
-                with open(path, "rb") as fh:
-                    for chunk in iter(lambda: fh.read(65536), b""):
-                        h.update(chunk)
-                return h.hexdigest()
-            except OSError:
-                return "unavailable"
-
-        def _dict_hash(d: dict) -> str:
-            raw = json.dumps(d, sort_keys=True, default=str).encode()
-            return hashlib.sha256(raw).hexdigest()[:16]
-
-        def _git_commit() -> str:
-            try:
-                result = subprocess.run(
-                    ["git", "rev-parse", "HEAD"],
-                    capture_output=True, text=True, timeout=5,
-                    cwd=self.project_root,
-                )
-                return result.stdout.strip() if result.returncode == 0 else "unavailable"
-            except Exception:
-                return "unavailable"
-
-        def _lib_versions() -> Dict[str, str]:
-            libs = ["numpy", "pandas", "sklearn", "xgboost", "lightgbm", "torch"]
-            versions: Dict[str, str] = {}
-            for lib in libs:
-                try:
-                    import importlib
-                    mod = importlib.import_module(lib if lib != "sklearn" else "sklearn")
-                    versions[lib] = getattr(mod, "__version__", "unknown")
-                except ImportError:
-                    versions[lib] = "not_installed"
-            return versions
-
-        signal_cfg_dict = {}
-        try:
-            sc = self._cfg.execution.signal_config
-            signal_cfg_dict = {
-                "quality_gate_mode": self.quality_gate_mode,
-                "min_directional_accuracy": self.min_directional_accuracy,
-                "max_rmse_vs_benchmark": self.max_rmse_vs_benchmark,
-                "min_composite_score": self.min_composite_score,
-            }
-        except Exception:
-            pass
-
-        manifest = {
-            "run_id": self.run_id,
-            "generated_at": datetime.now().isoformat(timespec="seconds"),
-            "stock_symbol": self.stock_symbol,
-            "data_hash": _md5_file(self.data_file),
-            "feature_pipeline_version": getattr(self._cfg.data, "feature_mode", "unknown"),
-            "model_config_hash": _dict_hash(self.model_config),
-            "signal_config_hash": _dict_hash(signal_cfg_dict),
-            "random_seed": 42,
-            "model_list": sorted(self.candidate_models),
-            "validation_protocol": self.validation_mode,
-            "git_commit": _git_commit(),
-            "python_version": sys.version,
-            "lib_versions": _lib_versions(),
-        }
-
-        manifest_path = os.path.join(self.outputs_dir, "run_manifest.json")
-        os.makedirs(self.outputs_dir, exist_ok=True)
-        with open(manifest_path, "w", encoding="utf-8") as fh:
-            json.dump(manifest, fh, indent=2, ensure_ascii=False)
-        print(f"  [OK] Run manifest yazildi -> {manifest_path}")
+        write_run_manifest(self)
 
     def _sync_latest_output(self) -> None:
         root = os.path.abspath(self.output_root)

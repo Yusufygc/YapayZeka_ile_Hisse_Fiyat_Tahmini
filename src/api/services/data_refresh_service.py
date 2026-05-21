@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -27,6 +29,9 @@ class DataRefreshError(RuntimeError):
         super().__init__(message)
         self.reason = reason
         self.payload = payload or {}
+
+
+_REFRESH_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 
 
 class DataRefreshService:
@@ -56,6 +61,8 @@ class DataRefreshService:
         best_model: Optional[Dict[str, Any]] = None,
         wait_timeout_seconds: float = 0.0,
     ) -> Dict[str, Any]:
+        if not re.match(r"^[A-Z0-9]{1,10}$", symbol.upper()):
+            raise ValueError(f"Invalid symbol format: {symbol}")
         payload = {
             "best_model_name": None if best_model is None else best_model.get("model_name"),
             "best_experiment_id": None if best_model is None else best_model.get("experiment_id"),
@@ -67,13 +74,7 @@ class DataRefreshService:
             payload=payload,
         )
         if self.start_background and job.get("status") == "queued":
-            thread = threading.Thread(
-                target=self._run_job,
-                args=(dict(job), best_model),
-                name=f"analysis-refresh-{symbol.upper()}",
-                daemon=True,
-            )
-            thread.start()
+            _REFRESH_EXECUTOR.submit(self._run_job, dict(job), best_model)
         if wait_timeout_seconds > 0:
             return self.wait_for_job(
                 str(job["job_id"]),
@@ -238,6 +239,8 @@ class DataRefreshService:
         }
 
     def data_file_for(self, symbol: str) -> str:
+        if not re.match(r"^[A-Z0-9]{1,10}$", symbol.upper()):
+            raise ValueError(f"Invalid symbol format: {symbol}")
         return os.path.join(self.project_root, "data", f"{symbol.upper()}.csv")
 
     def _new_db(self):

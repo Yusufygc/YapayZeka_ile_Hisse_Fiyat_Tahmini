@@ -330,7 +330,7 @@ class WalkForwardEvaluationWorkflow(_OwnerBackedService):
         if self.stock_db is None:
             return
         for model_name, avg_metrics in wf_results.items():
-            is_prod_ensemble = model_name in {"Ensemble Inverse RMSE", "Ensemble Cash-Gated"}
+            is_prod_ensemble = model_name in {"Ensemble Inverse RMSE", "Ensemble Cash-Gated", "Ensemble Seq-Attention Inverse RMSE"}
             self.stock_db.log_experiment(
                 stock_symbol=self.stock_symbol,
                 model_name=model_name,

@@ -9,9 +9,12 @@ Sonuç: median_net_return, positive_window_ratio, iqr_net_return
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 def rolling_holdout_evaluate(
@@ -66,7 +69,8 @@ def rolling_holdout_evaluate(
             signals = np.sign(preds)
             bar_returns = signals * y_win
             net_return = float(np.sum(bar_returns))
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"Error predicting on window [{start}:{end}]: {exc}")
             continue
         window_returns.append(net_return)
 
