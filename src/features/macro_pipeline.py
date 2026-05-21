@@ -22,8 +22,8 @@ BIST hisse tahminlerini desteklemek için üç farklı kaynaği birleştirir:
 
 Türetilen Özellikler:
   Döviz/Endeks (günlük):
-    USDTRY_Return, USDTRY_MA7, USDTRY_Volatility7
-    BIST100_Norm, BIST100_Return, BIST100_MA7
+    USDTRY_Return, USDTRY_Volatility7
+    BIST100_Return, BIST100_MA7
 
   Faiz & Enflasyon (aylık → günlük ffill):
     Rate_Level       — politika faizi düzeyi (%)
@@ -83,6 +83,13 @@ _YFINANCE_TICKERS = {
     "OIL_USD":  "BZ=F",       # Brent petrol (USD/bbl) — enerji hisseleri için kritik
     "DXY":     "DX-Y.NYB",   # Dolar endeksi — küresel EM etkisi
     "US10Y":   "^TNX",        # ABD 10-yıllık faiz — carry trade sinyali
+    # Sektörel Endeksler
+    "XBANK":   "XBANK.IS",
+    "XUSIN":   "XUSIN.IS",
+    "XHOLD":   "XHOLD.IS",
+    "XULAS":   "XULAS.IS",
+    "XTCRT":   "XTCRT.IS",
+    "XTEK":    "XTEK.IS",
 }
 
 _EVDS_BASE_URL = "https://evds2.tcmb.gov.tr/service/evds/"
@@ -107,6 +114,13 @@ _CACHE_FILES = {
     "OIL_USD":       "OIL_USD.csv",
     "DXY":           "DXY.csv",
     "US10Y":         "US10Y.csv",
+    # Sektörel Endeksler
+    "XBANK":         "XBANK.csv",
+    "XUSIN":         "XUSIN.csv",
+    "XHOLD":         "XHOLD.csv",
+    "XULAS":         "XULAS.csv",
+    "XTCRT":         "XTCRT.csv",
+    "XTEK":          "XTEK.csv",
 }
 
 _STALE_DAYS_DAILY   = 1   # Günlük veri için yenileme eşiği
@@ -645,9 +659,7 @@ class MacroPipeline:
         """
         base = [
             "USDTRY_Return",
-            "USDTRY_MA7",
             "USDTRY_Volatility7",
-            "BIST100_Norm",
             "BIST100_Return",
             "BIST100_MA7",
             # Faz 4.1 — Global göstergeler (opsiyonel; yoksa feature pipeline atlar)
@@ -662,6 +674,13 @@ class MacroPipeline:
             "DXY_Volatility7",
             "US10Y_Level",
             "US10Y_Change",
+            # Sektörel Getiriler
+            "XBANK_Return",
+            "XUSIN_Return",
+            "XHOLD_Return",
+            "XULAS_Return",
+            "XTCRT_Return",
+            "XTEK_Return",
         ]
         rate_inflation = [
             "Rate_Level",

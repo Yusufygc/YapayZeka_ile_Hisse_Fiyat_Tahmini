@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import numpy as np
 
 
 def engineer_monthly_rate(df: pd.DataFrame) -> pd.DataFrame:
@@ -28,16 +29,20 @@ def engineer_daily(df: pd.DataFrame) -> pd.DataFrame:
 
     if "USDTRY" in df.columns:
         df["USDTRY_Return"] = df["USDTRY"].pct_change()
-        df["USDTRY_MA7"] = df["USDTRY"].rolling(7).mean()
         df["USDTRY_Volatility7"] = df["USDTRY_Return"].rolling(7).std()
         df.drop(columns=["USDTRY"], inplace=True)
 
     if "BIST100" in df.columns:
-        first_bist = df["BIST100"].iloc[0] if df["BIST100"].iloc[0] != 0 else 1.0
-        df["BIST100_Norm"] = df["BIST100"] / first_bist
         df["BIST100_Return"] = df["BIST100"].pct_change()
-        df["BIST100_MA7"] = df["BIST100_Norm"].rolling(7).mean()
+        # BIST100_MA7 stasyonerleştirildi: Fiyatın 7 günlük ortalamasından göreli sapması
+        bist_ma = df["BIST100"].rolling(7).mean()
+        df["BIST100_MA7"] = df["BIST100"] / bist_ma.replace(0, np.nan) - 1.0
         df.drop(columns=["BIST100"], inplace=True)
+
+    for sect in ["XBANK", "XUSIN", "XHOLD", "XULAS", "XTCRT", "XTEK"]:
+        if sect in df.columns:
+            df[f"{sect}_Return"] = df[sect].pct_change()
+            df.drop(columns=[sect], inplace=True)
 
     if "EURTRY" in df.columns:
         df["EURTRY_Return"] = df["EURTRY"].pct_change()
