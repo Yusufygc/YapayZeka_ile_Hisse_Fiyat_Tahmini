@@ -16,4 +16,5 @@ def test_interactive_deep_learning_preset_contains_lstm_lite():
 
     label, models = PRESETS["3"]
     assert "Derin" in label
-    assert models == ["LSTM", "LSTM Lite"]
+    assert set(models) == {"LSTM", "LSTM Lite", "AttentionLSTM v2"}
+

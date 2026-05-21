@@ -26,23 +26,17 @@ from src.pipeline.config import (
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 META_CSV_STEMS = {"bist_universe", "bist_calendar"}
 
-AVAILABLE_MODELS = [
-    "Prophet",
-    "XGBoost",
-    "Random Forest",
-    "LightGBM Return",
-    "LSTM",
-    "LSTM Lite",
-    "Ridge Return",
-    "ElasticNet Return",
-    "DLinear",
-    "NLinear",
-]
+from src.pipeline.model_scope import candidate_models
+from src.pipeline.model_registry import ensure_loaded
+
+# Model registry'yi tetikle ve aday modelleri al
+ensure_loaded()
+AVAILABLE_MODELS = list(candidate_models())
 
 PRESETS = {
     "1": ("Tüm Modeller",            AVAILABLE_MODELS),
     "2": ("Agac Tabanli",            ["XGBoost", "Random Forest", "LightGBM Return"]),
-    "3": ("Yalnızca Derin Öğrenme",  ["LSTM", "LSTM Lite"]),
+    "3": ("Yalnızca Derin Öğrenme",  ["LSTM", "LSTM Lite", "AttentionLSTM v2"]),
     "4": ("Hızlı (XGBoost + LSTM)",  ["XGBoost", "LSTM"]),
     "5": ("Yalnızca Prophet",        ["Prophet"]),
     "6": ("Modern Baseline",         ["Ridge Return", "ElasticNet Return", "LightGBM Return", "DLinear", "NLinear"]),
