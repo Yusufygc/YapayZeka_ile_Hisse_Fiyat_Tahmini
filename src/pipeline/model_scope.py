@@ -35,6 +35,7 @@ _CANONICAL_ORDER: tuple[str, ...] = (
     "LSTM",
     "LSTM Lite",
     "AttentionLSTM v2",
+    "Prophet-ML/DL Hybrid",
 )
 
 
