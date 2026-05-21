@@ -62,7 +62,7 @@ class DataIngestionService(_OwnerBackedService):
                 correlation_threshold=self.data_cfg.correlation_threshold,
                 lag_feature_count=self.data_cfg.lag_feature_count,
             )
-            self.df = feature_pipeline.engineer_features(raw_df, macro_df=macro_df)
+            self.df = feature_pipeline.engineer_features(raw_df, macro_df=macro_df, symbol=self.stock_symbol)
             self.feature_names = feature_pipeline.feature_names
             self.feature_groups = feature_pipeline.feature_groups
             self.feature_pruning_report = feature_pipeline.pruning_report
@@ -76,18 +76,19 @@ class DataIngestionService(_OwnerBackedService):
 
         # Özet
         has_rel_str  = "Relative_Strength" in self.feature_names
+        has_sec_str  = "Sector_Relative_Strength" in self.feature_names
         macro_base   = len(MacroPipeline.macro_feature_names(include_rates=True))
-        macro_count  = macro_base + (1 if has_rel_str else 0)
+        macro_count  = macro_base + (1 if has_rel_str else 0) + (1 if has_sec_str else 0)
         tech_count   = len(self.feature_names) - (macro_count if self.data_cfg.use_macro and macro_df is not None and not macro_df.empty else 0)
 
         print(f"  Veri boyutu      : {self.df.shape[0]} satır × {self.df.shape[1]} sütun")
         print(f"  Teknik özellikler: {tech_count}")
         if self.data_cfg.use_macro and macro_df is not None and not macro_df.empty:
             print(f"  Makro özellikler : {macro_count}  "
-                  f"(USDTRY_Return, USDTRY_MA7, USDTRY_Volatility7, "
-                  f"BIST100_Norm, BIST100_Return, BIST100_MA7, "
+                  f"(USDTRY_Return, USDTRY_Volatility7, "
+                  f"BIST100_Return, BIST100_MA7, "
                   f"Rate_Level, Rate_Change, CPI_YoY, CPI_MoM, Real_Rate, "
-                  f"Relative_Strength)")
+                  f"Relative_Strength, Sector_Relative_Strength)")
         print(f"  Toplam özellik   : {len(self.feature_names)}")
         if self.corporate_action_report.get("warning"):
             print(f"  [DATA] Uyari       : {self.corporate_action_report['warning']}")
@@ -211,7 +212,8 @@ class DataIngestionService(_OwnerBackedService):
             return macro_df
 
         except Exception as exc:
-            print(f"  [MACRO] Makro veri alınamadı ({exc}), devam ediliyor.")
+            safe_exc = str(exc).encode("ascii", errors="replace").decode("ascii")
+            print(f"  [MACRO] Makro veri alınamadı ({safe_exc}), devam ediliyor.")
             return pd.DataFrame()
 
 
