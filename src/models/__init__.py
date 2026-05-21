@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-Lightweight model package exports.
+"""Lightweight model package exports.
 
 Model implementations are imported lazily so optional dependencies such as
 Prophet, TensorFlow, PyTorch, LightGBM, or joblib do not break unrelated tests
@@ -9,6 +8,7 @@ or baseline-only workflows during package import.
 
 _EXPORTS = {
     "ProphetModel": ("prophet_model", "ProphetModel"),
+    "ProphetHybridModel": ("prophet_hybrid_model", "ProphetHybridModel"),
     "XGBoostModel": ("xgboost_model", "XGBoostModel"),
     "AttentionLSTMModel": ("lstm_model", "AttentionLSTMModel"),
     "AttentionLSTMV2Model": ("attention_lstm_v2_model", "AttentionLSTMV2Model"),
@@ -40,18 +40,18 @@ def __getattr__(name):
     return value
 
 
-# --- Plug-in keşfi (Faz 1 — additive) ------------------------------------
-# `model_registry.ensure_loaded()` tarafından bir kez çağrılır.
+# --- Plug-in kesfi (Faz 1 - additive) ------------------------------------
+# `model_registry.ensure_loaded()` tarafindan bir kez cagrilir.
 # Her *_model.py (ve linear_sequence_model) import edilince
-# içlerindeki `register_model(ModelSpec(...))` çağrıları registry'i doldurur.
+# iclerindeki `register_model(ModelSpec(...))` cagrilari registry'i doldurur.
 _DISCOVERED = False
 
 
 def _discover_models() -> None:
-    """src/models içindeki model modüllerini import et → registry tetiklensin.
+    """src/models icindeki model modullerini import et -> registry tetiklensin.
 
-    Idempotent. Optional dep eksikse modül atlanır, warning verilir.
-    Mevcut lazy `_EXPORTS` davranışı bozulmaz; bu sadece registry için ek import.
+    Idempotent. Optional dep eksikse modul atlanır, warning verilir.
+    Mevcut lazy `_EXPORTS` davranisi bozulmaz; bu sadece registry icin ek import.
     """
     global _DISCOVERED
     if _DISCOVERED:
@@ -62,21 +62,21 @@ def _discover_models() -> None:
     import pkgutil
     import warnings
 
-    # Discover kapsamı: bu paketin doğrudan modülleri/alt paketleri.
+    # Discover kapsami: bu paketin dogrudan modulleri/alt paketleri.
     for mod_info in pkgutil.iter_modules(__path__):
         name = mod_info.name
-        # Sadece model dosyaları ve bilinen alt paketler.
+        # Sadece model dosyalari ve bilinen alt paketler.
         if not (
             name.endswith("_model")
             or name == "linear_sequence_model"
         ):
             continue
-        # base_model abstrakttır, kayıt gerekmez.
+        # base_model abstrakttir, kayit gerekmez.
         if name == "base_model":
             continue
         try:
             importlib.import_module(f"{__name__}.{name}")
         except ImportError as exc:
-            warnings.warn(f"Model modülü atlandı ({name}): {exc}")
-        except Exception as exc:  # pragma: no cover - kayıt hatası nadir
-            warnings.warn(f"Model modülü import sırasında hata ({name}): {exc}")
+            warnings.warn(f"Model modulu atlandi ({name}): {exc}")
+        except Exception as exc:  # pragma: no cover - kayit hatasi nadir
+            warnings.warn(f"Model modulu import sirasinda hata ({name}): {exc}")
