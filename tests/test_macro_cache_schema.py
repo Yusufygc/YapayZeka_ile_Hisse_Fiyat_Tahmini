@@ -69,7 +69,7 @@ class MacroCacheSchemaTests(unittest.TestCase):
         self.assertTrue(features["Date"].is_monotonic_increasing)
         self.assertFalse(features["Date"].duplicated().any())
         self.assertGreaterEqual(features["Date"].min(), pd.Timestamp("2026-04-01"))
-        for column in ["USDTRY_Return", "BIST100_Norm", "Rate_Level", "CPI_YoY", "Real_Rate"]:
+        for column in ["USDTRY_Return", "BIST100_Return", "BIST100_MA7", "Rate_Level", "CPI_YoY", "Real_Rate"]:
             self.assertIn(column, features.columns)
         self.assertFalse(any(column.endswith("_Raw_Date") for column in features.columns))
 

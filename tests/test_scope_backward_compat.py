@@ -7,6 +7,8 @@ içerik orijinal tuple ile birebir aynı olmalı.
 """
 from __future__ import annotations
 
+import pytest
+
 from src.pipeline.model_scope import (
     BENCHMARK_MODELS,
     CANDIDATE_MODELS,
@@ -29,7 +31,7 @@ def test_candidate_models_content():
     expected = {
         "Prophet", "ARIMA", "Ridge Return", "ElasticNet Return", "LightGBM Return",
         "DLinear", "NLinear", "XGBoost", "Random Forest", "LSTM", "LSTM Lite",
-        "AttentionLSTM v2",
+        "AttentionLSTM v2", "Prophet-ML/DL Hybrid",
     }
     assert set(CANDIDATE_MODELS) == expected
 
@@ -46,15 +48,14 @@ def test_canonical_ordering_preserved():
     # CANDIDATE_MODELS sıralaması da preserve edilmeli.
     expected_order = (
         "Prophet", "ARIMA", "Ridge Return", "ElasticNet Return", "LightGBM Return",
-            "DLinear", "NLinear", "XGBoost", "Random Forest", "LSTM", "LSTM Lite",
-            "AttentionLSTM v2",
+        "DLinear", "NLinear", "XGBoost", "Random Forest", "LSTM", "LSTM Lite",
+        "AttentionLSTM v2", "Prophet-ML/DL Hybrid",
     )
     assert CANDIDATE_MODELS == expected_order
 
 
 def test_module_getattr_unknown_raises():
     import src.pipeline.model_scope as scope
-    import pytest
     with pytest.raises(AttributeError):
         scope.NOT_A_REAL_CONSTANT  # noqa: B018
 
