@@ -29,6 +29,18 @@ from src.features.correlation_pruning import prune_correlated_features
 from src.xai.feature_dictionary import feature_group
 
 
+_SYMBOL_SECTORS = {
+    "AKBNK": "XBANK",
+    "KCHOL": "XHOLD",
+    "THYAO": "XULAS",
+    "MIATK": "XTEK",
+    "ONRYT": "XTEK",
+    "BIMAS": "XTCRT",
+    "MGROS": "XTCRT",
+    "KTLEV": "XTCRT",
+}
+
+
 class FeaturePipeline:
     """
     Ham OHLCV verisini model-ready özellik matrisine dönüştürür.
@@ -46,7 +58,7 @@ class FeaturePipeline:
         volume_col: str = "Volume",
         feature_mode: str = "stationary_features",
         prune_correlated_features: bool = False,
-        correlation_threshold: float = 0.98,
+        correlation_threshold: float = 0.88,
         lag_feature_count: int = 5,
     ):
         self.close_col  = close_col
@@ -71,6 +83,7 @@ class FeaturePipeline:
         self,
         df:        pd.DataFrame,
         macro_df:  Optional[pd.DataFrame] = None,
+        symbol:    Optional[str] = None,
     ) -> pd.DataFrame:
         """
         Tüm özellik üretim adımlarını sırayla uygular.
@@ -80,6 +93,7 @@ class FeaturePipeline:
             macro_df : MacroPipeline'dan gelen makro özellik DataFrame'i
                        (Date sütunu + makro sütunlar).
                        None ise makro katman atlanır.
+            symbol   : Sektörel eşleştirme için opsiyonel hisse sembolü.
 
         Returns:
             Model eğitimine hazır, NaN içermeyen DataFrame.
@@ -105,7 +119,7 @@ class FeaturePipeline:
 
         # 5. Makro bağlam (opsiyonel)
         if macro_df is not None and not macro_df.empty:
-            df = self._merge_macro(df, macro_df)
+            df = self._merge_macro(df, macro_df, symbol=symbol)
 
         # NaN temizle
         df = df.dropna().reset_index(drop=True)
@@ -186,6 +200,16 @@ class FeaturePipeline:
                 df[f"Rolling_Std_{w}"] = rolling_std
                 df[f"BB_Upper_{w}"] = bb.bollinger_hband()
                 df[f"BB_Lower_{w}"] = bb.bollinger_lband()
+
+        # NATR (Normalized Average True Range)
+        if self.feature_mode in {"stationary_features", "hybrid"}:
+            high = df[self.high_col]
+            low = df[self.low_col]
+            atr_ind = ta.volatility.AverageTrueRange(
+                high=high, low=low, close=close, window=14
+            )
+            df["NATR_14"] = atr_ind.average_true_range() / close.replace(0, np.nan)
+
         return df
 
     def _add_momentum_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -202,6 +226,27 @@ class FeaturePipeline:
             df["MACD_norm"]        = macd.macd() / close_safe
             df["MACD_Signal_norm"] = macd.macd_signal() / close_safe
             df["MACD_Diff_norm"]   = macd.macd_diff() / close_safe
+
+            # ADX, MFI, CMF stasyoner indikatörleri
+            high = df[self.high_col]
+            low = df[self.low_col]
+            volume = df[self.volume_col].astype(float)
+
+            mfi_ind = ta.volume.MFIIndicator(
+                high=high, low=low, close=close, volume=volume, window=14
+            )
+            df["MFI_14"] = mfi_ind.money_flow_index()
+
+            adx_ind = ta.trend.ADXIndicator(
+                high=high, low=low, close=close, window=14
+            )
+            df["ADX_14"] = adx_ind.adx()
+
+            cmf_ind = ta.volume.ChaikinMoneyFlowIndicator(
+                high=high, low=low, close=close, volume=volume, window=20
+            )
+            df["CMF_20"] = cmf_ind.chaikin_money_flow()
+
         if self.feature_mode in {"legacy_price_features", "hybrid"}:
             df["MACD"] = macd.macd()
             df["MACD_Signal"] = macd.macd_signal()
@@ -239,14 +284,15 @@ class FeaturePipeline:
         self,
         df:       pd.DataFrame,
         macro_df: pd.DataFrame,
+        symbol:   Optional[str] = None,
     ) -> pd.DataFrame:
         """
         Makro DataFrame'i hisse DataFrame'iyle tarihe göre birleştirir.
         Eksik günler forward-fill ile doldurulur.
 
-        Ek özellik:
+        Ek özellikler:
           Relative_Strength = hisse Return − BIST100_Return
-          (Hissenin piyasaya göre ayrışan hareketi)
+          Sector_Relative_Strength = hisse Return − sektörel getiri (veya BIST100 fallback)
         """
         # Date sütunu normalize
         df_dates       = pd.to_datetime(df["Date"]).dt.normalize()
@@ -269,5 +315,27 @@ class FeaturePipeline:
             merged["Relative_Strength"] = (
                 merged["Return"].fillna(0) - merged["BIST100_Return"].fillna(0)
             )
+
+        # Sektörel Göreli Güç
+        if "Return" in merged.columns:
+            sector = "XUSIN"
+            if symbol:
+                clean_sym = symbol.split(".")[0].upper()
+                sector = _SYMBOL_SECTORS.get(clean_sym, "XUSIN")
+
+            sector_col = f"{sector}_Return"
+            if sector_col in merged.columns:
+                merged["Sector_Relative_Strength"] = (
+                    merged["Return"].fillna(0) - merged[sector_col].fillna(0)
+                )
+            elif "BIST100_Return" in merged.columns:
+                merged["Sector_Relative_Strength"] = (
+                    merged["Return"].fillna(0) - merged["BIST100_Return"].fillna(0)
+                )
+
+        # Drop non-stationary features if they exist
+        for col in ["BIST100_Norm", "USDTRY_MA7"]:
+            if col in merged.columns:
+                merged.drop(columns=[col], inplace=True)
 
         return merged
