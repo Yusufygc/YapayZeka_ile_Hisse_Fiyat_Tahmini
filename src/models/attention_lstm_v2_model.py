@@ -14,7 +14,7 @@ from typing import Iterable
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau  # type: ignore
-from tensorflow.keras.layers import Bidirectional, Dense, Dropout, Input, LSTM, Layer  # type: ignore
+from tensorflow.keras.layers import Bidirectional, Dense, Dropout, Input, LSTM, GRU, Layer  # type: ignore
 from tensorflow.keras.models import Model, load_model  # type: ignore
 
 from src.models.base_model import BaseModel
@@ -68,6 +68,10 @@ class AttentionLSTMV2Model(BaseModel):
         tune_on_fit: bool = False,
         tune_n_trials: int = 12,
         loss: str = "huber",
+        cell_type: str = "lstm",
+        l2_rate: float = 1e-4,
+        optimizer_type: str = "adam",
+        weight_decay: float = 1e-4,
     ):
         self.units_1 = int(units_1)
         self.units_2 = int(units_2)
@@ -83,6 +87,10 @@ class AttentionLSTMV2Model(BaseModel):
         self.tune_on_fit = bool(tune_on_fit)
         self.tune_n_trials = int(tune_n_trials)
         self.loss = str(loss)
+        self.cell_type = str(cell_type)
+        self.l2_rate = float(l2_rate)
+        self.optimizer_type = str(optimizer_type)
+        self.weight_decay = float(weight_decay)
         self.model: Model | None = None
         self.attention_model: Model | None = None
 
@@ -108,17 +116,43 @@ class AttentionLSTMV2Model(BaseModel):
 
     def _build_model(self, input_shape: tuple[int, int]) -> Model:
         inputs = Input(shape=input_shape)
-        x = Bidirectional(LSTM(self.units_1, return_sequences=True))(inputs)
+        reg = tf.keras.regularizers.l2(self.l2_rate) if self.l2_rate > 0 else None
+        cell_class = GRU if self.cell_type.lower() == "gru" else LSTM
+
+        x = Bidirectional(
+            cell_class(
+                self.units_1,
+                return_sequences=True,
+                kernel_regularizer=reg,
+                recurrent_regularizer=reg,
+            )
+        )(inputs)
         x = Dropout(self.dropout_rate)(x)
-        x = Bidirectional(LSTM(self.units_2, return_sequences=True))(x)
+        x = Bidirectional(
+            cell_class(
+                self.units_2,
+                return_sequences=True,
+                kernel_regularizer=reg,
+                recurrent_regularizer=reg,
+            )
+        )(x)
         x = Dropout(self.dropout_rate)(x)
         context, attention_weights = TemporalAttentionV2(name="temporal_attention_v2")(x)
-        x = Dense(self.dense_units, activation="relu")(context)
+        x = Dense(self.dense_units, activation="relu", kernel_regularizer=reg)(context)
         x = Dropout(self.dropout_rate)(x)
-        outputs = Dense(1)(x)
+        outputs = Dense(1, kernel_regularizer=reg)(x)
         model = Model(inputs=inputs, outputs=outputs)
         self.attention_model = Model(inputs=inputs, outputs=attention_weights)
-        optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate, clipnorm=1.0)
+
+        if self.optimizer_type.lower() == "adamw":
+            optimizer = tf.keras.optimizers.AdamW(
+                learning_rate=self.learning_rate,
+                weight_decay=self.weight_decay,
+                clipnorm=1.0,
+            )
+        else:
+            optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate, clipnorm=1.0)
+
         model.compile(optimizer=optimizer, loss=self._loss(), metrics=["mae"])
         return model
 
@@ -159,6 +193,9 @@ class AttentionLSTMV2Model(BaseModel):
             dropout_rate = trial.suggest_float("dropout", 0.15, 0.45)
             learning_rate = trial.suggest_categorical("learning_rate", [1e-4, 3e-4, 5e-4, 1e-3])
             batch_size = trial.suggest_categorical("batch_size", [16, 32])
+            cell_type = trial.suggest_categorical("cell_type", ["lstm", "gru"])
+            l2_rate = trial.suggest_categorical("l2_rate", [1e-5, 1e-4, 1e-3, 0.0])
+            optimizer_type = trial.suggest_categorical("optimizer_type", ["adam", "adamw"])
 
             old = (
                 self.units_1,
@@ -166,12 +203,18 @@ class AttentionLSTMV2Model(BaseModel):
                 self.dense_units,
                 self.dropout_rate,
                 self.learning_rate,
+                self.cell_type,
+                self.l2_rate,
+                self.optimizer_type,
             )
             self.units_1 = int(units_1)
             self.units_2 = int(units_2)
             self.dense_units = int(dense_units)
             self.dropout_rate = float(dropout_rate)
             self.learning_rate = float(learning_rate)
+            self.cell_type = str(cell_type)
+            self.l2_rate = float(l2_rate)
+            self.optimizer_type = str(optimizer_type)
             model = self._build_model(input_shape)
             history = model.fit(
                 X_tr,
@@ -192,6 +235,9 @@ class AttentionLSTMV2Model(BaseModel):
                 self.dense_units,
                 self.dropout_rate,
                 self.learning_rate,
+                self.cell_type,
+                self.l2_rate,
+                self.optimizer_type,
             ) = old
             return float(best_val_loss + 0.1 * best_val_mae)
 
@@ -204,6 +250,9 @@ class AttentionLSTMV2Model(BaseModel):
         self.dropout_rate = float(params.get("dropout", self.dropout_rate))
         self.learning_rate = float(params.get("learning_rate", self.learning_rate))
         self.batch_size = int(params.get("batch_size", self.batch_size))
+        self.cell_type = str(params.get("cell_type", self.cell_type))
+        self.l2_rate = float(params.get("l2_rate", self.l2_rate))
+        self.optimizer_type = str(params.get("optimizer_type", self.optimizer_type))
         print(f"  [Optuna AttentionLSTM v2] En iyi validation objective: {study.best_value:.6f}")
 
     def train(self, X_train: np.ndarray, y_train: np.ndarray, **kwargs) -> None:

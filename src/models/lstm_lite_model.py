@@ -6,7 +6,7 @@ from __future__ import annotations
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau  # type: ignore
-from tensorflow.keras.layers import Dense, Dropout, Input, LSTM  # type: ignore
+from tensorflow.keras.layers import Dense, Dropout, Input, LSTM, GRU  # type: ignore
 from tensorflow.keras.models import Model, load_model  # type: ignore
 
 from .base_model import BaseModel
@@ -29,6 +29,10 @@ class LSTMLiteModel(BaseModel):
         min_val_samples: int = 32,
         tune_on_fit: bool = False,
         tune_n_trials: int = 12,
+        cell_type: str = "lstm",
+        l2_rate: float = 1e-4,
+        optimizer_type: str = "adam",
+        weight_decay: float = 1e-4,
     ):
         self.units = int(units)
         self.dense_units = int(dense_units)
@@ -42,6 +46,10 @@ class LSTMLiteModel(BaseModel):
         self.min_val_samples = int(min_val_samples)
         self.tune_on_fit = bool(tune_on_fit)
         self.tune_n_trials = int(tune_n_trials)
+        self.cell_type = str(cell_type)
+        self.l2_rate = float(l2_rate)
+        self.optimizer_type = str(optimizer_type)
+        self.weight_decay = float(weight_decay)
         self.model: Model | None = None
 
     def _chronological_validation_split(
@@ -69,20 +77,43 @@ class LSTMLiteModel(BaseModel):
         dense_units: int | None = None,
         dropout_rate: float | None = None,
         learning_rate: float | None = None,
+        cell_type: str | None = None,
+        l2_rate: float | None = None,
+        optimizer_type: str | None = None,
+        weight_decay: float | None = None,
     ) -> Model:
         units = int(self.units if units is None else units)
         dense_units = int(self.dense_units if dense_units is None else dense_units)
         dropout_rate = float(self.dropout_rate if dropout_rate is None else dropout_rate)
         learning_rate = float(self.learning_rate if learning_rate is None else learning_rate)
+        cell_type = str(self.cell_type if cell_type is None else cell_type)
+        l2_rate = float(self.l2_rate if l2_rate is None else l2_rate)
+        optimizer_type = str(self.optimizer_type if optimizer_type is None else optimizer_type)
+        weight_decay = float(self.weight_decay if weight_decay is None else weight_decay)
 
         inputs = Input(shape=input_shape)
-        x = LSTM(units, return_sequences=False)(inputs)
+        reg = tf.keras.regularizers.l2(l2_rate) if l2_rate > 0 else None
+        cell_class = GRU if cell_type.lower() == "gru" else LSTM
+
+        x = cell_class(
+            units,
+            return_sequences=False,
+            kernel_regularizer=reg,
+            recurrent_regularizer=reg,
+        )(inputs)
         x = Dropout(dropout_rate)(x)
-        x = Dense(dense_units, activation="relu")(x)
-        outputs = Dense(1)(x)
+        x = Dense(dense_units, activation="relu", kernel_regularizer=reg)(x)
+        outputs = Dense(1, kernel_regularizer=reg)(x)
 
         model = Model(inputs=inputs, outputs=outputs)
-        optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate, clipnorm=1.0)
+        if optimizer_type.lower() == "adamw":
+            optimizer = tf.keras.optimizers.AdamW(
+                learning_rate=learning_rate,
+                weight_decay=weight_decay,
+                clipnorm=1.0,
+            )
+        else:
+            optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate, clipnorm=1.0)
         model.compile(optimizer=optimizer, loss=tf.keras.losses.Huber(), metrics=["mae"])
         return model
 
@@ -122,6 +153,9 @@ class LSTMLiteModel(BaseModel):
             dropout_rate = trial.suggest_float("dropout", 0.1, 0.4)
             learning_rate = trial.suggest_categorical("learning_rate", [1e-4, 3e-4, 1e-3])
             batch_size = trial.suggest_categorical("batch_size", [16, 32])
+            cell_type = trial.suggest_categorical("cell_type", ["lstm", "gru"])
+            l2_rate = trial.suggest_categorical("l2_rate", [1e-5, 1e-4, 1e-3, 0.0])
+            optimizer_type = trial.suggest_categorical("optimizer_type", ["adam", "adamw"])
 
             model = self._build_model(
                 input_shape,
@@ -129,6 +163,9 @@ class LSTMLiteModel(BaseModel):
                 dense_units=dense_units,
                 dropout_rate=dropout_rate,
                 learning_rate=learning_rate,
+                cell_type=cell_type,
+                l2_rate=l2_rate,
+                optimizer_type=optimizer_type,
             )
             history = model.fit(
                 X_tr,
@@ -153,6 +190,9 @@ class LSTMLiteModel(BaseModel):
         self.dropout_rate = float(params.get("dropout", self.dropout_rate))
         self.learning_rate = float(params.get("learning_rate", self.learning_rate))
         self.batch_size = int(params.get("batch_size", self.batch_size))
+        self.cell_type = str(params.get("cell_type", self.cell_type))
+        self.l2_rate = float(params.get("l2_rate", self.l2_rate))
+        self.optimizer_type = str(params.get("optimizer_type", self.optimizer_type))
         print(f"  [Optuna LSTM Lite] En iyi validation objective: {study.best_value:.6f}")
 
     def train(self, X_train: np.ndarray, y_train: np.ndarray, **kwargs) -> None:
