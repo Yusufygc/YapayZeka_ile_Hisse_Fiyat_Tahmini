@@ -24,6 +24,7 @@ import pandas as pd
 
 try:
     from filelock import FileLock, Timeout as FileLockTimeout
+
     _HAS_FILELOCK = True
 except ImportError:
     _HAS_FILELOCK = False
@@ -31,6 +32,7 @@ except ImportError:
 
 
 REQUIRED_COLUMNS = ("Symbol", "Listed_Date", "Delisted_Date", "Status", "Source", "Note")
+OPTIONAL_COLUMNS = ("Sector", "Sector_Index")
 DEFAULT_EXCLUDE_DIRS = ("macro", "meta", "feature_cache", "optuna")
 DEFAULT_EXCLUDE_FILES = ("bist_universe.csv",)
 _LOCK_TIMEOUT_SEC = 10
@@ -88,7 +90,7 @@ def _enumerate_candidates(
 
 def _load_universe_df(universe_path: str) -> tuple[pd.DataFrame | None, str | None]:
     if not os.path.exists(universe_path) or os.path.getsize(universe_path) == 0:
-        return pd.DataFrame(columns=list(REQUIRED_COLUMNS)), None
+        return pd.DataFrame(columns=[*REQUIRED_COLUMNS[:-1], *OPTIONAL_COLUMNS, "Note"]), None
     try:
         df = pd.read_csv(universe_path)
     except Exception as exc:
@@ -96,6 +98,9 @@ def _load_universe_df(universe_path: str) -> tuple[pd.DataFrame | None, str | No
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
         return None, f"invalid_schema_missing: {','.join(missing)}"
+    for column in OPTIONAL_COLUMNS:
+        if column not in df.columns:
+            df[column] = ""
     return df, None
 
 
@@ -163,26 +168,39 @@ def sync_universe(
         if listed_date is None:
             result["errors"].append({"symbol": symbol, "reason": "no_valid_date", "path": csv_path})
             continue
-        rel_path = os.path.relpath(csv_path, start=os.path.dirname(universe_path)).replace("\\", "/")
-        new_rows.append({
-            "Symbol": symbol,
-            "Listed_Date": listed_date,
-            "Delisted_Date": "",
-            "Status": "Active",
-            "Source": "auto-discovered",
-            "Note": f"Auto-populated from {rel_path} first trading date",
-        })
+        rel_path = os.path.relpath(csv_path, start=os.path.dirname(universe_path)).replace(
+            "\\", "/"
+        )
+        new_rows.append(
+            {
+                "Symbol": symbol,
+                "Listed_Date": listed_date,
+                "Delisted_Date": "",
+                "Status": "Active",
+                "Source": "auto-discovered",
+                "Sector": "",
+                "Sector_Index": "",
+                "Note": f"Auto-populated from {rel_path} first trading date",
+            }
+        )
         result["added"].append(symbol)
 
     if not new_rows:
-        print(f"  [UNIVERSE] up to date ({len(existing)} symbols, {len(result['skipped'])} matched)")
+        print(
+            f"  [UNIVERSE] up to date ({len(existing)} symbols, {len(result['skipped'])} matched)"
+        )
         return result
 
     if dry_run:
         print(f"  [UNIVERSE] dry-run: {len(new_rows)} symbol eklenecek: {result['added']}")
         return result
 
-    merged = pd.concat([universe_df, pd.DataFrame(new_rows, columns=list(REQUIRED_COLUMNS))], ignore_index=True)
+    column_order = [*REQUIRED_COLUMNS[:-1], *OPTIONAL_COLUMNS, "Note"]
+    merged = pd.concat(
+        [universe_df, pd.DataFrame(new_rows, columns=column_order)],
+        ignore_index=True,
+    )
+    merged = merged[[column for column in column_order if column in merged.columns]]
 
     try:
         _write_with_lock(merged, universe_path)

@@ -18,18 +18,27 @@ import numpy as np
 from src.models.ensemble import EnsembleModel
 from src.evaluation.evaluator import compute_metrics, plot_comparison
 from src.utils.reporting_utils import route_output_path
+
 try:
     from src.data.preprocessor import reconstruct_prices_from_logret, reconstruct_prices_from_return
 except ImportError:  # pragma: no cover
-    def reconstruct_prices_from_logret(log_returns: np.ndarray, prev_close: np.ndarray) -> np.ndarray:
-        return np.asarray(prev_close, dtype=float).ravel() * np.exp(np.asarray(log_returns, dtype=float).ravel())
+
+    def reconstruct_prices_from_logret(
+        log_returns: np.ndarray, prev_close: np.ndarray
+    ) -> np.ndarray:
+        return np.asarray(prev_close, dtype=float).ravel() * np.exp(
+            np.asarray(log_returns, dtype=float).ravel()
+        )
 
     def reconstruct_prices_from_return(returns: np.ndarray, prev_close: np.ndarray) -> np.ndarray:
-        return np.asarray(prev_close, dtype=float).ravel() * (1.0 + np.asarray(returns, dtype=float).ravel())
+        return np.asarray(prev_close, dtype=float).ravel() * (
+            1.0 + np.asarray(returns, dtype=float).ravel()
+        )
 
 
 _SEQ_MODELS = {"LSTM", "LSTM Lite", "AttentionLSTM", "AttentionLSTM v2", "DLinear", "NLinear"}
 _TREE_MODELS = {"XGBoost", "Random Forest", "Ridge Return", "ElasticNet Return", "LightGBM Return"}
+_DATE_AWARE_MODELS = {"Prophet", "Prophet-ML/DL Hybrid"}
 
 
 class _PredictionEngineMixin:
@@ -57,7 +66,9 @@ class _PredictionEngineMixin:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _weighted_average(predictions: Dict[str, np.ndarray], weights: Dict[str, float]) -> np.ndarray:
+    def _weighted_average(
+        predictions: Dict[str, np.ndarray], weights: Dict[str, float]
+    ) -> np.ndarray:
         names = list(predictions)
         arrays = [np.asarray(predictions[name], dtype=float).ravel() for name in names]
         min_len = min(len(arr) for arr in arrays)
@@ -74,6 +85,7 @@ class _PredictionEngineMixin:
         """Registry'den her modelin kategori adını çek; eksik → 'unknown'."""
         try:
             from src.pipeline.model_registry import ensure_loaded, has_spec, get_spec
+
             ensure_loaded()
         except Exception:
             return {n: "unknown" for n in names}
@@ -114,10 +126,16 @@ class _PredictionEngineMixin:
         stk_name = "Ensemble Meta-Stacker"
         cg_name = "Ensemble Cash-Gated"
         equal_preds = EnsembleModel().combine(base_preds)
-        inverse_weights = EnsembleModel.optimize_inverse_rmse(np.asarray(self.y_true_aligned), base_preds)
+        inverse_weights = EnsembleModel.optimize_inverse_rmse(
+            np.asarray(self.y_true_aligned), base_preds
+        )
         inverse_preds = EnsembleModel(inverse_weights).combine(base_preds)
         # Faz 5 Katman 1: Sharpe-weighted blend.
-        base_targets = {name: self.prediction_targets[name] for name in base_preds if name in self.prediction_targets}
+        base_targets = {
+            name: self.prediction_targets[name]
+            for name in base_preds
+            if name in self.prediction_targets
+        }
         y_true_target = np.asarray(getattr(self, "y_true_target_aligned", []), dtype=float).ravel()
         sharpe_weights = (
             EnsembleModel.optimize_by_sharpe(y_true_target, base_targets)
@@ -138,11 +156,15 @@ class _PredictionEngineMixin:
         hier_preds = EnsembleModel(hier_weights).combine(base_preds)
         # Faz 5 Katman 4: Ridge meta-stacker (target-space).
         if len(y_true_target) and base_targets:
-            stk_weights = EnsembleModel.optimize_by_ridge_stacker(y_true_target, base_targets, alpha=1.0)
+            stk_weights = EnsembleModel.optimize_by_ridge_stacker(
+                y_true_target, base_targets, alpha=1.0
+            )
         else:
             stk_weights = {name: 1.0 / len(base_preds) for name in base_preds}
         stk_preds = EnsembleModel(stk_weights).combine(base_preds)
-        self.ensemble_weights[equal_name] = {name: round(1.0 / len(base_preds), 6) for name in base_preds}
+        self.ensemble_weights[equal_name] = {
+            name: round(1.0 / len(base_preds), 6) for name in base_preds
+        }
         self.ensemble_weights[inv_name] = inverse_weights
         self.ensemble_weights[sharpe_name] = sharpe_weights
         self.ensemble_weights[rp_name] = rp_weights
@@ -152,11 +174,23 @@ class _PredictionEngineMixin:
         self.ensemble_weights[cg_name] = dict(sharpe_weights)
 
         equal_target = EnsembleModel().combine(base_targets) if len(base_targets) >= 2 else None
-        inverse_target = self._weighted_average(base_targets, inverse_weights) if len(base_targets) >= 2 else None
-        sharpe_target = self._weighted_average(base_targets, sharpe_weights) if len(base_targets) >= 2 else None
-        rp_target = self._weighted_average(base_targets, rp_weights) if len(base_targets) >= 2 else None
-        hier_target = self._weighted_average(base_targets, hier_weights) if len(base_targets) >= 2 else None
-        stk_target = self._weighted_average(base_targets, stk_weights) if len(base_targets) >= 2 else None
+        inverse_target = (
+            self._weighted_average(base_targets, inverse_weights)
+            if len(base_targets) >= 2
+            else None
+        )
+        sharpe_target = (
+            self._weighted_average(base_targets, sharpe_weights) if len(base_targets) >= 2 else None
+        )
+        rp_target = (
+            self._weighted_average(base_targets, rp_weights) if len(base_targets) >= 2 else None
+        )
+        hier_target = (
+            self._weighted_average(base_targets, hier_weights) if len(base_targets) >= 2 else None
+        )
+        stk_target = (
+            self._weighted_average(base_targets, stk_weights) if len(base_targets) >= 2 else None
+        )
         # Faz 5 Katman 5: Cash gate (Sharpe-Weighted hedef üzerinde, agreement >= 0.6).
         cg_target = None
         cg_preds = sharpe_preds
@@ -165,7 +199,9 @@ class _PredictionEngineMixin:
                 cg_target = EnsembleModel.apply_cash_gate(
                     sharpe_target, base_targets, magnitude_threshold=0.0, agreement_threshold=0.6
                 )
-                cg_preds = self._target_to_price(cg_target, self.prev_close_aligned[-len(cg_target):])
+                cg_preds = self._target_to_price(
+                    cg_target, self.prev_close_aligned[-len(cg_target) :]
+                )
             except AttributeError:
                 cg_target = None
                 cg_preds = sharpe_preds
@@ -182,21 +218,35 @@ class _PredictionEngineMixin:
 
         # Seq-Attention ensembles
         seq_attn_models = {"LSTM", "LSTM Lite", "AttentionLSTM v2"}
-        seq_attn_preds = {name: preds for name, preds in base_preds.items() if name in seq_attn_models}
+        seq_attn_preds = {
+            name: preds for name, preds in base_preds.items() if name in seq_attn_models
+        }
         if len(seq_attn_preds) >= 2:
             seq_equal_name = "Ensemble Seq-Attention Equal"
             seq_inv_name = "Ensemble Seq-Attention Inverse RMSE"
 
             seq_equal_preds = EnsembleModel().combine(seq_attn_preds)
-            seq_inv_weights = EnsembleModel.optimize_inverse_rmse(np.asarray(self.y_true_aligned), seq_attn_preds)
+            seq_inv_weights = EnsembleModel.optimize_inverse_rmse(
+                np.asarray(self.y_true_aligned), seq_attn_preds
+            )
             seq_inv_preds = EnsembleModel(seq_inv_weights).combine(seq_attn_preds)
 
-            self.ensemble_weights[seq_equal_name] = {name: round(1.0 / len(seq_attn_preds), 6) for name in seq_attn_preds}
+            self.ensemble_weights[seq_equal_name] = {
+                name: round(1.0 / len(seq_attn_preds), 6) for name in seq_attn_preds
+            }
             self.ensemble_weights[seq_inv_name] = seq_inv_weights
 
-            seq_base_targets = {name: base_targets[name] for name in seq_attn_preds if name in base_targets}
-            seq_equal_target = EnsembleModel().combine(seq_base_targets) if len(seq_base_targets) >= 2 else None
-            seq_inv_target = self._weighted_average(seq_base_targets, seq_inv_weights) if len(seq_base_targets) >= 2 else None
+            seq_base_targets = {
+                name: base_targets[name] for name in seq_attn_preds if name in base_targets
+            }
+            seq_equal_target = (
+                EnsembleModel().combine(seq_base_targets) if len(seq_base_targets) >= 2 else None
+            )
+            seq_inv_target = (
+                self._weighted_average(seq_base_targets, seq_inv_weights)
+                if len(seq_base_targets) >= 2
+                else None
+            )
 
             ensemble_tuples.append((seq_equal_name, seq_equal_preds, seq_equal_target))
             ensemble_tuples.append((seq_inv_name, seq_inv_preds, seq_inv_target))
@@ -215,7 +265,9 @@ class _PredictionEngineMixin:
                 payload["pred_price"] = self.predictions[name]
                 payload["pred_target"] = self.prediction_targets.get(name)
                 self.single_backtest_inputs[name] = payload
-        print("  [OK] Ensemble tahminleri eklendi: Equal Weight, Inverse RMSE, Sharpe-Weighted, Risk-Parity, Hierarchical, Meta-Stacker, Cash-Gated")
+        print(
+            "  [OK] Ensemble tahminleri eklendi: Equal Weight, Inverse RMSE, Sharpe-Weighted, Risk-Parity, Hierarchical, Meta-Stacker, Cash-Gated"
+        )
 
     def _add_walk_forward_ensembles(
         self,
@@ -257,7 +309,8 @@ class _PredictionEngineMixin:
         # Faz 5 Katman 1: Sharpe-weighted blend (target-space).
         y_true_target = (
             np.asarray(template.get("y_true_target", []), dtype=float).ravel()
-            if template else np.asarray([])
+            if template
+            else np.asarray([])
         )
         sharpe_weights = (
             EnsembleModel.optimize_by_sharpe(y_true_target, base_targets)
@@ -278,11 +331,15 @@ class _PredictionEngineMixin:
         hier_preds = EnsembleModel(hier_weights).combine(base_preds)
         # Faz 5 Katman 4: Ridge meta-stacker (OOF — WF y_true zaten fold birleşimi).
         if len(y_true_target) and base_targets:
-            stk_weights = EnsembleModel.optimize_by_ridge_stacker(y_true_target, base_targets, alpha=1.0)
+            stk_weights = EnsembleModel.optimize_by_ridge_stacker(
+                y_true_target, base_targets, alpha=1.0
+            )
         else:
             stk_weights = {name: 1.0 / len(base_preds) for name in base_preds}
         stk_preds = EnsembleModel(stk_weights).combine(base_preds)
-        self.ensemble_weights[equal_name] = {name: round(1.0 / len(base_preds), 6) for name in base_preds}
+        self.ensemble_weights[equal_name] = {
+            name: round(1.0 / len(base_preds), 6) for name in base_preds
+        }
         self.ensemble_weights[inv_name] = inverse_weights
         self.ensemble_weights[sharpe_name] = sharpe_weights
         self.ensemble_weights[rp_name] = rp_weights
@@ -291,11 +348,23 @@ class _PredictionEngineMixin:
         self.ensemble_weights[cg_name] = dict(sharpe_weights)
 
         equal_target = EnsembleModel().combine(base_targets) if len(base_targets) >= 2 else None
-        inverse_target = self._weighted_average(base_targets, inverse_weights) if len(base_targets) >= 2 else None
-        sharpe_target = self._weighted_average(base_targets, sharpe_weights) if len(base_targets) >= 2 else None
-        rp_target = self._weighted_average(base_targets, rp_weights) if len(base_targets) >= 2 else None
-        hier_target = self._weighted_average(base_targets, hier_weights) if len(base_targets) >= 2 else None
-        stk_target = self._weighted_average(base_targets, stk_weights) if len(base_targets) >= 2 else None
+        inverse_target = (
+            self._weighted_average(base_targets, inverse_weights)
+            if len(base_targets) >= 2
+            else None
+        )
+        sharpe_target = (
+            self._weighted_average(base_targets, sharpe_weights) if len(base_targets) >= 2 else None
+        )
+        rp_target = (
+            self._weighted_average(base_targets, rp_weights) if len(base_targets) >= 2 else None
+        )
+        hier_target = (
+            self._weighted_average(base_targets, hier_weights) if len(base_targets) >= 2 else None
+        )
+        stk_target = (
+            self._weighted_average(base_targets, stk_weights) if len(base_targets) >= 2 else None
+        )
         # Faz 5 Katman 5: Cash gate (Sharpe-Weighted hedef üzerinde).
         cg_target = None
         cg_preds = sharpe_preds
@@ -306,10 +375,11 @@ class _PredictionEngineMixin:
                 )
                 prev_close_tpl = (
                     np.asarray(template.get("prev_close", []), dtype=float).ravel()
-                    if template else np.array([])
+                    if template
+                    else np.array([])
                 )
                 if len(prev_close_tpl) >= len(cg_target):
-                    cg_preds = self._target_to_price(cg_target, prev_close_tpl[-len(cg_target):])
+                    cg_preds = self._target_to_price(cg_target, prev_close_tpl[-len(cg_target) :])
                 else:
                     cg_target = None
                     cg_preds = sharpe_preds
@@ -329,21 +399,35 @@ class _PredictionEngineMixin:
 
         # Seq-Attention ensembles
         seq_attn_models = {"LSTM", "LSTM Lite", "AttentionLSTM v2"}
-        seq_attn_preds = {name: preds for name, preds in base_preds.items() if name in seq_attn_models}
+        seq_attn_preds = {
+            name: preds for name, preds in base_preds.items() if name in seq_attn_models
+        }
         if len(seq_attn_preds) >= 2:
             seq_equal_name = "Ensemble Seq-Attention Equal"
             seq_inv_name = "Ensemble Seq-Attention Inverse RMSE"
 
             seq_equal_preds = EnsembleModel().combine(seq_attn_preds)
-            seq_inv_weights = EnsembleModel.optimize_inverse_rmse(np.asarray(wf_y_true), seq_attn_preds)
+            seq_inv_weights = EnsembleModel.optimize_inverse_rmse(
+                np.asarray(wf_y_true), seq_attn_preds
+            )
             seq_inv_preds = EnsembleModel(seq_inv_weights).combine(seq_attn_preds)
 
-            self.ensemble_weights[seq_equal_name] = {name: round(1.0 / len(seq_attn_preds), 6) for name in seq_attn_preds}
+            self.ensemble_weights[seq_equal_name] = {
+                name: round(1.0 / len(seq_attn_preds), 6) for name in seq_attn_preds
+            }
             self.ensemble_weights[seq_inv_name] = seq_inv_weights
 
-            seq_base_targets = {name: base_targets[name] for name in seq_attn_preds if name in base_targets}
-            seq_equal_target = EnsembleModel().combine(seq_base_targets) if len(seq_base_targets) >= 2 else None
-            seq_inv_target = self._weighted_average(seq_base_targets, seq_inv_weights) if len(seq_base_targets) >= 2 else None
+            seq_base_targets = {
+                name: base_targets[name] for name in seq_attn_preds if name in base_targets
+            }
+            seq_equal_target = (
+                EnsembleModel().combine(seq_base_targets) if len(seq_base_targets) >= 2 else None
+            )
+            seq_inv_target = (
+                self._weighted_average(seq_base_targets, seq_inv_weights)
+                if len(seq_base_targets) >= 2
+                else None
+            )
 
             ensemble_tuples.append((seq_equal_name, seq_equal_preds, seq_equal_target))
             ensemble_tuples.append((seq_inv_name, seq_inv_preds, seq_inv_target))
@@ -353,7 +437,9 @@ class _PredictionEngineMixin:
             wf_predictions[name] = np.asarray(pred_price)[-k:]
             y_true_price = np.asarray(wf_y_true).ravel()[-k:]
             if template:
-                y_true_target = np.asarray(template.get("y_true_target", []), dtype=float).ravel()[-k:]
+                y_true_target = np.asarray(template.get("y_true_target", []), dtype=float).ravel()[
+                    -k:
+                ]
                 prev_close = np.asarray(template.get("prev_close", []), dtype=float).ravel()[-k:]
             else:
                 y_true_target = None
@@ -373,9 +459,13 @@ class _PredictionEngineMixin:
                     payload[key] = arr[-k:] if arr.ndim > 0 and len(arr) >= k else value
                 payload["y_true_price"] = y_true_price
                 payload["pred_price"] = wf_predictions[name]
-                payload["pred_target"] = np.asarray(pred_target)[-k:] if pred_target is not None else None
+                payload["pred_target"] = (
+                    np.asarray(pred_target)[-k:] if pred_target is not None else None
+                )
                 bt_inputs[name] = payload
-        print("  [OK] Walk-forward ensemble tahminleri eklendi: Equal, Inverse RMSE, Sharpe-Weighted, Risk-Parity, Hierarchical, Meta-Stacker, Cash-Gated.")
+        print(
+            "  [OK] Walk-forward ensemble tahminleri eklendi: Equal, Inverse RMSE, Sharpe-Weighted, Risk-Parity, Hierarchical, Meta-Stacker, Cash-Gated."
+        )
 
     # ------------------------------------------------------------------ #
     #  Ensemble directional agreement (Adim 2.2)                          #
@@ -393,7 +483,8 @@ class _PredictionEngineMixin:
         if main_direction == 0:
             return None
         others = [
-            v for k, v in component_predictions.items()
+            v
+            for k, v in component_predictions.items()
             if k != main_model_name and not k.startswith("Ensemble ") and len(v) > 0
         ]
         if not others:
@@ -414,7 +505,9 @@ class _PredictionEngineMixin:
     ) -> None:
         if not self.selected_models:
             return
-        selected_predictions = {name: preds for name, preds in predictions.items() if name in self.selected_models}
+        selected_predictions = {
+            name: preds for name, preds in predictions.items() if name in self.selected_models
+        }
         if not selected_predictions:
             return
         plot_comparison(y_true, selected_predictions, save_path=save_path, title=title)
@@ -445,27 +538,44 @@ class _PredictionEngineMixin:
         prev_close_test = np.asarray(tensors["prev_close_test"]).ravel()
         dates_test = np.asarray(tensors["dates_test"])
         prediction_dates_test = np.asarray(tensors.get("dates_prediction", tensors["dates_test"]))
-        market_regime_test = np.asarray(tensors.get("market_regime_test", np.zeros(len(prev_close_test))), dtype=float).ravel()
+        market_regime_test = np.asarray(
+            tensors.get("market_regime_test", np.zeros(len(prev_close_test))), dtype=float
+        ).ravel()
         y_test_price = np.asarray(tensors["original_y_test_aligned"]).ravel()
         y_test_target = np.asarray(tensors["y_test"]).ravel()
 
-        if model_name == "Prophet":
+        if model_name in _DATE_AWARE_MODELS:
             preds_target = model.predict(tensors["X_test"], dates_test=tensors["dates_test"])
-            self.dataset_metadata["prophet_regressors_used"] = getattr(model, "regressors_used", [])
+            if model_name == "Prophet":
+                self.dataset_metadata["prophet_regressors_used"] = getattr(
+                    model, "regressors_used", []
+                )
         elif model_name in _TREE_MODELS:
             preds_scaled = model.predict(tensors["X_test_s"])
-            preds_target = tensors["scaler_y"].inverse_transform(np.asarray(preds_scaled).reshape(-1, 1)).ravel()
+            preds_target = (
+                tensors["scaler_y"]
+                .inverse_transform(np.asarray(preds_scaled).reshape(-1, 1))
+                .ravel()
+            )
         elif model_name in _SEQ_MODELS:
             if hasattr(model, "predict_quantiles"):
                 quantile_scaled = np.asarray(model.predict_quantiles(tensors["X_test_seq"]))
-                quantile_target = np.column_stack([
-                    tensors["scaler_y"].inverse_transform(quantile_scaled[:, idx].reshape(-1, 1)).ravel()
-                    for idx in range(quantile_scaled.shape[1])
-                ])
+                quantile_target = np.column_stack(
+                    [
+                        tensors["scaler_y"]
+                        .inverse_transform(quantile_scaled[:, idx].reshape(-1, 1))
+                        .ravel()
+                        for idx in range(quantile_scaled.shape[1])
+                    ]
+                )
                 preds_target = quantile_target[:, quantile_scaled.shape[1] // 2]
             else:
                 preds_scaled = model.predict(tensors["X_test_seq"])
-                preds_target = tensors["scaler_y"].inverse_transform(np.asarray(preds_scaled).reshape(-1, 1)).ravel()
+                preds_target = (
+                    tensors["scaler_y"]
+                    .inverse_transform(np.asarray(preds_scaled).reshape(-1, 1))
+                    .ravel()
+                )
         else:
             preds_target = model.predict(tensors["X_test"])
 
@@ -486,10 +596,12 @@ class _PredictionEngineMixin:
         quantile_price = None
         if quantile_target is not None:
             quantile_target = quantile_target[-k:]
-            quantile_price = np.column_stack([
-                self._target_to_price(quantile_target[:, idx], prev_close_aligned)
-                for idx in range(quantile_target.shape[1])
-            ])
+            quantile_price = np.column_stack(
+                [
+                    self._target_to_price(quantile_target[:, idx], prev_close_aligned)
+                    for idx in range(quantile_target.shape[1])
+                ]
+            )
         return (
             pred_price,
             preds_target,
@@ -524,29 +636,47 @@ class _PredictionEngineMixin:
 
         for name, model in trained_models.items():
             try:
-                if name == "Prophet":
-                    preds_target = model.predict(tensors["X_test"], dates_test=tensors["dates_test"])
+                if name in _DATE_AWARE_MODELS:
+                    preds_target = model.predict(
+                        tensors["X_test"], dates_test=tensors["dates_test"]
+                    )
                 elif name in _TREE_MODELS:
                     preds_scaled = model.predict(tensors["X_test_s"])
-                    preds_target = tensors["scaler_y"].inverse_transform(np.asarray(preds_scaled).reshape(-1, 1)).ravel()
+                    preds_target = (
+                        tensors["scaler_y"]
+                        .inverse_transform(np.asarray(preds_scaled).reshape(-1, 1))
+                        .ravel()
+                    )
                 elif name in _SEQ_MODELS:
                     if hasattr(model, "predict_quantiles"):
                         quantile_scaled = model.predict_quantiles(tensors["X_test_seq"])
-                        quantile_target = np.column_stack([
-                            tensors["scaler_y"].inverse_transform(quantile_scaled[:, idx].reshape(-1, 1)).ravel()
-                            for idx in range(quantile_scaled.shape[1])
-                        ])
+                        quantile_target = np.column_stack(
+                            [
+                                tensors["scaler_y"]
+                                .inverse_transform(quantile_scaled[:, idx].reshape(-1, 1))
+                                .ravel()
+                                for idx in range(quantile_scaled.shape[1])
+                            ]
+                        )
                         preds_target = quantile_target[:, quantile_scaled.shape[1] // 2]
                         raw_quantiles[name] = quantile_target
                     else:
                         preds_scaled = model.predict(tensors["X_test_seq"])
-                        preds_target = tensors["scaler_y"].inverse_transform(np.asarray(preds_scaled).reshape(-1, 1)).ravel()
+                        preds_target = (
+                            tensors["scaler_y"]
+                            .inverse_transform(np.asarray(preds_scaled).reshape(-1, 1))
+                            .ravel()
+                        )
                 else:
                     try:
                         preds_scaled = model.predict(tensors["X_test_seq"])
                     except Exception:
                         preds_scaled = model.predict(tensors["X_test_s"])
-                    preds_target = tensors["scaler_y"].inverse_transform(np.asarray(preds_scaled).reshape(-1, 1)).ravel()
+                    preds_target = (
+                        tensors["scaler_y"]
+                        .inverse_transform(np.asarray(preds_scaled).reshape(-1, 1))
+                        .ravel()
+                    )
 
                 preds_target = np.asarray(preds_target).ravel()
                 k = min(
@@ -563,17 +693,21 @@ class _PredictionEngineMixin:
                 y_true_target_aligned = y_test_target[-k:]
                 dates_aligned = dates_test[-k:]
                 prediction_dates_aligned = prediction_dates_test[-k:]
-                market_regime_aligned = np.asarray(tensors.get("market_regime_test", np.zeros(k)), dtype=float).ravel()[-k:]
+                market_regime_aligned = np.asarray(
+                    tensors.get("market_regime_test", np.zeros(k)), dtype=float
+                ).ravel()[-k:]
 
                 raw_pred_targets[name] = preds_target
                 raw_preds[name] = self._target_to_price(preds_target, prev_close_aligned)
 
                 if name in raw_quantiles:
                     aligned_quantiles = raw_quantiles[name][-k:]
-                    raw_quantiles[name] = np.column_stack([
-                        self._target_to_price(aligned_quantiles[:, idx], prev_close_aligned)
-                        for idx in range(aligned_quantiles.shape[1])
-                    ])
+                    raw_quantiles[name] = np.column_stack(
+                        [
+                            self._target_to_price(aligned_quantiles[:, idx], prev_close_aligned)
+                            for idx in range(aligned_quantiles.shape[1])
+                        ]
+                    )
 
                 self.single_backtest_inputs[name] = {
                     "dates": dates_aligned,
@@ -586,7 +720,9 @@ class _PredictionEngineMixin:
                     "y_true_target": y_true_target_aligned,
                 }
                 if name == "Prophet":
-                    self.dataset_metadata["prophet_regressors_used"] = getattr(model, "regressors_used", [])
+                    self.dataset_metadata["prophet_regressors_used"] = getattr(
+                        model, "regressors_used", []
+                    )
                 print(f"  [OK] {name} tahmini uretildi - {len(raw_preds[name])} adim")
             except Exception as exc:
                 print(f"  [WARN] {name} tahmini basarisiz, atlaniyor: {exc}")
@@ -596,8 +732,12 @@ class _PredictionEngineMixin:
 
         min_len = min(len(v) for v in raw_preds.values())
         self.predictions = {name: preds[-min_len:] for name, preds in raw_preds.items()}
-        self.prediction_targets = {name: preds[-min_len:] for name, preds in raw_pred_targets.items()}
-        self.quantile_predictions = {name: preds[-min_len:] for name, preds in raw_quantiles.items()}
+        self.prediction_targets = {
+            name: preds[-min_len:] for name, preds in raw_pred_targets.items()
+        }
+        self.quantile_predictions = {
+            name: preds[-min_len:] for name, preds in raw_quantiles.items()
+        }
         self.y_true_aligned = y_test_price[-min_len:]
         self.y_true_target_aligned = y_test_target[-min_len:]
         self.prev_close_aligned = prev_close_test[-min_len:]

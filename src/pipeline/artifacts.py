@@ -66,11 +66,13 @@ def write_validation_and_quality_reports(pipeline: Any) -> None:
         for report_name, report_data in dq_reports.items():
             if not report_data:
                 continue
-            summary_rows.append({
-                "Report": report_name,
-                "Row_Count": len(report_data) if hasattr(report_data, "__len__") else 1,
-                "Status": "available",
-            })
+            summary_rows.append(
+                {
+                    "Report": report_name,
+                    "Row_Count": len(report_data) if hasattr(report_data, "__len__") else 1,
+                    "Status": "available",
+                }
+            )
             if pipeline.report_detail_level == "research":
                 import pandas as _pd
 
@@ -107,7 +109,9 @@ def write_run_manifest(pipeline: Any) -> None:
         try:
             result = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
                 cwd=pipeline.project_root,
             )
             return result.stdout.strip() if result.returncode == 0 else "unavailable"
@@ -120,6 +124,7 @@ def write_run_manifest(pipeline: Any) -> None:
         for lib in libs:
             try:
                 import importlib
+
                 mod = importlib.import_module(lib if lib != "sklearn" else "sklearn")
                 versions[lib] = getattr(mod, "__version__", "unknown")
             except ImportError:
@@ -149,6 +154,15 @@ def write_run_manifest(pipeline: Any) -> None:
         "random_seed": 42,
         "model_list": sorted(pipeline.candidate_models),
         "validation_protocol": pipeline.validation_mode,
+        "research_policy": getattr(pipeline, "research_policy", None),
+        "research_phase": getattr(pipeline, "research_phase", None),
+        "research_metadata": getattr(pipeline, "research_metadata", {}) or {},
+        "uses_final_holdout_for_selection": False,
+        "final_holdout_status": getattr(
+            pipeline,
+            "final_holdout_status",
+            {"status": "not_run"},
+        ),
         "git_commit": _git_commit(),
         "python_version": sys.version,
         "lib_versions": _lib_versions(),

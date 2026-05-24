@@ -17,6 +17,7 @@ from src.data.preprocessor import create_sequences, scale_data
 from src.features.feature_cache import FeatureCache
 from src.features.feature_pipeline import FeaturePipeline
 from src.features.macro_pipeline import MacroPipeline
+from src.features.sector_mapping import resolve_sector_mapping
 from src.pipeline.evaluation_services import _OwnerBackedService
 from src.utils.data_splitter import TimeSeriesSplitter
 
@@ -43,6 +44,11 @@ class DataIngestionService(_OwnerBackedService):
         if self.data_cfg.use_macro:
             macro_df = self._fetch_macro(raw_df)
 
+        sector_mapping = resolve_sector_mapping(
+            self.stock_symbol, getattr(self, "universe_file", None)
+        )
+        self.sector_mapping_report = sector_mapping.to_dict()
+
         # Teknik + makro özellikler (cache destekli)
         feature_cache_dir = os.path.join(self.project_root, "data", "feature_cache")
         _cache = FeatureCache(cache_dir=feature_cache_dir, ttl_hours=24.0)
@@ -54,7 +60,11 @@ class DataIngestionService(_OwnerBackedService):
             self.feature_names = _meta["feature_names"]
             self.feature_groups = _meta.get("feature_groups", {})
             self.feature_pruning_report = _meta.get("feature_pruning_report", {})
-            print("  [CACHE] Ozellik muhendisligi cache\'den yuklendi.")
+            self.sector_mapping_report = _meta.get(
+                "sector_mapping_report",
+                self.sector_mapping_report,
+            )
+            print("  [CACHE] Ozellik muhendisligi cache'den yuklendi.")
         else:
             feature_pipeline = FeaturePipeline(
                 feature_mode=self.data_cfg.feature_mode,
@@ -62,33 +72,50 @@ class DataIngestionService(_OwnerBackedService):
                 correlation_threshold=self.data_cfg.correlation_threshold,
                 lag_feature_count=self.data_cfg.lag_feature_count,
             )
-            self.df = feature_pipeline.engineer_features(raw_df, macro_df=macro_df, symbol=self.stock_symbol)
+            self.df = feature_pipeline.engineer_features(
+                raw_df,
+                macro_df=macro_df,
+                symbol=self.stock_symbol,
+                sector_mapping=sector_mapping,
+            )
             self.feature_names = feature_pipeline.feature_names
             self.feature_groups = feature_pipeline.feature_groups
             self.feature_pruning_report = feature_pipeline.pruning_report
-            _cache.put(_cache_key, self.df, {
-                "feature_names": self.feature_names,
-                "feature_groups": self.feature_groups,
-                "feature_pruning_report": self.feature_pruning_report,
-            })
+            self.sector_mapping_report = feature_pipeline.sector_mapping_report
+            _cache.put(
+                _cache_key,
+                self.df,
+                {
+                    "feature_names": self.feature_names,
+                    "feature_groups": self.feature_groups,
+                    "feature_pruning_report": self.feature_pruning_report,
+                    "sector_mapping_report": self.sector_mapping_report,
+                },
+            )
 
         self.survivorship_bias_report = self._check_survivorship_bias()
 
         # Özet
-        has_rel_str  = "Relative_Strength" in self.feature_names
-        has_sec_str  = "Sector_Relative_Strength" in self.feature_names
-        macro_base   = len(MacroPipeline.macro_feature_names(include_rates=True))
-        macro_count  = macro_base + (1 if has_rel_str else 0) + (1 if has_sec_str else 0)
-        tech_count   = len(self.feature_names) - (macro_count if self.data_cfg.use_macro and macro_df is not None and not macro_df.empty else 0)
+        has_rel_str = "Relative_Strength" in self.feature_names
+        has_sec_str = "Sector_Relative_Strength" in self.feature_names
+        macro_base = len(MacroPipeline.macro_feature_names(include_rates=True))
+        macro_count = macro_base + (1 if has_rel_str else 0) + (1 if has_sec_str else 0)
+        tech_count = len(self.feature_names) - (
+            macro_count
+            if self.data_cfg.use_macro and macro_df is not None and not macro_df.empty
+            else 0
+        )
 
         print(f"  Veri boyutu      : {self.df.shape[0]} satır × {self.df.shape[1]} sütun")
         print(f"  Teknik özellikler: {tech_count}")
         if self.data_cfg.use_macro and macro_df is not None and not macro_df.empty:
-            print(f"  Makro özellikler : {macro_count}  "
-                  f"(USDTRY_Return, USDTRY_Volatility7, "
-                  f"BIST100_Return, BIST100_MA7, "
-                  f"Rate_Level, Rate_Change, CPI_YoY, CPI_MoM, Real_Rate, "
-                  f"Relative_Strength, Sector_Relative_Strength)")
+            print(
+                f"  Makro özellikler : {macro_count}  "
+                f"(USDTRY_Return, USDTRY_Volatility7, "
+                f"BIST100_Return, BIST100_MA7, "
+                f"Rate_Level, Rate_Change, CPI_YoY, CPI_MoM, Real_Rate, "
+                f"Relative_Strength, Sector_Relative_Strength)"
+            )
         print(f"  Toplam özellik   : {len(self.feature_names)}")
         if self.corporate_action_report.get("warning"):
             print(f"  [DATA] Uyari       : {self.corporate_action_report['warning']}")
@@ -112,7 +139,6 @@ class DataIngestionService(_OwnerBackedService):
                 f"{self.training_window_report.get('history_days')} satir)"
             )
         self._refresh_dataset_metadata()
-
 
     def apply_training_window(self, raw_df: pd.DataFrame) -> pd.DataFrame:
         cfg = getattr(self, "data_cfg", self)
@@ -182,23 +208,23 @@ class DataIngestionService(_OwnerBackedService):
             "new_listing_mode": bool(new_listing_mode),
             "insufficient_history_warning": bool(insufficient_history),
             "window_candidates": self._format_window_candidates(),
-            "cutoff_date": "" if cutoff_date is None else pd.to_datetime(cutoff_date).strftime("%Y-%m-%d"),
+            "cutoff_date": (
+                "" if cutoff_date is None else pd.to_datetime(cutoff_date).strftime("%Y-%m-%d")
+            ),
             "filter_stage": "raw_after_load_before_feature_engineering",
         }
         return effective_df
 
-
     def format_window_candidates(self) -> list[str]:
         cfg = getattr(self, "data_cfg", self)
         return ["all" if years is None else f"{int(years)}y" for years in cfg.window_candidates]
-
 
     def fetch_macro(self, raw_df: pd.DataFrame) -> pd.DataFrame:
         """MacroPipeline'ı çağırır; başarısız olursa boş DataFrame döner."""
         try:
             dates = pd.to_datetime(raw_df["Date"])
             start = dates.min().strftime("%Y-%m-%d")
-            end   = dates.max().strftime("%Y-%m-%d")
+            end = dates.max().strftime("%Y-%m-%d")
 
             mp = MacroPipeline(
                 cache_dir=self.macro_cache_dir,
@@ -215,7 +241,6 @@ class DataIngestionService(_OwnerBackedService):
             safe_exc = str(exc).encode("ascii", errors="replace").decode("ascii")
             print(f"  [MACRO] Makro veri alınamadı ({safe_exc}), devam ediliyor.")
             return pd.DataFrame()
-
 
     def refresh_dataset_metadata(self) -> None:
         if self.df is None or self.df.empty:
@@ -242,13 +267,13 @@ class DataIngestionService(_OwnerBackedService):
             "features": self.feature_names,
             "feature_groups": self.feature_groups,
             "feature_pruning": self.feature_pruning_report,
+            "sector_mapping": self.sector_mapping_report,
             "corporate_action": self.corporate_action_report,
             "survivorship_bias": self.survivorship_bias_report,
             "training_window": self.training_window_report,
         }
         payload = json.dumps(self.dataset_metadata, ensure_ascii=False, sort_keys=True)
         self.dataset_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-
 
 
 class TensorPreparationService(_OwnerBackedService):
@@ -265,7 +290,6 @@ class TensorPreparationService(_OwnerBackedService):
             "Beklenen: price, return, log_return"
         )
 
-
     @staticmethod
     def scale_data_compat(*args, **kwargs):
         try:
@@ -276,7 +300,6 @@ class TensorPreparationService(_OwnerBackedService):
             legacy_kwargs = dict(kwargs)
             legacy_kwargs.pop("save_scaler", None)
             return scale_data(*args, **legacy_kwargs)
-
 
     def prepare_tensors(
         self,
@@ -322,7 +345,10 @@ class TensorPreparationService(_OwnerBackedService):
             market_regime_test = np.zeros(len(y_test), dtype=float)
 
         X_train_s, X_test_s, y_train_s, y_test_s, scaler_X, scaler_y = self.scale_data_compat(
-            X_train, X_test, y_train, y_test,
+            X_train,
+            X_test,
+            y_train,
+            y_test,
             save_dir=self.models_dir,
             scaling_mode=self.data_cfg.scaling_mode,
             save_scaler=not self._wf_mode,  # WF fold'larında diske yazma
@@ -344,7 +370,9 @@ class TensorPreparationService(_OwnerBackedService):
                 X_prefix_s = np.clip(X_prefix_s, clip_report["clip_low"], clip_report["clip_high"])
             y_prefix_s = np.zeros((len(X_prefix_s), 1), dtype=float)
         else:
-            X_prefix_s = X_train_s[-prefix_len:] if prefix_len else np.empty((0, X_train_s.shape[1]))
+            X_prefix_s = (
+                X_train_s[-prefix_len:] if prefix_len else np.empty((0, X_train_s.shape[1]))
+            )
             y_prefix_s = y_train_s[-prefix_len:] if prefix_len else np.empty((0, 1))
 
         X_test_input = np.vstack((X_prefix_s, X_test_s))
@@ -380,8 +408,9 @@ class TensorPreparationService(_OwnerBackedService):
             "dates_test": test_df["Date"].iloc[1:] if "Date" in test_df.columns else None,
         }
 
-
-    def record_scaling_report(self, train_df: pd.DataFrame, test_df: pd.DataFrame, scaler_X: object) -> None:
+    def record_scaling_report(
+        self, train_df: pd.DataFrame, test_df: pd.DataFrame, scaler_X: object
+    ) -> None:
         self._ensure_config_objects()
         clip_report = dict(getattr(scaler_X, "clip_report_", {}) or {})
         if not clip_report:
@@ -403,22 +432,39 @@ class TensorPreparationService(_OwnerBackedService):
             )
             print(f"  [WARN] {warning}")
 
-        self.scaling_reports.append({
-            "call_idx": self._prepare_tensors_call_idx,
-            "scaler_fit_start": pd.to_datetime(train_df["Date"].iloc[0]).strftime("%Y-%m-%d") if "Date" in train_df.columns else "",
-            "scaler_fit_end": pd.to_datetime(train_df["Date"].iloc[-1]).strftime("%Y-%m-%d") if "Date" in train_df.columns else "",
-            "test_start": pd.to_datetime(test_df["Date"].iloc[0]).strftime("%Y-%m-%d") if "Date" in test_df.columns else "",
-            "test_end": pd.to_datetime(test_df["Date"].iloc[-1]).strftime("%Y-%m-%d") if "Date" in test_df.columns else "",
-            "train_clip_rate_pct": train_clip,
-            "test_clip_rate_pct": test_clip,
-            "clip_low": clip_report.get("clip_low"),
-            "clip_high": clip_report.get("clip_high"),
-            "warning": warning,
-            "scaler_fit_scope": "train_only",
-        })
+        self.scaling_reports.append(
+            {
+                "call_idx": self._prepare_tensors_call_idx,
+                "scaler_fit_start": (
+                    pd.to_datetime(train_df["Date"].iloc[0]).strftime("%Y-%m-%d")
+                    if "Date" in train_df.columns
+                    else ""
+                ),
+                "scaler_fit_end": (
+                    pd.to_datetime(train_df["Date"].iloc[-1]).strftime("%Y-%m-%d")
+                    if "Date" in train_df.columns
+                    else ""
+                ),
+                "test_start": (
+                    pd.to_datetime(test_df["Date"].iloc[0]).strftime("%Y-%m-%d")
+                    if "Date" in test_df.columns
+                    else ""
+                ),
+                "test_end": (
+                    pd.to_datetime(test_df["Date"].iloc[-1]).strftime("%Y-%m-%d")
+                    if "Date" in test_df.columns
+                    else ""
+                ),
+                "train_clip_rate_pct": train_clip,
+                "test_clip_rate_pct": test_clip,
+                "clip_low": clip_report.get("clip_low"),
+                "clip_high": clip_report.get("clip_high"),
+                "warning": warning,
+                "scaler_fit_scope": "train_only",
+            }
+        )
 
         # ── Train/Test Bölme ──────────────────────────────────────────────────────
-
 
 
 class ValidationSplitService(_OwnerBackedService):
@@ -439,7 +485,7 @@ class ValidationSplitService(_OwnerBackedService):
             self.tensors = self.prepare_tensors(train_df, test_df)
 
         elif validation_mode == "walk_forward":
-            self._wf_mode = True   # WF fold'larında scaler diske yazılmaz
+            self._wf_mode = True  # WF fold'larında scaler diske yazılmaz
             wf_source_df = self.df
             holdout_size = int(self.validation_config.get("final_holdout_size", 0) or 0)
             min_required = (
@@ -460,7 +506,9 @@ class ValidationSplitService(_OwnerBackedService):
             else:
                 self.selection_df = wf_source_df.copy()
                 self.final_holdout_df = None
-                print("  [WARN] Final holdout icin yeterli veri yok; tum veri walk-forward seciminde kullanilacak.")
+                print(
+                    "  [WARN] Final holdout icin yeterli veri yok; tum veri walk-forward seciminde kullanilacak."
+                )
 
             self.wf_splits = splitter.walk_forward_splits(
                 wf_source_df,
@@ -493,58 +541,76 @@ class ValidationSplitService(_OwnerBackedService):
                 f"max_train={self.validation_config['wf_max_train_size']})."
             )
 
-
     def get_validation_protocol_data(self) -> pd.DataFrame:
         rows = []
         for split in self.wf_splits:
             train_df = split["train"]
             test_df = split["test"]
-            rows.append({
-                "Split": split["split_idx"],
-                "Protocol": "walk_forward",
-                "Window_Type": self.validation_config["wf_window_type"],
-                "Train_Rows": len(train_df),
-                "Test_Rows": len(test_df),
-                "Train_Date_Start": split.get("train_date_start"),
-                "Train_Date_End": split.get("train_date_end"),
-                "Embargo_Rows": len(split.get("embargo_context", [])),
-                "Embargo_Date_Start": split.get("embargo_date_start"),
-                "Embargo_Date_End": split.get("embargo_date_end"),
-                "Test_Date_Start": split.get("test_date_start"),
-                "Test_Date_End": split.get("test_date_end"),
-                "Effective_Train_End": split.get("effective_train_end"),
-                "Test_Start": split.get("test_start"),
-                "Scaler_Fit_Start": split.get("train_date_start"),
-                "Scaler_Fit_End": split.get("train_date_end"),
-                "Features_Count": len(self.feature_names),
-                "Features": ",".join(self.feature_names),
-                "Selection_Set": "walk_forward_train_windows",
-                "Evaluation_Set": "walk_forward_test_window",
-                "Final_Holdout_Used_For_Selection": False,
-            })
+            rows.append(
+                {
+                    "Split": split["split_idx"],
+                    "Protocol": "walk_forward",
+                    "Window_Type": self.validation_config["wf_window_type"],
+                    "Train_Rows": len(train_df),
+                    "Test_Rows": len(test_df),
+                    "Train_Date_Start": split.get("train_date_start"),
+                    "Train_Date_End": split.get("train_date_end"),
+                    "Embargo_Rows": len(split.get("embargo_context", [])),
+                    "Embargo_Date_Start": split.get("embargo_date_start"),
+                    "Embargo_Date_End": split.get("embargo_date_end"),
+                    "Test_Date_Start": split.get("test_date_start"),
+                    "Test_Date_End": split.get("test_date_end"),
+                    "Effective_Train_End": split.get("effective_train_end"),
+                    "Test_Start": split.get("test_start"),
+                    "Scaler_Fit_Start": split.get("train_date_start"),
+                    "Scaler_Fit_End": split.get("train_date_end"),
+                    "Features_Count": len(self.feature_names),
+                    "Features": ",".join(self.feature_names),
+                    "Selection_Set": "walk_forward_train_windows",
+                    "Evaluation_Set": "walk_forward_test_window",
+                    "Final_Holdout_Used_For_Selection": False,
+                }
+            )
 
         if self.final_holdout_df is not None and not self.final_holdout_df.empty:
-            rows.append({
-                "Split": "final_holdout",
-                "Protocol": "final_holdout",
-                "Window_Type": self.validation_config["wf_window_type"],
-                "Train_Rows": len(self.selection_df) if self.selection_df is not None else 0,
-                "Test_Rows": len(self.final_holdout_df),
-                "Train_Date_Start": self.selection_df["Date"].iloc[0] if self.selection_df is not None and not self.selection_df.empty else None,
-                "Train_Date_End": self.selection_df["Date"].iloc[-1] if self.selection_df is not None and not self.selection_df.empty else None,
-                "Test_Date_Start": self.final_holdout_df["Date"].iloc[0],
-                "Test_Date_End": self.final_holdout_df["Date"].iloc[-1],
-                "Scaler_Fit_Start": self.selection_df["Date"].iloc[0] if self.selection_df is not None and not self.selection_df.empty else None,
-                "Scaler_Fit_End": self.selection_df["Date"].iloc[-1] if self.selection_df is not None and not self.selection_df.empty else None,
-                "Features_Count": len(self.feature_names),
-                "Features": ",".join(self.feature_names),
-                "Selection_Set": "full_selection_period",
-                "Evaluation_Set": "untouched_final_holdout",
-                "Final_Holdout_Used_For_Selection": False,
-            })
+            rows.append(
+                {
+                    "Split": "final_holdout",
+                    "Protocol": "final_holdout",
+                    "Window_Type": self.validation_config["wf_window_type"],
+                    "Train_Rows": len(self.selection_df) if self.selection_df is not None else 0,
+                    "Test_Rows": len(self.final_holdout_df),
+                    "Train_Date_Start": (
+                        self.selection_df["Date"].iloc[0]
+                        if self.selection_df is not None and not self.selection_df.empty
+                        else None
+                    ),
+                    "Train_Date_End": (
+                        self.selection_df["Date"].iloc[-1]
+                        if self.selection_df is not None and not self.selection_df.empty
+                        else None
+                    ),
+                    "Test_Date_Start": self.final_holdout_df["Date"].iloc[0],
+                    "Test_Date_End": self.final_holdout_df["Date"].iloc[-1],
+                    "Scaler_Fit_Start": (
+                        self.selection_df["Date"].iloc[0]
+                        if self.selection_df is not None and not self.selection_df.empty
+                        else None
+                    ),
+                    "Scaler_Fit_End": (
+                        self.selection_df["Date"].iloc[-1]
+                        if self.selection_df is not None and not self.selection_df.empty
+                        else None
+                    ),
+                    "Features_Count": len(self.feature_names),
+                    "Features": ",".join(self.feature_names),
+                    "Selection_Set": "full_selection_period",
+                    "Evaluation_Set": "untouched_final_holdout",
+                    "Final_Holdout_Used_For_Selection": False,
+                }
+            )
 
         return pd.DataFrame(rows)
-
 
 
 class DataQualityReportingService(_OwnerBackedService):
@@ -563,13 +629,15 @@ class DataQualityReportingService(_OwnerBackedService):
         }
 
         if not self.universe_file or not os.path.exists(self.universe_file):
-            report.update({
-                "universe_file_exists": False,
-                "symbol_found": False,
-                "coverage_ok": None,
-                "survivorship_bias_warning": True,
-                "status": "missing_universe_file",
-            })
+            report.update(
+                {
+                    "universe_file_exists": False,
+                    "symbol_found": False,
+                    "coverage_ok": None,
+                    "survivorship_bias_warning": True,
+                    "status": "missing_universe_file",
+                }
+            )
             print("  [DATA] Survivorship bias kontrolu: universe dosyasi yok, uyari kaydedildi.")
             return report
 
@@ -578,24 +646,30 @@ class DataQualityReportingService(_OwnerBackedService):
             required = {"Symbol", "Listed_Date", "Delisted_Date", "Status"}
             missing = sorted(required - set(universe.columns))
             if missing:
-                report.update({
-                    "universe_file_exists": True,
-                    "symbol_found": False,
-                    "coverage_ok": False,
-                    "survivorship_bias_warning": True,
-                    "status": f"invalid_schema_missing_{','.join(missing)}",
-                })
+                report.update(
+                    {
+                        "universe_file_exists": True,
+                        "symbol_found": False,
+                        "coverage_ok": False,
+                        "survivorship_bias_warning": True,
+                        "status": f"invalid_schema_missing_{','.join(missing)}",
+                    }
+                )
                 return report
 
-            symbol_rows = universe[universe["Symbol"].astype(str).str.upper() == self.stock_symbol.upper()].copy()
+            symbol_rows = universe[
+                universe["Symbol"].astype(str).str.upper() == self.stock_symbol.upper()
+            ].copy()
             if symbol_rows.empty:
-                report.update({
-                    "universe_file_exists": True,
-                    "symbol_found": False,
-                    "coverage_ok": False,
-                    "survivorship_bias_warning": True,
-                    "status": "symbol_not_found",
-                })
+                report.update(
+                    {
+                        "universe_file_exists": True,
+                        "symbol_found": False,
+                        "coverage_ok": False,
+                        "survivorship_bias_warning": True,
+                        "status": "symbol_not_found",
+                    }
+                )
                 return report
 
             row = symbol_rows.iloc[0]
@@ -604,27 +678,30 @@ class DataQualityReportingService(_OwnerBackedService):
             listed_ok = pd.isna(listed) or listed.normalize() <= date_start
             delisted_ok = pd.isna(delisted) or delisted.normalize() >= date_end
             coverage_ok = bool(listed_ok and delisted_ok)
-            report.update({
-                "universe_file_exists": True,
-                "symbol_found": True,
-                "listed_date": "" if pd.isna(listed) else listed.strftime("%Y-%m-%d"),
-                "delisted_date": "" if pd.isna(delisted) else delisted.strftime("%Y-%m-%d"),
-                "status_value": row.get("Status", ""),
-                "coverage_ok": coverage_ok,
-                "survivorship_bias_warning": not coverage_ok,
-                "status": "covered" if coverage_ok else "symbol_not_listed_for_full_period",
-            })
+            report.update(
+                {
+                    "universe_file_exists": True,
+                    "symbol_found": True,
+                    "listed_date": "" if pd.isna(listed) else listed.strftime("%Y-%m-%d"),
+                    "delisted_date": "" if pd.isna(delisted) else delisted.strftime("%Y-%m-%d"),
+                    "status_value": row.get("Status", ""),
+                    "coverage_ok": coverage_ok,
+                    "survivorship_bias_warning": not coverage_ok,
+                    "status": "covered" if coverage_ok else "symbol_not_listed_for_full_period",
+                }
+            )
             return report
         except Exception as exc:
-            report.update({
-                "universe_file_exists": True,
-                "symbol_found": False,
-                "coverage_ok": False,
-                "survivorship_bias_warning": True,
-                "status": f"universe_read_failed: {exc}",
-            })
+            report.update(
+                {
+                    "universe_file_exists": True,
+                    "symbol_found": False,
+                    "coverage_ok": False,
+                    "survivorship_bias_warning": True,
+                    "status": f"universe_read_failed: {exc}",
+                }
+            )
             return report
-
 
     def get_data_quality_reports(self) -> dict:
         reports = {}
@@ -637,14 +714,24 @@ class DataQualityReportingService(_OwnerBackedService):
         ]
         reports["feature_groups"] = feature_rows
 
-        dropped = self.feature_pruning_report.get("dropped_features", []) if self.feature_pruning_report else []
-        pruning_rows = dropped or [{
-            "feature": "",
-            "correlated_with": "",
-            "abs_corr": "",
-            "enabled": bool(self.feature_pruning_report.get("enabled", False)) if self.feature_pruning_report else False,
-            "threshold": self.data_cfg.correlation_threshold,
-        }]
+        dropped = (
+            self.feature_pruning_report.get("dropped_features", [])
+            if self.feature_pruning_report
+            else []
+        )
+        pruning_rows = dropped or [
+            {
+                "feature": "",
+                "correlated_with": "",
+                "abs_corr": "",
+                "enabled": (
+                    bool(self.feature_pruning_report.get("enabled", False))
+                    if self.feature_pruning_report
+                    else False
+                ),
+                "threshold": self.data_cfg.correlation_threshold,
+            }
+        ]
         reports["feature_pruning"] = pruning_rows
 
         reports["scaling_clip"] = self.scaling_reports
@@ -652,4 +739,3 @@ class DataQualityReportingService(_OwnerBackedService):
         reports["training_window"] = [self.training_window_report or {}]
 
         return reports
-

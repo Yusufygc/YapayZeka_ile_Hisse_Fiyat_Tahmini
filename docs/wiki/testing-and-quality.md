@@ -2,7 +2,7 @@
 title: Testing and Quality
 type: concept
 status: active
-last_updated: 2026-05-20
+last_updated: 2026-05-24
 owner: llm
 source_count: 6
 ---
@@ -44,6 +44,9 @@ python -m pytest tests/test_forecasting.py -v
 | `test_phase*_*.py` | Acceptance/regression tests for staged refactors |
 | `test_macro_cache_schema.py` | Macro cache schema behavior |
 | `test_run_id_naming.py` | Run id naming contracts |
+| `test_run_leaderboard.py` | Run-level final-holdout leaderboard, completeness, benchmark-clone, and reliability classification |
+| `test_prediction_date_aware.py` | Date-aware prediction routing for Prophet and Prophet-ML/DL Hybrid paths |
+| `test_signal_research.py` | Dry-run signal research universe and policy matrix helpers |
 | `test_xai_routing.py` | XAI output routing for validation modes |
 | `test_stock_model_db_repositories.py` | StockModelDB repository composition, schema idempotency, forecast idempotency/resolution |
 | `test_forecast_workflows.py` | ForecastRunner workflow composition and forecast helper characterization |
@@ -148,6 +151,38 @@ Focused command:
 ```powershell
 & 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_analysis_endpoint.py tests\test_forecasting.py tests\test_forecast_workflows.py tests\test_model_scope_production.py tests\test_operational_hardening.py -q
 & 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_xai_product_summary.py tests\test_stock_model_db_repositories.py tests\test_operational_hardening.py tests\test_analysis_endpoint.py -q
+```
+
+## Run-Level Holdout Diagnostics and Signal Research Gate
+
+The 2026-05-24 run-level diagnostics implementation adds run-level leaderboard
+diagnostics, cross-symbol sector summaries, data-history bucket summaries,
+Prophet Hybrid date-aware final holdout routing, signal research planning and
+sequential run execution, and lock-protected `latest/` synchronization. History buckets are
+diagnostic (`long_history`, `mid_history`, `short_history`, `missing_data`,
+`unknown`) and must not skip otherwise runnable symbols.
+
+Focused command:
+
+```powershell
+& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_run_leaderboard.py tests\test_run_manifest.py tests\test_operational_hardening.py tests\test_prediction_date_aware.py tests\test_signal_research.py tests\test_prophet_hybrid.py tests\test_forecast_workflows.py -q
+& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m src.cli.run_leaderboard --symbol ARDYZ --format json
+& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m src.cli.signal_research check-universe --symbols ARDYZ --format json
+& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m src.cli.signal_research ensure-data --symbols KCHOL,EREGL --format json
+& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m src.cli.signal_research plan-runs --symbols ARDYZ --models DLinear --policies V0,V1 --format json
+& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m src.cli.signal_research run --symbols ARDYZ --models DLinear --policies V0,V1 --resume --dry-run --format json
+```
+
+## Dynamic Sector Mapping Gate
+
+The 2026-05-24 dynamic sector mapping change makes `data/bist_universe.csv` the
+source for stock-to-sector-index resolution and keeps BIST100 fallback behavior
+visible in feature/cache metadata.
+
+Focused command:
+
+```powershell
+& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_feature_improvements.py tests\test_phase5_data_quality.py tests\test_run_leaderboard.py tests\test_signal_research.py -q
 ```
 
 ## Graphify Knowledge Graph

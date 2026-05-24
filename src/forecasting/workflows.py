@@ -14,10 +14,10 @@ from src.forecasting.bist_rules import RULES_VERSION
 from src.pipeline.config import DataConfig, ValidationConfig
 from src.pipeline.data_manager import DataManager
 
-
 _TREE_MODELS = {"XGBoost", "Random Forest", "Ridge Return", "ElasticNet Return", "LightGBM Return"}
 _SEQ_MODELS = {"LSTM", "LSTM Lite", "AttentionLSTM v2", "DLinear", "NLinear"}
 _BASELINE_MODELS = {"Naive Last Value", "Naive Zero Return", "Naive Drift"}
+_DATE_AWARE_MODELS = {"Prophet", "Prophet-ML/DL Hybrid"}
 
 
 class _OwnerBackedForecastService:
@@ -75,7 +75,9 @@ class ForecastSymbolWorkflow(_OwnerBackedForecastService):
             predictor=self.latest_target_prediction_workflow,
             horizon_days=horizon_days,
         )
-        weekly_expected_return = (points[-1]["bounded_predicted_close"] / forecast_context["last_close"]) - 1.0
+        weekly_expected_return = (
+            points[-1]["bounded_predicted_close"] / forecast_context["last_close"]
+        ) - 1.0
         trend_threshold = self.rules.trend_threshold(
             data_manager.df["Close"].tail(80).to_numpy(dtype=float),
             horizon_days=horizon_days,
@@ -108,19 +110,30 @@ class ForecastSymbolWorkflow(_OwnerBackedForecastService):
             points=points,
         )
 
-    def _run_ensemble(self, *, symbol: str, selection: Dict[str, Any], data_manager: DataManager, horizon_days: int):
+    def _run_ensemble(
+        self,
+        *,
+        symbol: str,
+        selection: Dict[str, Any],
+        data_manager: DataManager,
+        horizon_days: int,
+    ):
         metadata = selection.get("ensemble_metadata") or {}
         members = list(metadata.get("members") or [])
         weights = dict(metadata.get("weights") or {})
         method = str(metadata.get("method") or selection["model_name"].replace("Ensemble ", ""))
         if len(members) < 2:
-            raise ForecastArtifactError(f"{selection['model_name']} icin ensemble member metadata eksik.")
+            raise ForecastArtifactError(
+                f"{selection['model_name']} icin ensemble member metadata eksik."
+            )
         member_points: Dict[str, list[dict[str, Any]]] = {}
         source_ids: list[int] = []
         for member in members:
             member_exp = self.model_resolver.latest_member_experiment(symbol, member)
             if member_exp is None:
-                raise ForecastArtifactError(f"Ensemble member artifact experiment bulunamadi: {member}")
+                raise ForecastArtifactError(
+                    f"Ensemble member artifact experiment bulunamadi: {member}"
+                )
             source_ids.append(int(member_exp["id"]))
             member_selection = {
                 "model_name": member,
@@ -165,7 +178,9 @@ class ForecastSymbolWorkflow(_OwnerBackedForecastService):
             stock_symbol=symbol,
             model_name=selection["model_name"],
             source_experiment_id=selection["source_experiment_id"],
-            last_observed_date=pd.to_datetime(data_manager.df["Date"].iloc[-1]).strftime("%Y-%m-%d"),
+            last_observed_date=pd.to_datetime(data_manager.df["Date"].iloc[-1]).strftime(
+                "%Y-%m-%d"
+            ),
             last_close=last_close,
             horizon_days=horizon_days,
             trend_label=trend_label,
@@ -197,12 +212,22 @@ class BestModelResolver(_OwnerBackedForecastService):
             return {
                 "model_name": force_model_name,
                 "source_experiment_id": None if best is None else best.get("experiment_id"),
-                "target_mode": "log_return" if best is None else best.get("target_mode", "log_return"),
-                "feature_mode": self.model_config.model_settings.get("feature_mode", "stationary_features"),
-                "scaling_mode": "robust_x_standard_y_clip" if best is None else best.get("scaling_mode", "robust_x_standard_y_clip"),
+                "target_mode": (
+                    "log_return" if best is None else best.get("target_mode", "log_return")
+                ),
+                "feature_mode": self.model_config.model_settings.get(
+                    "feature_mode", "stationary_features"
+                ),
+                "scaling_mode": (
+                    "robust_x_standard_y_clip"
+                    if best is None
+                    else best.get("scaling_mode", "robust_x_standard_y_clip")
+                ),
             }
         if not best:
-            raise ValueError(f"{symbol} icin best_models kaydi yok. Once pipeline calistirin veya --model kullanin.")
+            raise ValueError(
+                f"{symbol} icin best_models kaydi yok. Once pipeline calistirin veya --model kullanin."
+            )
         return self._resolve_best_or_replacement(symbol, best)
 
     def _resolve_best_or_replacement(self, symbol: str, best: Dict[str, Any]) -> Dict[str, Any]:
@@ -224,15 +249,17 @@ class BestModelResolver(_OwnerBackedForecastService):
                     f"{symbol} icin baseline/ensemble disinda train edilebilir model bulunamadi. "
                     "Once pipeline'i gercek model aileleriyle calistirin veya --model kullanin."
                 )
-            resolved.update({
-                "model_name": str(replacement["model_name"]),
-                "source_experiment_id": replacement.get("id"),
-                "target_mode": replacement.get("target_mode", resolved["target_mode"]),
-                "feature_mode": replacement.get("feature_mode", resolved["feature_mode"]),
-                "scaling_mode": replacement.get("scaling_mode", resolved["scaling_mode"]),
-                "model_path": replacement.get("model_path", ""),
-                "dataset_hash": replacement.get("dataset_hash"),
-            })
+            resolved.update(
+                {
+                    "model_name": str(replacement["model_name"]),
+                    "source_experiment_id": replacement.get("id"),
+                    "target_mode": replacement.get("target_mode", resolved["target_mode"]),
+                    "feature_mode": replacement.get("feature_mode", resolved["feature_mode"]),
+                    "scaling_mode": replacement.get("scaling_mode", resolved["scaling_mode"]),
+                    "model_path": replacement.get("model_path", ""),
+                    "dataset_hash": replacement.get("dataset_hash"),
+                }
+            )
         return resolved
 
     @staticmethod
@@ -252,7 +279,8 @@ class BestModelResolver(_OwnerBackedForecastService):
     def best_trainable_experiment(self, symbol: str) -> Optional[Dict[str, Any]]:
         rows = self.db.get_experiments(stock_symbol=symbol, limit=500)
         candidates = [
-            row for row in rows
+            row
+            for row in rows
             if (
                 not str(row.get("model_name", "")).startswith("Ensemble ")
                 and str(row.get("model_name", "")) not in _BASELINE_MODELS
@@ -265,7 +293,8 @@ class BestModelResolver(_OwnerBackedForecastService):
     def latest_member_experiment(self, symbol: str, model_name: str) -> Optional[Dict[str, Any]]:
         rows = self.db.get_experiments(stock_symbol=symbol, model_name=model_name, limit=100)
         candidates = [
-            row for row in rows
+            row
+            for row in rows
             if row.get("model_path") and os.path.isfile(str(row.get("model_path")))
         ]
         if not candidates:
@@ -344,7 +373,9 @@ class ProductionTrainingWorkflow(_OwnerBackedForecastService):
             time_steps=data_manager.data_cfg.time_steps,
         )
         metadata_time_steps = artifact.metadata.get("time_steps")
-        if metadata_time_steps and int(metadata_time_steps) != int(data_manager.data_cfg.time_steps):
+        if metadata_time_steps and int(metadata_time_steps) != int(
+            data_manager.data_cfg.time_steps
+        ):
             raise ForecastArtifactError(
                 f"{model_name} artifact time_steps mismatch: {metadata_time_steps} != {data_manager.data_cfg.time_steps}"
             )
@@ -398,7 +429,16 @@ class ProductionTrainingWorkflow(_OwnerBackedForecastService):
         return X_all_s[-time_steps:].reshape(1, time_steps, X_all_s.shape[1])
 
     def _fit_model(
-        self, model_name, data_manager, frame, X_all, X_train, y_train, X_train_s, y_train_s, scaler_X
+        self,
+        model_name,
+        data_manager,
+        frame,
+        X_all,
+        X_train,
+        y_train,
+        X_train_s,
+        y_train_s,
+        scaler_X,
     ):
         if model_name == "Prophet":
             model = self._make_prophet(data_manager.feature_names)
@@ -409,7 +449,9 @@ class ProductionTrainingWorkflow(_OwnerBackedForecastService):
             model.train(X_train_s, y_train_s)
             return model, None
         if model_name in _SEQ_MODELS:
-            return self._fit_sequence_model(model_name, data_manager, X_all, X_train_s, y_train_s, scaler_X)
+            return self._fit_sequence_model(
+                model_name, data_manager, X_all, X_train_s, y_train_s, scaler_X
+            )
         model = self._make_model_instance(model_name)
         model.train(X_train, y_train, dates_train=frame["Date"].iloc[:-1])
         return model, None
@@ -428,7 +470,7 @@ class ProductionTrainingWorkflow(_OwnerBackedForecastService):
             raise ValueError(f"{model_name} icin sequence sayisi yetersiz.")
         model = self._make_model_instance(model_name, stage="final")
         model.train(X_train_seq, y_train_seq)
-        latest_seq = X_all_s[-data_manager.data_cfg.time_steps:].reshape(
+        latest_seq = X_all_s[-data_manager.data_cfg.time_steps :].reshape(
             1,
             data_manager.data_cfg.time_steps,
             X_all_s.shape[1],
@@ -438,7 +480,7 @@ class ProductionTrainingWorkflow(_OwnerBackedForecastService):
 
 class LatestTargetPredictionWorkflow(_OwnerBackedForecastService):
     def predict(self, model_name: str, model: Any, context: Dict[str, Any]) -> float:
-        if model_name == "Prophet":
+        if model_name in _DATE_AWARE_MODELS:
             raw = model.predict(context["latest_X"], dates_test=[context["last_observed_date"]])
             return float(np.asarray(raw).ravel()[-1])
         if model_name in _TREE_MODELS:
@@ -485,25 +527,26 @@ class ForecastPointGenerator(_OwnerBackedForecastService):
                 for name in names
             )
             if method == "Cash-Gated":
-                returns = [
-                    float(member_points[name][idx]["predicted_return"])
-                    for name in names
-                ]
+                returns = [float(member_points[name][idx]["predicted_return"]) for name in names]
                 signs = np.sign(np.asarray(returns, dtype=float))
                 agreement = max((signs > 0).sum(), (signs < 0).sum()) / float(len(signs))
                 if agreement < 0.6:
                     weighted_close = previous_close
             bounded_close, band = self.rules.bound_forecast_price(weighted_close, previous_close)
-            combined.append({
-                "target_date": dates[idx].strftime("%Y-%m-%d"),
-                "horizon_index": idx + 1,
-                "raw_predicted_close": weighted_close,
-                "bounded_predicted_close": bounded_close,
-                "predicted_return": (bounded_close / previous_close) - 1.0 if previous_close else 0.0,
-                "lower_band": band.lower_band,
-                "upper_band": band.upper_band,
-                "price_tick": band.price_tick,
-            })
+            combined.append(
+                {
+                    "target_date": dates[idx].strftime("%Y-%m-%d"),
+                    "horizon_index": idx + 1,
+                    "raw_predicted_close": weighted_close,
+                    "bounded_predicted_close": bounded_close,
+                    "predicted_return": (
+                        (bounded_close / previous_close) - 1.0 if previous_close else 0.0
+                    ),
+                    "lower_band": band.lower_band,
+                    "upper_band": band.upper_band,
+                    "price_tick": band.price_tick,
+                }
+            )
             previous_close = bounded_close
         return combined
 
@@ -516,13 +559,13 @@ class ForecastPointGenerator(_OwnerBackedForecastService):
         return {name: max(raw[name], 0.0) / total for name in names}
 
     @staticmethod
-    def member_direction_agreement(member_points: Dict[str, list[dict[str, Any]]]) -> Optional[float]:
+    def member_direction_agreement(
+        member_points: Dict[str, list[dict[str, Any]]],
+    ) -> Optional[float]:
         if not member_points:
             return None
         returns = [
-            float(points[-1]["predicted_return"])
-            for points in member_points.values()
-            if points
+            float(points[-1]["predicted_return"]) for points in member_points.values() if points
         ]
         if not returns:
             return None
@@ -554,16 +597,18 @@ class ForecastPointGenerator(_OwnerBackedForecastService):
             )
             bounded_close, band = self.rules.bound_forecast_price(raw_close, previous_close)
             predicted_return = (bounded_close / previous_close) - 1.0
-            points.append({
-                "target_date": target_date.strftime("%Y-%m-%d"),
-                "horizon_index": idx,
-                "raw_predicted_close": raw_close,
-                "bounded_predicted_close": bounded_close,
-                "predicted_return": predicted_return,
-                "lower_band": band.lower_band,
-                "upper_band": band.upper_band,
-                "price_tick": band.price_tick,
-            })
+            points.append(
+                {
+                    "target_date": target_date.strftime("%Y-%m-%d"),
+                    "horizon_index": idx,
+                    "raw_predicted_close": raw_close,
+                    "bounded_predicted_close": bounded_close,
+                    "predicted_return": predicted_return,
+                    "lower_band": band.lower_band,
+                    "upper_band": band.upper_band,
+                    "price_tick": band.price_tick,
+                }
+            )
             frame = self._append_recursive_row(
                 frame=frame,
                 target_date=target_date,
@@ -573,7 +618,9 @@ class ForecastPointGenerator(_OwnerBackedForecastService):
             previous_close = bounded_close
         return points
 
-    def _refresh_latest_context(self, context: Dict[str, Any], frame: pd.DataFrame, model_name: str) -> None:
+    def _refresh_latest_context(
+        self, context: Dict[str, Any], frame: pd.DataFrame, model_name: str
+    ) -> None:
         features = context["features"]
         X_all = frame[features].to_numpy(dtype=float)
         latest_X = X_all[-1:].copy()
@@ -633,15 +680,17 @@ class ForecastPointGenerator(_OwnerBackedForecastService):
             raw_close = self._target_to_price(predicted_target, previous_close, target_mode)
             bounded_close, band = self.rules.bound_forecast_price(raw_close, previous_close)
             predicted_return = (bounded_close / previous_close) - 1.0
-            points.append({
-                "target_date": target_date.strftime("%Y-%m-%d"),
-                "horizon_index": idx,
-                "raw_predicted_close": raw_close,
-                "bounded_predicted_close": bounded_close,
-                "predicted_return": predicted_return,
-                "lower_band": band.lower_band,
-                "upper_band": band.upper_band,
-                "price_tick": band.price_tick,
-            })
+            points.append(
+                {
+                    "target_date": target_date.strftime("%Y-%m-%d"),
+                    "horizon_index": idx,
+                    "raw_predicted_close": raw_close,
+                    "bounded_predicted_close": bounded_close,
+                    "predicted_return": predicted_return,
+                    "lower_band": band.lower_band,
+                    "upper_band": band.upper_band,
+                    "price_tick": band.price_tick,
+                }
+            )
             previous_close = bounded_close
         return points

@@ -26,19 +26,12 @@ import ta
 from typing import Optional
 
 from src.features.correlation_pruning import prune_correlated_features
+from src.features.sector_mapping import (
+    DEFAULT_SECTOR_INDEX,
+    SectorMapping,
+    sector_return_column,
+)
 from src.xai.feature_dictionary import feature_group
-
-
-_SYMBOL_SECTORS = {
-    "AKBNK": "XBANK",
-    "KCHOL": "XHOLD",
-    "THYAO": "XULAS",
-    "MIATK": "XTEK",
-    "ONRYT": "XTEK",
-    "BIMAS": "XTCRT",
-    "MGROS": "XTCRT",
-    "KTLEV": "XTCRT",
-}
 
 
 class FeaturePipeline:
@@ -51,20 +44,20 @@ class FeaturePipeline:
 
     def __init__(
         self,
-        close_col:  str = "Close",
-        open_col:   str = "Open",
-        high_col:   str = "High",
-        low_col:    str = "Low",
+        close_col: str = "Close",
+        open_col: str = "Open",
+        high_col: str = "High",
+        low_col: str = "Low",
         volume_col: str = "Volume",
         feature_mode: str = "stationary_features",
         prune_correlated_features: bool = False,
         correlation_threshold: float = 0.88,
         lag_feature_count: int = 5,
     ):
-        self.close_col  = close_col
-        self.open_col   = open_col
-        self.high_col   = high_col
-        self.low_col    = low_col
+        self.close_col = close_col
+        self.open_col = open_col
+        self.high_col = high_col
+        self.low_col = low_col
         self.volume_col = volume_col
         self.feature_mode = feature_mode
         self.feature_names: list = []
@@ -72,6 +65,10 @@ class FeaturePipeline:
         self.correlation_threshold = correlation_threshold
         self.lag_feature_count = max(0, int(lag_feature_count))
         self.feature_groups: dict[str, str] = {}
+        self.sector_mapping_report: dict = {
+            "status": "not_evaluated",
+            "feature_created": False,
+        }
         self.pruning_report: dict = {
             "enabled": prune_correlated_features,
             "threshold": correlation_threshold,
@@ -81,9 +78,10 @@ class FeaturePipeline:
     # ── Ana Metod ─────────────────────────────────────────────────────────────
     def engineer_features(
         self,
-        df:        pd.DataFrame,
-        macro_df:  Optional[pd.DataFrame] = None,
-        symbol:    Optional[str] = None,
+        df: pd.DataFrame,
+        macro_df: Optional[pd.DataFrame] = None,
+        symbol: Optional[str] = None,
+        sector_mapping: Optional[SectorMapping | dict] = None,
     ) -> pd.DataFrame:
         """
         Tüm özellik üretim adımlarını sırayla uygular.
@@ -119,7 +117,19 @@ class FeaturePipeline:
 
         # 5. Makro bağlam (opsiyonel)
         if macro_df is not None and not macro_df.empty:
-            df = self._merge_macro(df, macro_df, symbol=symbol)
+            df = self._merge_macro(
+                df,
+                macro_df,
+                symbol=symbol,
+                sector_mapping=sector_mapping,
+            )
+        else:
+            self.sector_mapping_report = {
+                **self._sector_mapping_dict(symbol, sector_mapping),
+                "status": "skipped",
+                "reason": "macro_data_missing",
+                "feature_created": False,
+            }
 
         # NaN temizle
         df = df.dropna().reset_index(drop=True)
@@ -132,7 +142,9 @@ class FeaturePipeline:
         self.feature_groups = {name: feature_group(name) for name in self.feature_names}
         return df
 
-    def _prune_correlated(self, df: pd.DataFrame, feature_names: list[str]) -> tuple[pd.DataFrame, list[str]]:
+    def _prune_correlated(
+        self, df: pd.DataFrame, feature_names: list[str]
+    ) -> tuple[pd.DataFrame, list[str]]:
         df, feature_names, self.pruning_report = prune_correlated_features(
             df,
             feature_names,
@@ -148,7 +160,7 @@ class FeaturePipeline:
 
     # ── Teknik Göstergeler ────────────────────────────────────────────────────
     def _add_returns(self, df: pd.DataFrame) -> pd.DataFrame:
-        df["Return"]     = df[self.close_col].pct_change()
+        df["Return"] = df[self.close_col].pct_change()
         df["Log_Return"] = np.log(df[self.close_col] / df[self.close_col].shift(1))
         return df
 
@@ -205,9 +217,7 @@ class FeaturePipeline:
         if self.feature_mode in {"stationary_features", "hybrid"}:
             high = df[self.high_col]
             low = df[self.low_col]
-            atr_ind = ta.volatility.AverageTrueRange(
-                high=high, low=low, close=close, window=14
-            )
+            atr_ind = ta.volatility.AverageTrueRange(high=high, low=low, close=close, window=14)
             df["NATR_14"] = atr_ind.average_true_range() / close.replace(0, np.nan)
 
         return df
@@ -223,9 +233,9 @@ class FeaturePipeline:
         macd = ta.trend.MACD(close=close)
         close_safe = close.replace(0, np.nan)
         if self.feature_mode in {"stationary_features", "hybrid"}:
-            df["MACD_norm"]        = macd.macd() / close_safe
+            df["MACD_norm"] = macd.macd() / close_safe
             df["MACD_Signal_norm"] = macd.macd_signal() / close_safe
-            df["MACD_Diff_norm"]   = macd.macd_diff() / close_safe
+            df["MACD_Diff_norm"] = macd.macd_diff() / close_safe
 
             # ADX, MFI, CMF stasyoner indikatörleri
             high = df[self.high_col]
@@ -237,9 +247,7 @@ class FeaturePipeline:
             )
             df["MFI_14"] = mfi_ind.money_flow_index()
 
-            adx_ind = ta.trend.ADXIndicator(
-                high=high, low=low, close=close, window=14
-            )
+            adx_ind = ta.trend.ADXIndicator(high=high, low=low, close=close, window=14)
             df["ADX_14"] = adx_ind.adx()
 
             cmf_ind = ta.volume.ChaikinMoneyFlowIndicator(
@@ -273,8 +281,10 @@ class FeaturePipeline:
     def _add_lag_features(self, df: pd.DataFrame) -> pd.DataFrame:
         if self.lag_feature_count <= 0:
             return df
-        log_ret = df["Log_Return"] if "Log_Return" in df.columns else np.log(
-            df[self.close_col] / df[self.close_col].shift(1)
+        log_ret = (
+            df["Log_Return"]
+            if "Log_Return" in df.columns
+            else np.log(df[self.close_col] / df[self.close_col].shift(1))
         )
         for i in range(1, self.lag_feature_count + 1):
             df[f"LogRet_Lag_{i}"] = log_ret.shift(i)
@@ -282,9 +292,10 @@ class FeaturePipeline:
 
     def _merge_macro(
         self,
-        df:       pd.DataFrame,
+        df: pd.DataFrame,
         macro_df: pd.DataFrame,
-        symbol:   Optional[str] = None,
+        symbol: Optional[str] = None,
+        sector_mapping: Optional[SectorMapping | dict] = None,
     ) -> pd.DataFrame:
         """
         Makro DataFrame'i hisse DataFrame'iyle tarihe göre birleştirir.
@@ -295,12 +306,12 @@ class FeaturePipeline:
           Sector_Relative_Strength = hisse Return − sektörel getiri (veya BIST100 fallback)
         """
         # Date sütunu normalize
-        df_dates       = pd.to_datetime(df["Date"]).dt.normalize()
-        macro_dates    = pd.to_datetime(macro_df["Date"]).dt.normalize()
+        df_dates = pd.to_datetime(df["Date"]).dt.normalize()
+        macro_dates = pd.to_datetime(macro_df["Date"]).dt.normalize()
 
-        df       = df.copy()
+        df = df.copy()
         macro_cp = macro_df.copy()
-        df["Date"]       = df_dates
+        df["Date"] = df_dates
         macro_cp["Date"] = macro_dates
 
         # Sol birleşim: hisse veri setinin tarih kümesini koru
@@ -312,26 +323,46 @@ class FeaturePipeline:
 
         # Göreli güç: hissenin piyasayla ayrışması
         if "Return" in merged.columns and "BIST100_Return" in merged.columns:
-            merged["Relative_Strength"] = (
-                merged["Return"].fillna(0) - merged["BIST100_Return"].fillna(0)
-            )
+            merged["Relative_Strength"] = merged["Return"].fillna(0) - merged[
+                "BIST100_Return"
+            ].fillna(0)
 
         # Sektörel Göreli Güç
         if "Return" in merged.columns:
-            sector = "XUSIN"
-            if symbol:
-                clean_sym = symbol.split(".")[0].upper()
-                sector = _SYMBOL_SECTORS.get(clean_sym, "XUSIN")
-
-            sector_col = f"{sector}_Return"
+            sector_report = self._sector_mapping_dict(symbol, sector_mapping)
+            sector_col = sector_return_column(sector_report.get("sector_index"))
             if sector_col in merged.columns:
-                merged["Sector_Relative_Strength"] = (
-                    merged["Return"].fillna(0) - merged[sector_col].fillna(0)
-                )
+                merged["Sector_Relative_Strength"] = merged["Return"].fillna(0) - merged[
+                    sector_col
+                ].fillna(0)
+                self.sector_mapping_report = {
+                    **sector_report,
+                    "feature_created": True,
+                    "feature_column": "Sector_Relative_Strength",
+                    "return_column": sector_col,
+                }
             elif "BIST100_Return" in merged.columns:
-                merged["Sector_Relative_Strength"] = (
-                    merged["Return"].fillna(0) - merged["BIST100_Return"].fillna(0)
-                )
+                merged["Sector_Relative_Strength"] = merged["Return"].fillna(0) - merged[
+                    "BIST100_Return"
+                ].fillna(0)
+                self.sector_mapping_report = {
+                    **sector_report,
+                    "sector_index": DEFAULT_SECTOR_INDEX,
+                    "status": "fallback",
+                    "reason": "sector_return_missing",
+                    "feature_created": True,
+                    "feature_column": "Sector_Relative_Strength",
+                    "return_column": "BIST100_Return",
+                    "requested_return_column": sector_col,
+                }
+            else:
+                self.sector_mapping_report = {
+                    **sector_report,
+                    "status": "skipped",
+                    "reason": "bist100_return_missing",
+                    "feature_created": False,
+                    "requested_return_column": sector_col,
+                }
 
         # Drop non-stationary features if they exist
         for col in ["BIST100_Norm", "USDTRY_MA7"]:
@@ -339,3 +370,28 @@ class FeaturePipeline:
                 merged.drop(columns=[col], inplace=True)
 
         return merged
+
+    @staticmethod
+    def _sector_mapping_dict(
+        symbol: Optional[str],
+        sector_mapping: Optional[SectorMapping | dict],
+    ) -> dict:
+        if isinstance(sector_mapping, SectorMapping):
+            return sector_mapping.to_dict()
+        if isinstance(sector_mapping, dict):
+            defaults = FeaturePipeline._default_sector_mapping(symbol)
+            defaults.update(dict(sector_mapping))
+            return defaults
+        return FeaturePipeline._default_sector_mapping(symbol)
+
+    @staticmethod
+    def _default_sector_mapping(symbol: Optional[str]) -> dict:
+        return {
+            "symbol": "" if symbol is None else str(symbol).split(".")[0].upper(),
+            "sector_index": DEFAULT_SECTOR_INDEX,
+            "sector": None,
+            "status": "fallback",
+            "reason": "mapping_not_provided",
+            "source": "fallback",
+            "universe_file": None,
+        }

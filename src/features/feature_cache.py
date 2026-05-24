@@ -49,7 +49,7 @@ class FeatureCache:
             cache.put(key, df, meta)
     """
 
-    _VERSION = "2"  # Bump to invalidate all existing cache entries.
+    _VERSION = "3"  # Bump to invalidate all existing cache entries.
 
     def __init__(self, cache_dir: str, ttl_hours: float = 24.0) -> None:
         self.cache_dir = cache_dir
@@ -83,11 +83,14 @@ class FeatureCache:
             "_cache_version": self._VERSION,
             "abs_path": abs_path,
             "mtime": round(mtime, 3),
+            "universe_file": self._file_fingerprint(getattr(data_cfg, "universe_file", None)),
             "feature_mode": getattr(data_cfg, "feature_mode", "stationary_features"),
             "use_macro": bool(getattr(data_cfg, "use_macro", True)),
             "macro_rate_lag_days": int(getattr(data_cfg, "macro_rate_lag_days", 1)),
             "macro_cpi_lag_days": int(getattr(data_cfg, "macro_cpi_lag_days", 15)),
-            "prune_correlated_features": bool(getattr(data_cfg, "prune_correlated_features", False)),
+            "prune_correlated_features": bool(
+                getattr(data_cfg, "prune_correlated_features", False)
+            ),
             "correlation_threshold": float(getattr(data_cfg, "correlation_threshold", 0.98)),
             "lag_feature_count": int(getattr(data_cfg, "lag_feature_count", 5)),
             "training_window_years": (
@@ -98,6 +101,29 @@ class FeatureCache:
         }
         raw = json.dumps(fingerprint, sort_keys=True)
         return hashlib.md5(raw.encode()).hexdigest()
+
+    @staticmethod
+    def _file_fingerprint(path_value: Any) -> dict[str, Any]:
+        if not path_value:
+            return {"path": None, "mtime": None, "md5": None}
+        abs_path = os.path.abspath(str(path_value))
+        try:
+            stat = os.stat(abs_path)
+        except OSError:
+            return {"path": abs_path, "mtime": None, "md5": None}
+        digest = hashlib.md5()
+        try:
+            with open(abs_path, "rb") as handle:
+                for chunk in iter(lambda: handle.read(65536), b""):
+                    digest.update(chunk)
+            md5_value = digest.hexdigest()
+        except OSError:
+            md5_value = None
+        return {
+            "path": abs_path,
+            "mtime": round(stat.st_mtime, 3),
+            "md5": md5_value,
+        }
 
     # ------------------------------------------------------------------ #
     #  I/O                                                                 #
@@ -220,6 +246,7 @@ class FeatureCache:
 # ------------------------------------------------------------------ #
 #  JSON serialization helper (meta icin kullanilir)                  #
 # ------------------------------------------------------------------ #
+
 
 def _make_json_serializable(obj: Any) -> Any:
     """numpy/pandas tiplerini JSON-serializasyona hazirlar (recursive)."""

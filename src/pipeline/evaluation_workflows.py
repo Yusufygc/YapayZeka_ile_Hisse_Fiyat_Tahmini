@@ -12,6 +12,11 @@ from src.evaluation.evaluator import compute_metrics, plot_comparison
 from src.evaluation.financial_metrics import compute_quantile_metrics
 from src.forecasting.artifacts import save_forecast_artifact_package
 from src.pipeline.evaluation_services import _OwnerBackedService
+from src.pipeline.model_result_exporter import (
+    export_final_holdout_result,
+    export_single_split_result,
+    export_walk_forward_results,
+)
 
 _KERAS_MODELS = {"LSTM", "LSTM Lite", "AttentionLSTM v2"}
 _BACKTEST_REGISTRY_FIELDS = (
@@ -163,6 +168,12 @@ class SingleSplitEvaluationWorkflow(_OwnerBackedService):
                     validation_mode="single_split",
                     dataset_metadata=self.dataset_metadata,
                 )
+            export_single_split_result(
+                self,
+                model_name=name,
+                metrics=model_metrics,
+                model_path=model_path,
+            )
 
         xai_payload = self._get_xai_single_split(trained_models, tensors=self.latest_tensors)
 
@@ -246,6 +257,12 @@ class WalkForwardEvaluationWorkflow(_OwnerBackedService):
         _merge_backtest_metrics(wf_results, backtest_results)
         self.latest_model_metrics["wf"] = wf_results
         self._log_walk_forward_experiments(wf_results)
+        export_walk_forward_results(
+            self,
+            metrics_by_model=wf_results,
+            fold_metrics_by_model=enriched_fold_metrics,
+            backtest_inputs_by_model=wf_backtest_inputs or {},
+        )
         xai_payload = self._get_xai_walk_forward(wf_predictions, wf_y_true, wf_backtest_inputs or {})
 
         self._plot_walk_forward_predictions(wf_predictions, wf_y_true)
@@ -426,6 +443,21 @@ class FinalHoldoutEvaluationWorkflow(_OwnerBackedService):
             model=model,
             tensors=tensors,
             suffix="final_holdout",
+        )
+        export_final_holdout_result(
+            self,
+            model_name=model_name,
+            metrics=metrics[model_name],
+            model_path=model_path,
+            prediction_columns={
+                "date": dates,
+                "prediction_date": prediction_dates,
+                "y_true_price": y_true_price,
+                "y_pred_price": pred_price,
+                "y_true_target": y_true_target,
+                "y_pred_target": pred_target,
+                "prev_close": prev_close,
+            },
         )
 
         quantiles_df = None

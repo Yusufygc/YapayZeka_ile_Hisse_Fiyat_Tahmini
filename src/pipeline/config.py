@@ -10,9 +10,11 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 from src.backtesting.signals import SignalConfig
 
+
 @dataclass
 class DataConfig:
     """Veri yukleme, ozellik muhendisligi ve kalite kontrolleri ayarlari."""
+
     data_file: str
     test_ratio: float = 0.20
     time_steps: int = 30
@@ -35,9 +37,11 @@ class DataConfig:
     auto_update_interactive: bool = False
     universe_auto_sync: bool = True
 
+
 @dataclass
 class ValidationConfig:
     """Validasyon protokolu (Single Split, Walk-Forward) ayarlari."""
+
     validation_mode: str = "single_split"  # "single_split" veya "walk_forward"
     wf_n_splits: int = 12
     wf_min_train_size: int = 504
@@ -47,9 +51,11 @@ class ValidationConfig:
     wf_embargo_size: Optional[int] = None
     final_holdout_size: int = 60
 
+
 @dataclass
 class ModelConfig:
     """Model secimi, hiperparametreler ve ensemble ayarlari."""
+
     selected_models: Optional[List[str]] = None
     # Faz 4: registry'de var ama bu koşuda eğitilmesin / raporlanmasin.
     disabled_models: List[str] = field(default_factory=list)
@@ -59,62 +65,66 @@ class ModelConfig:
     ensemble_eligibility_overrides: Dict[str, bool] = field(default_factory=dict)
     registry_version: str = "v5"
     ensemble_enabled: bool = True
-    model_settings: Dict[str, Any] = field(default_factory=lambda: {
-        "arima": {"auto_order": False, "order": (1, 0, 0)},
-        "deep_learning": {
-            "min_sequence_samples": 64,
-            "validation_ratio": 0.1,
-            "min_validation_samples": 32,
-            "lstm": {
-                "epochs_single": 80,
-                "epochs_wf": 50,
-                "epochs_final": 50,
-                "patience": 15,
-                "lr_patience": 5,
-                "dropout": 0.2,
-                "batch_size": 32,
+    model_settings: Dict[str, Any] = field(
+        default_factory=lambda: {
+            "arima": {"auto_order": False, "order": (1, 0, 0)},
+            "deep_learning": {
+                "min_sequence_samples": 64,
+                "validation_ratio": 0.1,
+                "min_validation_samples": 32,
+                "lstm": {
+                    "epochs_single": 80,
+                    "epochs_wf": 50,
+                    "epochs_final": 50,
+                    "patience": 15,
+                    "lr_patience": 5,
+                    "dropout": 0.2,
+                    "batch_size": 32,
+                },
+                "lstm_lite_min_sequence_samples": 252,
+                "lstm_lite": {
+                    "units": 32,
+                    "dense_units": 16,
+                    "dropout": 0.25,
+                    "learning_rate": 0.0003,
+                    "epochs_single": 80,
+                    "epochs_wf": 50,
+                    "epochs_final": 50,
+                    "patience": 12,
+                    "lr_patience": 4,
+                    "batch_size": 32,
+                    "tune_on_fit": False,
+                    "tune_n_trials": 12,
+                },
+                "attention_lstm_v2_min_sequence_samples": 252,
+                "attention_lstm_v2": {
+                    "units_1": 64,
+                    "units_2": 32,
+                    "dense_units": 32,
+                    "dropout": 0.30,
+                    "learning_rate": 0.0005,
+                    "loss": "huber",
+                    "epochs_single": 80,
+                    "epochs_wf": 50,
+                    "epochs_final": 50,
+                    "patience": 12,
+                    "lr_patience": 4,
+                    "batch_size": 32,
+                    "tune_on_fit": False,
+                    "tune_n_trials": 12,
+                },
             },
-            "lstm_lite_min_sequence_samples": 252,
-            "lstm_lite": {
-                "units": 32,
-                "dense_units": 16,
-                "dropout": 0.25,
-                "learning_rate": 0.0003,
-                "epochs_single": 80,
-                "epochs_wf": 50,
-                "epochs_final": 50,
-                "patience": 12,
-                "lr_patience": 4,
-                "batch_size": 32,
-                "tune_on_fit": False,
-                "tune_n_trials": 12,
-            },
-            "attention_lstm_v2_min_sequence_samples": 252,
-            "attention_lstm_v2": {
-                "units_1": 64,
-                "units_2": 32,
-                "dense_units": 32,
-                "dropout": 0.30,
-                "learning_rate": 0.0005,
-                "loss": "huber",
-                "epochs_single": 80,
-                "epochs_wf": 50,
-                "epochs_final": 50,
-                "patience": 12,
-                "lr_patience": 4,
-                "batch_size": 32,
-                "tune_on_fit": False,
-                "tune_n_trials": 12,
-            },
-        },
-        "experimental_sequence_baselines": {},
-        "gradient_boosting": {"lightgbm_optional": True},
-        "prophet": {"use_regressors": True},
-    })
+            "experimental_sequence_baselines": {},
+            "gradient_boosting": {"lightgbm_optional": True},
+            "prophet": {"use_regressors": True},
+        }
+    )
+
 
 @dataclass
 class ExecutionConfig:
     """Backtest, maliyetler ve sinyal uretim ayarlari."""
+
     backtest_enabled: bool = True
     initial_capital: float = 100000.0
     commission_bps: float = 0.0
@@ -147,10 +157,15 @@ class ExecutionConfig:
     write_xai_tables: bool = True
     write_trade_logs: bool = False
     auto_generate_forecast_after_training: bool = True
+    research_policy: Optional[str] = None
+    research_phase: Optional[str] = None
+    research_metadata: Dict[str, Any] = field(default_factory=dict)
+
 
 @dataclass
 class PipelineConfig:
     """Tum pipeline'i kapsayan kok konfigurasyon nesnesi."""
+
     data: DataConfig
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     models: ModelConfig = field(default_factory=ModelConfig)

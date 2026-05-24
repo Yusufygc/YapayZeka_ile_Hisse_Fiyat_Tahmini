@@ -40,10 +40,10 @@ class DataManager:
 
     def __init__(
         self,
-        data_cfg:        DataConfig | None = None,
-        val_cfg:         ValidationConfig | None = None,
-        models_dir:      str | None = None,
-        macro_cache_dir: str  = None,
+        data_cfg: DataConfig | None = None,
+        val_cfg: ValidationConfig | None = None,
+        models_dir: str | None = None,
+        macro_cache_dir: str = None,
         **legacy_kwargs,
     ):
         data_cfg, val_cfg, models_dir = self._normalize_constructor_args(
@@ -52,8 +52,8 @@ class DataManager:
             models_dir=models_dir,
             legacy_kwargs=legacy_kwargs,
         )
-        self.data_cfg   = data_cfg
-        self.val_cfg    = val_cfg
+        self.data_cfg = data_cfg
+        self.val_cfg = val_cfg
         self.models_dir = models_dir
 
         self.stock_symbol = os.path.splitext(os.path.basename(self.data_cfg.data_file))[0]
@@ -67,27 +67,35 @@ class DataManager:
         self.macro_cache_dir = macro_cache_dir
 
         # State variables
-        self.df:            pd.DataFrame = None
-        self.feature_names: list         = []
-        self.tensors:       dict         = {}
-        self.wf_splits:     list         = []
+        self.df: pd.DataFrame = None
+        self.feature_names: list = []
+        self.tensors: dict = {}
+        self.wf_splits: list = []
         self.selection_df: pd.DataFrame | None = None
         self.final_holdout_df: pd.DataFrame | None = None
 
-        self.project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self.project_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
         self.universe_file = self.data_cfg.universe_file
         if self.universe_file and not os.path.isabs(self.universe_file):
             self.universe_file = os.path.join(self.project_root, self.universe_file)
+            self.data_cfg.universe_file = self.universe_file
 
         if self.universe_file and getattr(self.data_cfg, "universe_auto_sync", True):
             try:
                 from src.data.universe_sync import sync_universe
+
                 sync_universe(os.path.join(self.project_root, "data"), self.universe_file)
             except Exception as _exc:
                 print(f"  [UNIVERSE] sync atlandi: {_exc}")
 
-        effective_wf_embargo_size = self.data_cfg.time_steps if self.val_cfg.wf_embargo_size is None else max(0, int(self.val_cfg.wf_embargo_size))
-        
+        effective_wf_embargo_size = (
+            self.data_cfg.time_steps
+            if self.val_cfg.wf_embargo_size is None
+            else max(0, int(self.val_cfg.wf_embargo_size))
+        )
+
         wf_max_train_size = self.val_cfg.wf_max_train_size
         if self.val_cfg.wf_window_type not in {"sliding", "expanding"}:
             raise ValueError("wf_window_type 'sliding' veya 'expanding' olmalidir.")
@@ -103,11 +111,12 @@ class DataManager:
             "wf_embargo_size": effective_wf_embargo_size,
             "final_holdout_size": self.val_cfg.final_holdout_size,
         }
-        self.dataset_metadata: dict      = {}
-        self.dataset_hash:  str          = "N/A"
+        self.dataset_metadata: dict = {}
+        self.dataset_hash: str = "N/A"
         self.corporate_action_report: dict = {}
         self.feature_groups: dict[str, str] = {}
         self.feature_pruning_report: dict = {}
+        self.sector_mapping_report: dict = {}
         self.survivorship_bias_report: dict = {}
         self.training_window_report: dict = {}
         self.scaling_reports: list[dict] = []
@@ -202,7 +211,9 @@ class DataManager:
                 scaling_mode=getattr(self, "scaling_mode", "robust_x_standard_y_clip"),
                 use_macro=getattr(self, "use_macro", True),
                 universe_file=getattr(self, "universe_file", "data/bist_universe.csv"),
-                clip_shift_warning_threshold_pct=getattr(self, "clip_shift_warning_threshold_pct", 1.0),
+                clip_shift_warning_threshold_pct=getattr(
+                    self, "clip_shift_warning_threshold_pct", 1.0
+                ),
                 training_window_years=getattr(self, "training_window_years", 5),
                 window_candidates=getattr(self, "window_candidates", None) or [3, 5, 7, 10, None],
                 min_history_days=getattr(self, "min_history_days", 504),
@@ -229,7 +240,11 @@ class DataManager:
                 if self.val_cfg.wf_embargo_size is None
                 else max(0, int(self.val_cfg.wf_embargo_size))
             )
-            wf_max_train_size = None if self.val_cfg.wf_window_type == "expanding" else self.val_cfg.wf_max_train_size
+            wf_max_train_size = (
+                None
+                if self.val_cfg.wf_window_type == "expanding"
+                else self.val_cfg.wf_max_train_size
+            )
             self.validation_config = {
                 "wf_n_splits": self.val_cfg.wf_n_splits,
                 "wf_min_train_size": self.val_cfg.wf_min_train_size,
@@ -265,11 +280,15 @@ class DataManager:
         self._ensure_pipeline_services()
         return self.data_ingestion_service.refresh_dataset_metadata()
 
-    def build_run_metadata(self, validation_mode: str, model_config: dict | None = None) -> tuple[dict, str]:
+    def build_run_metadata(
+        self, validation_mode: str, model_config: dict | None = None
+    ) -> tuple[dict, str]:
         run_metadata = dict(self.dataset_metadata)
         run_metadata["validation_mode"] = validation_mode
         run_metadata["selection_set"] = self._frame_metadata(self.selection_df, "selection")
-        run_metadata["evaluation_set"] = self._frame_metadata(self.final_holdout_df, "final_holdout")
+        run_metadata["evaluation_set"] = self._frame_metadata(
+            self.final_holdout_df, "final_holdout"
+        )
         run_metadata["model_config"] = model_config or {}
         run_metadata["scaling_reports"] = self.scaling_reports
         run_metadata["nested_model_selection"] = {
@@ -280,8 +299,12 @@ class DataManager:
         if self.final_holdout_df is not None and not self.final_holdout_df.empty:
             run_metadata["final_holdout"] = {
                 "rows": len(self.final_holdout_df),
-                "date_start": pd.to_datetime(self.final_holdout_df["Date"].iloc[0]).strftime("%Y-%m-%d"),
-                "date_end": pd.to_datetime(self.final_holdout_df["Date"].iloc[-1]).strftime("%Y-%m-%d"),
+                "date_start": pd.to_datetime(self.final_holdout_df["Date"].iloc[0]).strftime(
+                    "%Y-%m-%d"
+                ),
+                "date_end": pd.to_datetime(self.final_holdout_df["Date"].iloc[-1]).strftime(
+                    "%Y-%m-%d"
+                ),
                 "used_for_model_selection": False,
             }
         else:
@@ -300,8 +323,16 @@ class DataManager:
         return {
             "label": label,
             "rows": len(df),
-            "date_start": pd.to_datetime(df["Date"].iloc[0]).strftime("%Y-%m-%d") if "Date" in df.columns else "N/A",
-            "date_end": pd.to_datetime(df["Date"].iloc[-1]).strftime("%Y-%m-%d") if "Date" in df.columns else "N/A",
+            "date_start": (
+                pd.to_datetime(df["Date"].iloc[0]).strftime("%Y-%m-%d")
+                if "Date" in df.columns
+                else "N/A"
+            ),
+            "date_end": (
+                pd.to_datetime(df["Date"].iloc[-1]).strftime("%Y-%m-%d")
+                if "Date" in df.columns
+                else "N/A"
+            ),
         }
 
     # ── Tensör Hazırlama ──────────────────────────────────────────────────────
@@ -320,9 +351,13 @@ class DataManager:
         context_df: pd.DataFrame | None = None,
     ) -> dict:
         self._ensure_pipeline_services()
-        return self.tensor_preparation_service.prepare_tensors(train_df, test_df, context_df=context_df)
+        return self.tensor_preparation_service.prepare_tensors(
+            train_df, test_df, context_df=context_df
+        )
 
-    def _record_scaling_report(self, train_df: pd.DataFrame, test_df: pd.DataFrame, scaler_X: object) -> None:
+    def _record_scaling_report(
+        self, train_df: pd.DataFrame, test_df: pd.DataFrame, scaler_X: object
+    ) -> None:
         self._ensure_pipeline_services()
         return self.tensor_preparation_service.record_scaling_report(train_df, test_df, scaler_X)
 

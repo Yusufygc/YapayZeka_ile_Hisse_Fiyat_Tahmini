@@ -2,7 +2,7 @@
 title: Data Pipeline
 type: concept
 status: active
-last_updated: 2026-05-20
+last_updated: 2026-05-24
 owner: llm
 source_count: 7
 ---
@@ -61,6 +61,7 @@ Feature generation is split across:
 - `src/features/feature_pipeline.py`: expanded technical feature set.
 - `src/features/macro_pipeline.py`: macro context features.
 - `src/features/feature_cache.py`: cache by data/config key.
+- `src/features/sector_mapping.py`: dynamic stock-to-sector-index mapping from `data/bist_universe.csv`.
 
 The project favors stationary or normalized features:
 
@@ -71,6 +72,16 @@ The project favors stationary or normalized features:
 - Macro lag controls for rate and CPI data to avoid lookahead.
 - Sektörel Göreli Güç (`Sector_Relative_Strength`), calculating the difference between target stock return and its corresponding sector index return (falling back to BIST100 if the index is missing).
 - Reduced correlation pruning threshold from `0.98` to `0.88` for stricter feature filtering.
+
+`Sector_Relative_Strength` is now driven by `data/bist_universe.csv`
+`Sector_Index` metadata rather than a hard-coded stock-to-sector dictionary.
+Missing symbols, missing or unsupported sector indexes, or unavailable sector
+return columns fall back to `BIST100_Return`; if `BIST100_Return` is also
+missing, the feature is skipped without failing the pipeline. Feature cache keys
+include the universe file path, timestamp, and content hash so mapping changes
+invalidate stale engineered-feature caches. Dataset metadata and cache metadata
+include a `sector_mapping` report with matched/fallback status and fallback
+reason.
 
 `MacroPipeline.get_macro_features()` now acts as an orchestration layer around
 separate cache refresh, cache loading, date filtering, monthly release-lag,
@@ -88,6 +99,8 @@ CSV fallback behavior and release-lag leakage controls independently testable.
 - Macro fetch and cache.
 - Feature cache lookup/write.
 - Feature pruning metadata.
+- Dynamic sector mapping from `DataConfig.universe_file` and `sector_mapping`
+  metadata propagation.
 - Survivorship/listing checks.
 - Chronological splitting.
 - Tensor preparation.

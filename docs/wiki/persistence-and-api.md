@@ -2,7 +2,7 @@
 title: Persistence and API
 type: concept
 status: active
-last_updated: 2026-05-20
+last_updated: 2026-05-24
 owner: llm
 source_count: 11
 ---
@@ -20,15 +20,25 @@ logs, JSON model registries, and a central SQLite database.
 outputs/{SYMBOL}/
 |-- runs/{RUN_ID}/
 |   |-- models/
+|   |-- model_results/{model_slug}/
 |   |-- experiments/
 |   |-- xai/
 |   `-- reports, plots, diagnostics
 `-- latest/
 ```
 
+`model_results/{model_slug}/` is an inspection layer only. It keeps
+model-scoped metrics, prediction rows, fold metrics for walk-forward runs, and
+artifact manifests so a "train all models" run can be reviewed model by model
+without launching separate manual runs. The forecast-serving contract still uses
+the canonical model paths under `models/` and their sidecars.
+
 After a successful run, `_sync_latest_output()` copies the run directory to
-`outputs/{SYMBOL}/latest/`. It checks that both source and target stay inside the
-symbol output root before deleting/replacing `latest/`.
+`outputs/{SYMBOL}/latest/`. This is a convenience copy only; run-level analysis
+must read `outputs/{SYMBOL}/runs/{RUN_ID}` as the source of truth. The sync step
+copies into a temporary `latest.__tmp__{RUN_ID}` directory first, then replaces
+`latest/` under a symbol-local `.latest_sync.lock` file so nearby runs do not
+delete the target while another run is copying into it.
 
 ## Experiment Tracker
 
@@ -110,6 +120,29 @@ The command reads run-scoped `csv/backtest_report_{suffix}.csv` files, tolerates
 semicolon-delimited UTF-8/BOM CSVs, updates matching `experiments` rows by
 `symbol + run_id + model_name + validation_mode`, then rebuilds `best_models`
 with the selection guard.
+
+Run-level holdout diagnostics can be produced without retraining:
+
+```powershell
+& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m src.cli.run_leaderboard --symbol ARDYZ --format json
+& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m src.cli.run_leaderboard --symbols ARDYZ,ASELS,LOGO --out outputs/research/run_leaderboard.csv
+```
+
+The command reads only `outputs/{SYMBOL}/runs/*`, never `latest/`, and reports
+final-holdout completeness, walk-forward/final return gap, benchmark-clone
+flags, trade sufficiency, and `leader_reliability_class` values such as
+`stable`, `defensive`, `unstable`, `invalid`, and `incomplete`. Multi-symbol
+mode adds history bucket, sector, prediction rank, trading rank, sector summary,
+and history-effect summary CSVs. History is diagnostic only, not an exclusion
+filter: `long_history` means the symbol meets the 10-year reference threshold,
+`mid_history` means 5-10 years, `short_history` means less than 5 years, and
+`missing_data`/`unknown` make unavailable history explicit.
+
+`run_manifest.json` now includes `final_holdout_status`. A successful final
+holdout records `status=success` and the selected model. If final-holdout
+evaluation fails, the manifest records `status=failed`, `model_name`,
+`error_type`, and `error` so the failure is visible after the warning scrolls
+past in the console.
 
 ## Analysis Refresh Jobs
 

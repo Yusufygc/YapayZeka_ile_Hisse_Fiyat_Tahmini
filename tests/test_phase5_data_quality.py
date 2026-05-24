@@ -29,14 +29,16 @@ class Phase5DataQualityTests(unittest.TestCase):
             self.skipTest(f"FeaturePipeline dependency missing: {exc}")
 
         rows = 80
-        df = pd.DataFrame({
-            "Date": pd.date_range("2024-01-01", periods=rows, freq="B"),
-            "Open": np.linspace(99.0, 119.0, rows),
-            "High": np.linspace(101.0, 121.0, rows),
-            "Low": np.linspace(98.0, 118.0, rows),
-            "Close": np.linspace(100.0, 120.0, rows),
-            "Volume": np.linspace(1000.0, 2000.0, rows),
-        })
+        df = pd.DataFrame(
+            {
+                "Date": pd.date_range("2024-01-01", periods=rows, freq="B"),
+                "Open": np.linspace(99.0, 119.0, rows),
+                "High": np.linspace(101.0, 121.0, rows),
+                "Low": np.linspace(98.0, 118.0, rows),
+                "Close": np.linspace(100.0, 120.0, rows),
+                "Volume": np.linspace(1000.0, 2000.0, rows),
+            }
+        )
 
         fp = FeaturePipeline(lag_feature_count=5)
         engineered = fp.engineer_features(df)
@@ -44,7 +46,9 @@ class Phase5DataQualityTests(unittest.TestCase):
         self.assertIn("OBV_Norm_20", engineered.columns)
         self.assertIn("VWAP_20_rel", engineered.columns)
         self.assertIn("LogRet_Lag_5", engineered.columns)
-        self.assertFalse(engineered[["OBV_Norm_20", "VWAP_20_rel", "LogRet_Lag_5"]].isna().any().any())
+        self.assertFalse(
+            engineered[["OBV_Norm_20", "VWAP_20_rel", "LogRet_Lag_5"]].isna().any().any()
+        )
         self.assertEqual(fp.feature_groups["OBV_Norm_20"], "volume")
         self.assertEqual(fp.feature_groups["LogRet_Lag_5"], "lag")
 
@@ -55,13 +59,15 @@ class Phase5DataQualityTests(unittest.TestCase):
             self.skipTest(f"FeaturePipeline dependency missing: {exc}")
 
         base = np.linspace(0.0, 1.0, 60)
-        df = pd.DataFrame({
-            "Date": pd.date_range("2024-01-01", periods=60, freq="B"),
-            "Close": np.linspace(100.0, 160.0, 60),
-            "KeepMe": base,
-            "DropMe": base * 1.001,
-            "AlsoDrop": base * 1.002,
-        })
+        df = pd.DataFrame(
+            {
+                "Date": pd.date_range("2024-01-01", periods=60, freq="B"),
+                "Close": np.linspace(100.0, 160.0, 60),
+                "KeepMe": base,
+                "DropMe": base * 1.001,
+                "AlsoDrop": base * 1.002,
+            }
+        )
         fp = FeaturePipeline(prune_correlated_features=True, correlation_threshold=0.99)
         pruned, features = fp._prune_correlated(df, ["KeepMe", "DropMe", "AlsoDrop"])
 
@@ -83,15 +89,17 @@ class Phase5DataQualityTests(unittest.TestCase):
         os.makedirs(tmp, exist_ok=True)
         path = os.path.join(tmp, "adj.csv")
         try:
-            pd.DataFrame({
-                "Date": pd.date_range("2024-01-01", periods=3),
-                "Open": [10.0, 11.0, 12.0],
-                "High": [11.0, 12.0, 13.0],
-                "Low": [9.0, 10.0, 11.0],
-                "Close": [10.0, 20.0, 30.0],
-                "Adj_Close": [10.0, 10.0, 15.0],
-                "Volume": [100, 100, 100],
-            }).to_csv(path, index=False)
+            pd.DataFrame(
+                {
+                    "Date": pd.date_range("2024-01-01", periods=3),
+                    "Open": [10.0, 11.0, 12.0],
+                    "High": [11.0, 12.0, 13.0],
+                    "Low": [9.0, 10.0, 11.0],
+                    "Close": [10.0, 20.0, 30.0],
+                    "Adj_Close": [10.0, 10.0, 15.0],
+                    "Volume": [100, 100, 100],
+                }
+            ).to_csv(path, index=False)
             df = load_and_clean(path)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -115,15 +123,17 @@ class Phase5DataQualityTests(unittest.TestCase):
         os.makedirs(tmp, exist_ok=True)
         path = os.path.join(tmp, "adj_anomaly.csv")
         try:
-            pd.DataFrame({
-                "Date": pd.date_range("2024-01-01", periods=3),
-                "Open": [10.0, 11.0, 12.0],
-                "High": [11.0, 12.0, 13.0],
-                "Low": [9.0, 10.0, 11.0],
-                "Close": [10.0, 20.0, 30.0],
-                "Adj_Close": [10.0, 500000.0, 15.0],
-                "Volume": [100, 100, 100],
-            }).to_csv(path, index=False)
+            pd.DataFrame(
+                {
+                    "Date": pd.date_range("2024-01-01", periods=3),
+                    "Open": [10.0, 11.0, 12.0],
+                    "High": [11.0, 12.0, 13.0],
+                    "Low": [9.0, 10.0, 11.0],
+                    "Close": [10.0, 20.0, 30.0],
+                    "Adj_Close": [10.0, 500000.0, 15.0],
+                    "Volume": [100, 100, 100],
+                }
+            ).to_csv(path, index=False)
             df = load_and_clean(path)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -170,26 +180,33 @@ class Phase5DataQualityTests(unittest.TestCase):
         from src.pipeline.config import DataConfig, ValidationConfig
         from src.pipeline.data_manager import DataManager
 
-        frame = pd.DataFrame({
-            "Date": pd.date_range("2024-01-01", periods=5),
-            "Close": np.linspace(100.0, 104.0, 5),
-            "Feature": np.arange(5, dtype=float),
-        })
+        frame = pd.DataFrame(
+            {
+                "Date": pd.date_range("2024-01-01", periods=5),
+                "Close": np.linspace(100.0, 104.0, 5),
+                "Feature": np.arange(5, dtype=float),
+            }
+        )
         cache_meta = {
             "feature_names": ["Feature"],
             "feature_groups": {},
             "feature_pruning_report": {},
+            "sector_mapping_report": {"status": "matched", "sector_index": "XBANK"},
         }
 
-        with patch("src.pipeline.data_services.DataUpdater.check_and_update") as updater, \
-             patch("src.pipeline.data_services.load_data", return_value=frame), \
-             patch.object(DataManager, "_apply_training_window", side_effect=lambda df: df), \
-             patch.object(DataManager, "_check_survivorship_bias", return_value={}), \
-             patch("src.pipeline.data_services.FeatureCache") as cache_cls:
+        with (
+            patch("src.pipeline.data_services.DataUpdater.check_and_update") as updater,
+            patch("src.pipeline.data_services.load_data", return_value=frame),
+            patch.object(DataManager, "_apply_training_window", side_effect=lambda df: df),
+            patch.object(DataManager, "_check_survivorship_bias", return_value={}),
+            patch("src.pipeline.data_services.FeatureCache") as cache_cls,
+        ):
             cache_cls.return_value.make_key.return_value = "k"
             cache_cls.return_value.get.return_value = (frame, cache_meta)
             dm = DataManager(
-                data_cfg=DataConfig(data_file="data/DUMMY.csv", use_macro=False, universe_auto_sync=False),
+                data_cfg=DataConfig(
+                    data_file="data/DUMMY.csv", use_macro=False, universe_auto_sync=False
+                ),
                 val_cfg=ValidationConfig(),
                 models_dir="outputs/_test_phase5_data_quality",
             )
@@ -197,27 +214,32 @@ class Phase5DataQualityTests(unittest.TestCase):
 
         updater.assert_not_called()
         self.assertEqual(dm.feature_names, ["Feature"])
+        self.assertEqual(dm.sector_mapping_report["sector_index"], "XBANK")
 
     def test_data_manager_ingest_auto_update_is_explicit_opt_in(self):
         from src.pipeline.config import DataConfig, ValidationConfig
         from src.pipeline.data_manager import DataManager
 
-        frame = pd.DataFrame({
-            "Date": pd.date_range("2024-01-01", periods=5),
-            "Close": np.linspace(100.0, 104.0, 5),
-            "Feature": np.arange(5, dtype=float),
-        })
+        frame = pd.DataFrame(
+            {
+                "Date": pd.date_range("2024-01-01", periods=5),
+                "Close": np.linspace(100.0, 104.0, 5),
+                "Feature": np.arange(5, dtype=float),
+            }
+        )
         cache_meta = {
             "feature_names": ["Feature"],
             "feature_groups": {},
             "feature_pruning_report": {},
         }
 
-        with patch("src.pipeline.data_services.DataUpdater.check_and_update") as updater, \
-             patch("src.pipeline.data_services.load_data", return_value=frame), \
-             patch.object(DataManager, "_apply_training_window", side_effect=lambda df: df), \
-             patch.object(DataManager, "_check_survivorship_bias", return_value={}), \
-             patch("src.pipeline.data_services.FeatureCache") as cache_cls:
+        with (
+            patch("src.pipeline.data_services.DataUpdater.check_and_update") as updater,
+            patch("src.pipeline.data_services.load_data", return_value=frame),
+            patch.object(DataManager, "_apply_training_window", side_effect=lambda df: df),
+            patch.object(DataManager, "_check_survivorship_bias", return_value={}),
+            patch("src.pipeline.data_services.FeatureCache") as cache_cls,
+        ):
             cache_cls.return_value.make_key.return_value = "k"
             cache_cls.return_value.get.return_value = (frame, cache_meta)
             dm = DataManager(
@@ -242,14 +264,16 @@ class Phase5DataQualityTests(unittest.TestCase):
             self.skipTest(f"FeaturePipeline dependency missing: {exc}")
 
         close = np.concatenate([np.linspace(100.0, 140.0, 210), np.linspace(120.0, 80.0, 20)])
-        df = pd.DataFrame({
-            "Date": pd.date_range("2024-01-01", periods=len(close), freq="B"),
-            "Open": close,
-            "High": close + 1.0,
-            "Low": close - 1.0,
-            "Close": close,
-            "Volume": np.full(len(close), 1000.0),
-        })
+        df = pd.DataFrame(
+            {
+                "Date": pd.date_range("2024-01-01", periods=len(close), freq="B"),
+                "Open": close,
+                "High": close + 1.0,
+                "Low": close - 1.0,
+                "Close": close,
+                "Volume": np.full(len(close), 1000.0),
+            }
+        )
         fp = FeaturePipeline()
         with_regime = fp._add_market_regime(df.copy())
 
@@ -281,12 +305,14 @@ class Phase5DataQualityTests(unittest.TestCase):
         os.makedirs(tmp, exist_ok=True)
         universe_path = os.path.join(tmp, "bist_universe.csv")
         try:
-            pd.DataFrame({
-                "Symbol": ["TEST"],
-                "Listed_Date": ["2020-01-01"],
-                "Delisted_Date": [""],
-                "Status": ["Active"],
-            }).to_csv(universe_path, index=False)
+            pd.DataFrame(
+                {
+                    "Symbol": ["TEST"],
+                    "Listed_Date": ["2020-01-01"],
+                    "Delisted_Date": [""],
+                    "Status": ["Active"],
+                }
+            ).to_csv(universe_path, index=False)
             dm.universe_file = universe_path
             covered_report = dm._check_survivorship_bias()
         finally:

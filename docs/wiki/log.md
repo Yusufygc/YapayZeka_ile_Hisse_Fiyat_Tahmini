@@ -1,3 +1,112 @@
+## [2026-05-24] Maintenance | Ignored Plan Dosyalari Kaldirildi
+
+- Removed the ignored local `docs/gelistirmeplani1.md` and
+  `docs/gelistirmeplani2.md` files from the workspace on request.
+- Moved the active Plan 1/Plan 2 closure state into
+  `docs/wiki/backtest-signal-improvement-plan.md` so committed documentation
+  does not point to local-only plan files.
+
+## [2026-05-24] Feature | Plan 1/2 Kapanis Komutlari
+
+- Fixed run-leaderboard and signal-research history parsing so ISO dates such
+  as `2020-02-06` are parsed year-first and ARDYZ remains `mid_history`.
+- Added `signal_research ensure-data` and `signal_research run --resume` so
+  Plan 1 V0-V4 research runs can restore missing CSVs, skip completed
+  model/policy runs, and record policy metadata in `run_manifest.json`.
+- Restored the Plan 1 full symbol set CSVs from `data/old` where needed; the
+  current preflight has no `missing_data` rows for
+  KCHOL, SAHOL, ENKAI, EREGL, TUPRS, SASA, ASELS, LOGO, and ARDYZ.
+
+## [2026-05-24] Decision | Veri Gecmisi Referans Esigi
+
+- Changed the Plan 1/Plan 2 history rule from a 10-year exclusion gate to a
+  diagnostic reference threshold.
+- Added `history_bucket`, `meets_10y_reference`, and `data_history_warning`
+  semantics so ARDYZ-style 5-10 year symbols remain runnable as `mid_history`.
+- Added history-effect summaries to run-level diagnostics for reliability,
+  incomplete/invalid rate, WF-final gap, and model-family distribution.
+
+## [2026-05-24] Feature | Model Bazli Run Sonuc Klasorleri
+
+- Added `model_results/{model_slug}/` as an inspection-only run output layer for
+  train-all and multi-model CLI runs.
+- Kept canonical forecast artifacts under `models/` unchanged while exporting
+  per-model metrics, predictions, fold metrics, and artifact manifests for
+  easier review.
+
+## [2026-05-24] Feature | Dinamik Hisse-Sektor Eslesmesi
+
+- Replaced the hard-coded stock-sector mapping with universe-backed
+  `Sector_Index` resolution from `data/bist_universe.csv`.
+- Added BIST100 fallback handling plus `sector_mapping` metadata for feature
+  engineering, feature caches, and dataset metadata.
+- Widened `data/bist_universe.csv` with optional `Sector` and `Sector_Index`
+  columns seeded from the previous static mappings.
+
+## [2026-05-24] Feature | Plan 1 ve Plan 2 Kalan Isler
+
+- Extended `run_leaderboard` with multi-symbol, all-symbol, history-class,
+  sector, leader-rank, and sector-summary outputs while keeping `latest/` out
+  of the analysis source path.
+- Fixed date-aware prediction routing for `Prophet-ML/DL Hybrid` in final
+  holdout and forward forecast flows, and added manifest-visible
+  `final_holdout_status` diagnostics.
+- Added `python -m src.cli.signal_research` dry-run commands for universe
+  checks, symbol/model/policy run matrices, and completed-run summaries without
+  using final holdout for policy selection.
+
+## [2026-05-24] Feature | Run-Level Holdout Leaderboard ve Latest Sync Kilidi
+
+- Added `src.analysis.run_leaderboard` and `python -m src.cli.run_leaderboard`
+  to classify run outputs by final-holdout completeness, WF/final return gap,
+  benchmark-clone behavior, trade sufficiency, and reliability class.
+- Hardened `ForecastingPipeline._sync_latest_output()` with a temp-copy step and
+  symbol-local `.latest_sync.lock` so nearby runs do not corrupt `latest/`.
+- Added focused tests for leaderboard classifications, semicolon/BOM report
+  parsing, and temp-based `latest/` replacement.
+
+## [2026-05-24] Plan | ARDYZ Run-Level Holdout Dayaniklilik Plani
+
+- Created `docs/gelistirmeplani2.md` as the follow-up plan to
+  `docs/gelistirmeplani1.md`.
+- Captured the ARDYZ short-history technology pilot finding: Random Forest and
+  LightGBM led walk-forward results but weakened on final holdout, while DLinear
+  was the most defensible but still below buy-and-hold.
+- Added run-level source-of-truth, final-holdout completeness, WF-to-holdout gap,
+  and single-trade/benchmark-clone rejection rules to the signal improvement
+  wiki.
+
+## [2026-05-23] Analysis | Industrial Sector Signal Findings
+
+- Added the EREGL, ERBOS, and FROTO industrial-stock review to the signal
+  improvement plan.
+- Captured the three distinct industrial profiles found in the outputs:
+  trend-capture for EREGL, defensive/selective-entry for ERBOS, and
+  drawdown-reduction for FROTO.
+- Documented that industrial model selection should score trend capture,
+  negative-regime loss reduction, and confirmed trade count separately.
+
+## [2026-05-23] Plan | Cross-Sector Signal Research Plan
+
+- Created `docs/gelistirmeplani1.md` as the first durable development plan for
+  sector-based signal improvement research.
+- The plan extends the AKBNK, GARAN, and ISCTR bank review to three holding,
+  three industrial, and three technology stocks with 10+ year data checks.
+- Added planned signal policy variants: soft gates, percentile entries, trade
+  band calibration, and sector-relative confirmation.
+
+## [2026-05-23] Decision | Signal Gate Research Scope
+
+- Bank-sector review of AKBNK, GARAN, and ISCTR identified recurring
+  `gate_too_strict` and `model_signal_weak` diagnoses in otherwise useful
+  final-holdout candidates.
+- Documented that transaction-cost modelling remains out of scope for the
+  current research phase; zero commission/slippage is acceptable while signal
+  behavior is being studied.
+- Added a sector-focused signal improvement direction: softer entry gates,
+  percentile/rank-based entries, and sector-relative confirmation using only
+  walk-forward calibration data.
+
 ## [2026-05-21] Feature | Özellik Mühendisliği İyileştirmeleri ve Sektörel Göreli Güç Entegrasyonu
 
 - Durağan olmayan `BIST100_Norm` ve `USDTRY_MA7` özellikleri temizlendi.
