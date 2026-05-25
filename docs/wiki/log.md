@@ -1,3 +1,13 @@
+## [2026-05-25] Decision | Plan PAUSED at Sprint 8
+
+- Sprint 7 (`71bba60`) tamamlandi (calendar + cross-sectional momentum +
+  PSI 30d monitor API). graphify 3351n/5125e/281c (AST-only RULES.md).
+- Kullanici Sprint 8 (Analysis API Faz 2 doldurma: confidence.reasons,
+  xai.top_*_reasons, forecast.ensemble_agreement, /v1 alias) onayini
+  "Hayir, dur" olarak verdi.
+- Plan Bolum 10 Live State: Sprint 8-9 pending.
+- Devam icin: "Sprint 8'i baslat" denildiginde A8.1'den baslanir.
+
 ## [2026-05-25] Feature | Sprint 7 — Calendar + Cross-Sectional Momentum + PSI 30d API
 
 - `src/features/feature_pipeline.py`: `_add_calendar_features(df)` Date'e
