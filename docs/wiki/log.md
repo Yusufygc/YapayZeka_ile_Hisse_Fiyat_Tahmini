@@ -1,3 +1,12 @@
+## [2026-05-25] Decision | Plan PAUSED at Sprint 7
+
+- Sprint 5 (`bcf5e62`) tamamlandi, Sprint 6 (TFT) bilincli olarak
+  ertelendi (ayri plan ileride).
+- Kullanici Sprint 7 (Calendar + Cross-Sectional Momentum + PSI
+  Monitor API) onayini "Hayir, dur" olarak verdi.
+- Plan Bolum 10 Live State: Sprint 7 ⏸ AWAITING APPROVAL.
+- Devam icin: "Sprint 7'yi baslat" denildiginde A7.1'den baslanir.
+
 ## [2026-05-25] Feature | Sprint 5 — Recursive Feature Recompute + Macro Forward Projection
 
 - `src/features/feature_pipeline.py`: `recompute_close_dependent(frame)`
