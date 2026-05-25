@@ -13,6 +13,7 @@ from src.api.schemas.analysis import (
     AnalysisResponse,
     ConfidenceBlock,
     DataBlock,
+    DataQualityBlock,
     ForecastBlock,
     ForecastPoint,
     ForecastSourceBlock,
@@ -22,6 +23,7 @@ from src.api.schemas.analysis import (
     XaiFactorItem,
 )
 from src.api.services.analysis_freshness import compute_freshness
+from src.api.services.data_quality_monitor import compute_psi_30d
 from src.api.services.data_refresh_service import DataRefreshService, read_latest_market_row
 from src.pipeline.confidence_calculator import compute_confidence
 from src.xai.product_summary import build_xai_product_summary
@@ -129,6 +131,7 @@ class AnalysisService:
                         outputs_base=self._outputs_base,
                         refresh_job=job,
                         refresh_reason="missing_forecast_for_best_model",
+                        project_root=self._project_root,
                     )
             return AnalysisResponse(
                 symbol=symbol,
@@ -173,6 +176,7 @@ class AnalysisService:
                         outputs_base=self._outputs_base,
                         refresh_job=stale_job,
                         refresh_reason="stale_market_data",
+                        project_root=self._project_root,
                     )
 
         return _build_forecast_response(
@@ -184,6 +188,7 @@ class AnalysisService:
             outputs_base=self._outputs_base,
             refresh_job=stale_job,
             refresh_reason=None if stale_job is None else "stale_market_data",
+            project_root=self._project_root,
         )
 
 
@@ -228,6 +233,7 @@ def _build_forecast_response(
     outputs_base: str,
     refresh_job: Optional[Dict[str, Any]] = None,
     refresh_reason: Optional[str] = None,
+    project_root: Optional[str] = None,
 ) -> AnalysisResponse:
     last_observed = str(forecast_row.get("last_observed_date", "") or "")
     freshness = compute_freshness(last_observed)
@@ -246,8 +252,22 @@ def _build_forecast_response(
     warnings = list(conf_result.warnings)
     if freshness.warning:
         warnings.append(freshness.warning)
+    # Sprint 7 A7.3 — major_drift confidence warning + label downgrade.
+    _early_dq = _build_data_quality_block(symbol=symbol, project_root=project_root)
+    conf_label = conf_result.label
+    if _early_dq.psi_status == "major_drift":
+        warnings.append(
+            f"data_drift_major:psi_30d={_early_dq.psi_30d:.3f}_>=0.25"
+        )
+        conf_label = "low"
+    elif _early_dq.psi_status == "moderate_drift":
+        warnings.append(
+            f"data_drift_moderate:psi_30d={_early_dq.psi_30d:.3f}"
+        )
+        if conf_label == "high":
+            conf_label = "medium"
     conf_block = ConfidenceBlock(
-        label=conf_result.label,
+        label=conf_label,
         reasons=conf_result.reasons,
         warnings=warnings,
     )
@@ -266,6 +286,9 @@ def _build_forecast_response(
         xai_available=xai_summary.available,
         confidence_label=conf_result.label,
     )
+
+    # Sprint 7 A7.3 — early hesabi tekrar kullan (cift hesap olmasin).
+    data_quality_block = _early_dq
 
     return AnalysisResponse(
         symbol=symbol,
@@ -287,6 +310,35 @@ def _build_forecast_response(
         refresh_reason=_refresh_reason(refresh_job, refresh_reason),
         refresh_job_id=None if refresh_job is None else refresh_job.get("job_id"),
         forecast_source=_build_forecast_source_block(forecast_row),
+        data_quality=data_quality_block,
+    )
+
+
+def _build_data_quality_block(
+    *,
+    symbol: str,
+    project_root: Optional[str],
+) -> DataQualityBlock:
+    """Sprint 7 A7.3 — on-the-fly PSI 30g hesabini API'ye tasi."""
+    if not project_root:
+        return DataQualityBlock(
+            psi_30d=None, psi_status="unavailable", reason="project_root_missing"
+        )
+    csv_path = os.path.join(project_root, "data", f"{symbol}.csv")
+    try:
+        result = compute_psi_30d(csv_path)
+    except Exception as exc:  # pragma: no cover - defensive
+        return DataQualityBlock(
+            psi_30d=None,
+            psi_status="unavailable",
+            stale_warning=True,
+            reason=f"monitor_failed:{type(exc).__name__}",
+        )
+    return DataQualityBlock(
+        psi_30d=result.psi_30d,
+        psi_status=result.psi_status,
+        stale_warning=result.stale_warning,
+        reason=result.reason,
     )
 
 

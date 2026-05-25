@@ -4,7 +4,7 @@ type: concept
 status: active
 last_updated: 2026-05-25
 owner: llm
-source_count: 5
+source_count: 6
 ---
 
 # Analysis API Contract
@@ -130,7 +130,13 @@ For Faz 2+, if user-specific scenario parameters are required a
     "artifact_mode": "artifact_loaded",
     "warnings": ["projected_exogenous_features"]
   },
-  "disclaimer": "Bu çıktı kişisel yatırım tavsiyesi değildir. Model geçmiş verilerden üretilmiş analitik bir tahmin sunar; nihai karar kullanıcıya aittir."
+  "disclaimer": "Bu çıktı kişisel yatırım tavsiyesi değildir. Model geçmiş verilerden üretilmiş analitik bir tahmin sunar; nihai karar kullanıcıya aittir.",
+  "data_quality": {
+    "psi_30d": 0.07,
+    "psi_status": "stable",
+    "stale_warning": false,
+    "reason": null
+  }
 }
 ```
 
@@ -225,6 +231,28 @@ Every XAI block must include the caveat string:
 ```
 XAI, modelin tahmininde öne çıkan değişkenleri gösterir; nedensellik kanıtı değildir.
 ```
+
+## Data Quality Block (Sprint 7 — 2026-05-25)
+
+`data_quality` carries on-the-fly PSI drift between the last 30 trading days
+of stationary OHLCV-derived features (log_return, range_pct, volume_log_change)
+and the prior 252-day window. Bins=3 (chosen to keep the noise floor low at
+30-sample holdout).
+
+| Field | Type | Description |
+|---|---|---|
+| `psi_30d` | float \| null | Max per-feature PSI; null when unavailable |
+| `psi_status` | enum | `stable` (<0.10) / `moderate_drift` (0.10..0.25) / `major_drift` (>=0.25) / `unavailable` |
+| `stale_warning` | bool | True when CSV is missing |
+| `reason` | string \| null | Diagnostic when status is `unavailable` |
+
+Confidence interactions (`src/api/services/analysis_service.py`):
+
+- `major_drift` → confidence label forced to `low`; warning
+  `data_drift_major:psi_30d=<value>_>=0.25` appended.
+- `moderate_drift` → confidence `high` is downgraded to `medium`; warning
+  `data_drift_moderate:psi_30d=<value>` appended.
+- `stable` / `unavailable` → no confidence change.
 
 ## Related Pages
 

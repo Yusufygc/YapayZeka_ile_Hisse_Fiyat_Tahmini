@@ -4,7 +4,7 @@ type: concept
 status: active
 last_updated: 2026-05-25
 owner: llm
-source_count: 9
+source_count: 11
 ---
 
 # Data Pipeline
@@ -183,6 +183,43 @@ deterministically rather than held constant. See
 
 If `statsmodels` is unavailable the projector silently falls back to trend
 extrapolation; the forecast loop never raises.
+
+## Calendar Features (Sprint 7 — 2026-05-25)
+
+`FeaturePipeline._add_calendar_features` derives stationary calendar signals
+from the `Date` column. Always recomputed (Date-only) and safe to reapply on
+recursive forecast rows.
+
+| Column | Definition |
+|---|---|
+| `day_of_week` | 0=Monday … 4=Friday |
+| `day_of_month` | 1..31 |
+| `days_to_month_end` | days remaining in current month |
+| `days_to_quarter_end` | days remaining in current quarter |
+| `is_quarter_end_week` | 1 if `days_to_quarter_end <= 5` else 0 |
+| `days_to_next_fomc` | days until next FOMC date, `365` if not found |
+
+FOMC dates are read from `data/meta/fomc_calendar.csv` (manually maintained).
+Missing CSV degrades to a constant `365.0` placeholder. Toggle via
+`FeaturePipeline(enable_calendar_features=False)`.
+
+## Cross-Sectional Momentum (Sprint 7 — 2026-05-25)
+
+`FeaturePipeline._add_cross_sectional_momentum` runs inside `_merge_macro`
+when sector/market returns are available. Compares the symbol's 60-day
+momentum against sector index and BIST100.
+
+| Column | Definition |
+|---|---|
+| `momentum_60d` | `Close.pct_change(60)` |
+| `market_momentum_60d` | cumprod-equivalent of `BIST100_Return` over 60d |
+| `sector_momentum_60d` | cumprod-equivalent of sector index return (falls back to market when sector missing) |
+| `relative_momentum_60d` | `momentum_60d - sector_momentum_60d` |
+| `relative_to_market_60d` | `momentum_60d - market_momentum_60d` |
+
+Missing macro return columns make the related rows silently absent — no
+exception is raised. Toggle via
+`FeaturePipeline(enable_cross_sectional_momentum=False)`.
 
 ## Feature Engineering
 

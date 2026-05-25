@@ -129,6 +129,19 @@ Computed by `src/data/quality.py`:
 | `0.10 - 0.25` | `moderate_drift` | soft degradation (lower one level) |
 | `≥ 0.25` | `major_drift` | hard block → `low` |
 
+### Live PSI 30d Monitor (Sprint 7 — 2026-05-25)
+
+`src/api/services/data_quality_monitor.py:compute_psi_30d()` performs an
+on-the-fly PSI check at API request time on stationary OHLCV-derived
+features (`log_return`, `range_pct`, `volume_log_change`). The holdout is the
+last 30 trading days; the train window is the prior 252 trading days. Bins=3
+keeps the small-sample noise floor below `0.10` for iid distributions.
+
+The result is published in `data_quality.psi_30d` / `psi_status` on the
+analysis response. `major_drift` forces confidence to `low` and appends a
+`data_drift_major:` warning string; `moderate_drift` downgrades `high` to
+`medium`.
+
 ## Stability Score
 
 Computed from walk-forward fold metrics at experiment insert time:

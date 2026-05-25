@@ -20,6 +20,7 @@ v2 (H2 düzeltmesi):
   [0,1] aralığı dışına ekstrapole ediyor → model eğitim ortalamasına çöküyordu.
 """
 
+import os
 import pandas as pd
 import numpy as np
 import ta
@@ -32,6 +33,13 @@ from src.features.sector_mapping import (
     sector_return_column,
 )
 from src.xai.feature_dictionary import feature_group
+
+# Sprint 7 (2026-05-25) A7.1: takvim feature'lari icin statik FOMC kaynak.
+_DEFAULT_FOMC_CSV = os.path.join("data", "meta", "fomc_calendar.csv")
+_FOMC_LARGE_GAP_DAYS = 365  # sonraki FOMC bulunamazsa kullanilacak yer tutucu
+
+# Sprint 7 A7.2: cross-sectional momentum lookback (is gunu).
+_MOMENTUM_LOOKBACK_DAYS = 60
 
 
 class FeaturePipeline:
@@ -53,6 +61,9 @@ class FeaturePipeline:
         prune_correlated_features: bool = False,
         correlation_threshold: float = 0.88,
         lag_feature_count: int = 5,
+        fomc_calendar_path: Optional[str] = None,
+        enable_calendar_features: bool = True,
+        enable_cross_sectional_momentum: bool = True,
     ):
         self.close_col = close_col
         self.open_col = open_col
@@ -64,6 +75,10 @@ class FeaturePipeline:
         self.prune_correlated_features = prune_correlated_features
         self.correlation_threshold = correlation_threshold
         self.lag_feature_count = max(0, int(lag_feature_count))
+        self.enable_calendar_features = bool(enable_calendar_features)
+        self.enable_cross_sectional_momentum = bool(enable_cross_sectional_momentum)
+        self.fomc_calendar_path = fomc_calendar_path
+        self._fomc_dates_cache: Optional[np.ndarray] = None
         self.feature_groups: dict[str, str] = {}
         self.sector_mapping_report: dict = {
             "status": "not_evaluated",
@@ -114,6 +129,12 @@ class FeaturePipeline:
         # 5. Volume and stationary lag features
         df = self._add_volume_features(df)
         df = self._add_lag_features(df)
+
+        # 5b. Takvim feature'lari (Sprint 7 A7.1) — Date'e bagli, OHLCV'den
+        # bagimsiz. Macro merge'den once ekleniyor ki cross-sectional
+        # momentum hesabi da bunlari gorebilsin.
+        if self.enable_calendar_features:
+            df = self._add_calendar_features(df)
 
         # 5. Makro bağlam (opsiyonel)
         if macro_df is not None and not macro_df.empty:
@@ -290,6 +311,65 @@ class FeaturePipeline:
             df[f"LogRet_Lag_{i}"] = log_ret.shift(i)
         return df
 
+    # ── Sprint 7 (2026-05-25) Plan A7.1 — Takvim Feature'lari ────────────────
+    def _load_fomc_dates(self) -> np.ndarray:
+        """FOMC takvimini lazy cache'le. CSV yoksa bos dizi."""
+        if self._fomc_dates_cache is not None:
+            return self._fomc_dates_cache
+        path = self.fomc_calendar_path or _DEFAULT_FOMC_CSV
+        try:
+            if not os.path.exists(path):
+                self._fomc_dates_cache = np.array([], dtype="datetime64[ns]")
+                return self._fomc_dates_cache
+            raw = pd.read_csv(path)
+            dates = pd.to_datetime(raw["Date"], errors="coerce").dropna()
+            self._fomc_dates_cache = np.sort(dates.values.astype("datetime64[ns]"))
+        except Exception:
+            self._fomc_dates_cache = np.array([], dtype="datetime64[ns]")
+        return self._fomc_dates_cache
+
+    def _add_calendar_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Date sutununa dayali stasyoner takvim feature'lari.
+
+        Uretilen sutunlar:
+          - day_of_week (0=Pazartesi ... 4=Cuma)
+          - day_of_month (1..31)
+          - days_to_month_end (>= 0)
+          - days_to_quarter_end (>= 0)
+          - is_quarter_end_week (0/1) — quarter sonuna <= 5 takvim gunu
+          - days_to_next_fomc (>= 0; bulunamazsa _FOMC_LARGE_GAP_DAYS)
+        """
+        if "Date" not in df.columns:
+            return df
+        dates = pd.to_datetime(df["Date"], errors="coerce")
+        df["day_of_week"] = dates.dt.dayofweek.astype("Int64").astype(float)
+        df["day_of_month"] = dates.dt.day.astype("Int64").astype(float)
+
+        month_end = dates + pd.offsets.MonthEnd(0)
+        df["days_to_month_end"] = (month_end - dates).dt.days.astype("Int64").astype(float)
+
+        quarter_end = dates + pd.offsets.QuarterEnd(0)
+        days_to_qe = (quarter_end - dates).dt.days
+        df["days_to_quarter_end"] = days_to_qe.astype("Int64").astype(float)
+        df["is_quarter_end_week"] = (days_to_qe <= 5).astype(int).astype(float)
+
+        # FOMC: her satir icin sonraki tarihin gun farki.
+        fomc = self._load_fomc_dates()
+        if fomc.size == 0:
+            df["days_to_next_fomc"] = float(_FOMC_LARGE_GAP_DAYS)
+        else:
+            d_ns = dates.values.astype("datetime64[ns]")
+            idx = np.searchsorted(fomc, d_ns, side="left")
+            out = np.full(len(d_ns), _FOMC_LARGE_GAP_DAYS, dtype=float)
+            valid = idx < fomc.size
+            if valid.any():
+                next_d = fomc[idx[valid]]
+                delta = (next_d - d_ns[valid]).astype("timedelta64[D]").astype(int)
+                out[valid] = delta.astype(float)
+            df["days_to_next_fomc"] = out
+        return df
+
     # ── Sprint 5 (2026-05-25) Plan A5.1 ──────────────────────────────────────
     def recompute_close_dependent(self, frame: pd.DataFrame) -> pd.DataFrame:
         """
@@ -400,12 +480,77 @@ class FeaturePipeline:
                     "requested_return_column": sector_col,
                 }
 
+        # Sprint 7 (2026-05-25) A7.2 — Cross-sectional momentum.
+        # Hisse 60g momentumu vs sektor / BIST100. Sadece veri varsa eklenir;
+        # eksikse sessiz atla (NaN sonrasi dropna train icin sorun olmasin).
+        if self.enable_cross_sectional_momentum:
+            merged = self._add_cross_sectional_momentum(
+                merged,
+                sector_return_col=(
+                    sector_return_column(
+                        self._sector_mapping_dict(symbol, sector_mapping).get(
+                            "sector_index"
+                        )
+                    )
+                ),
+            )
+
         # Drop non-stationary features if they exist
         for col in ["BIST100_Norm", "USDTRY_MA7"]:
             if col in merged.columns:
                 merged.drop(columns=[col], inplace=True)
 
         return merged
+
+    def _add_cross_sectional_momentum(
+        self,
+        df: pd.DataFrame,
+        sector_return_col: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """
+        Hisse 60g momentumu vs sektor + BIST100 goreli momentum sutunlari.
+
+        Sutunlar:
+          - momentum_60d            (hisse Close.pct_change(60))
+          - sector_momentum_60d     (sektor index Return'unden cumprod, varsa)
+          - market_momentum_60d     (BIST100_Return cumprod, varsa)
+          - relative_momentum_60d   (hisse - sektor; ikisi de varsa)
+          - relative_to_market_60d  (hisse - market; ikisi de varsa)
+        """
+        out = df
+        close = out.get(self.close_col)
+        lookback = _MOMENTUM_LOOKBACK_DAYS
+        if close is None or len(out) < lookback + 1:
+            return out
+
+        out["momentum_60d"] = close.pct_change(lookback)
+
+        def _cum_from_returns(ret_series: pd.Series) -> pd.Series:
+            log_ret = np.log1p(ret_series.fillna(0.0))
+            roll_sum = log_ret.rolling(lookback).sum()
+            return np.expm1(roll_sum)
+
+        if "BIST100_Return" in out.columns:
+            out["market_momentum_60d"] = _cum_from_returns(out["BIST100_Return"])
+            out["relative_to_market_60d"] = (
+                out["momentum_60d"] - out["market_momentum_60d"]
+            )
+
+        if (
+            sector_return_col
+            and sector_return_col in out.columns
+            and sector_return_col != "BIST100_Return"
+        ):
+            out["sector_momentum_60d"] = _cum_from_returns(out[sector_return_col])
+            out["relative_momentum_60d"] = (
+                out["momentum_60d"] - out["sector_momentum_60d"]
+            )
+        elif "BIST100_Return" in out.columns:
+            # Sektor index yok → fallback BIST100; ayri ad ile.
+            out["sector_momentum_60d"] = out["market_momentum_60d"]
+            out["relative_momentum_60d"] = out["relative_to_market_60d"]
+
+        return out
 
     @staticmethod
     def _sector_mapping_dict(

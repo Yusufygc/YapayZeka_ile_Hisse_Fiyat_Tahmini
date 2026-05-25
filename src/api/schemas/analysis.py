@@ -101,6 +101,17 @@ class XaiBlock(BaseModel):
     caveat: str = ""
 
 
+class DataQualityBlock(BaseModel):
+    """Sprint 7 (2026-05-25) A7.3 — son 30g vs onceki 252g PSI drift."""
+
+    psi_30d: Optional[float] = None
+    psi_status: Literal[
+        "stable", "moderate_drift", "major_drift", "unavailable"
+    ] = "unavailable"
+    stale_warning: bool = False
+    reason: Optional[str] = None
+
+
 class ForecastSourceBlock(BaseModel):
     type: str = "model"
     model_name: Optional[str] = None
@@ -131,3 +142,5 @@ class AnalysisResponse(BaseModel):
     refresh_reason: Optional[str] = None
     refresh_job_id: Optional[str] = None
     forecast_source: Optional[ForecastSourceBlock] = None
+    # Sprint 7 (2026-05-25) A7.3 — son 30g PSI drift monitoru.
+    data_quality: Optional[DataQualityBlock] = None

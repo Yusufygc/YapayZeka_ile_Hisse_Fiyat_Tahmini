@@ -1,3 +1,38 @@
+## [2026-05-25] Feature | Sprint 7 — Calendar + Cross-Sectional Momentum + PSI 30d API
+
+- `src/features/feature_pipeline.py`: `_add_calendar_features(df)` Date'e
+  dayali stasyoner takvim sutunlari: `day_of_week`, `day_of_month`,
+  `days_to_month_end`, `days_to_quarter_end`, `is_quarter_end_week`,
+  `days_to_next_fomc`. FOMC tarihi `data/meta/fomc_calendar.csv` statik
+  dosyadan okunur; yoksa 365.0 placeholder.
+- `_add_cross_sectional_momentum`: `momentum_60d` (Close.pct_change(60)),
+  `market_momentum_60d` (BIST100_Return cumprod), `sector_momentum_60d`
+  (sektor index Return cumprod; eksikse market fallback),
+  `relative_momentum_60d`, `relative_to_market_60d`. `_merge_macro` icinde
+  cagrilir; eksik kolon = sessiz atla.
+- FeaturePipeline constructor: `enable_calendar_features`,
+  `enable_cross_sectional_momentum`, `fomc_calendar_path` parametreleri
+  eklendi (default True).
+- `src/api/services/data_quality_monitor.py` eklendi:
+  `compute_psi_30d(symbol_csv)` son 30 isgununu onceki 252g ile karsilastirir;
+  stasyoner OHLCV-turevli feature'lar (log_return, range_pct,
+  volume_log_change), bins=3 (kucuk holdout noise icin).
+  Tier: `<0.10 stable`, `0.10-0.25 moderate_drift`, `>=0.25 major_drift`,
+  `unavailable` (CSV yok / insufficient history).
+- `src/api/schemas/analysis.py`: `DataQualityBlock` eklendi;
+  `AnalysisResponse.data_quality` opsiyonel.
+- `src/api/services/analysis_service.py`: `data_quality` blogu API'ye
+  tasindi. `major_drift` -> confidence `low` + `data_drift_major:`
+  warning; `moderate_drift` -> `high`->`medium` downgrade +
+  `data_drift_moderate:` warning.
+- `data/meta/fomc_calendar.csv` (statik 2022-2027 FOMC takvimi) eklendi.
+- Wiki: `data-pipeline.md` (source_count 9->11) Calendar + Cross-Sectional
+  Momentum bolumleri; `analysis-api-contract.md` (source_count 5->6)
+  data_quality blogu + confidence etkilesimi; `confidence-and-risk-policy.md`
+  Live PSI 30d Monitor bolumu.
+- Tests: `test_calendar_features.py` (7), `test_cross_sectional_momentum.py`
+  (6), `test_psi_monitor.py` (6). Sprint 0-5 + Sprint 7 = 80 pass / 4 skip.
+
 ## [2026-05-25] Decision | Plan PAUSED at Sprint 7
 
 - Sprint 5 (`bcf5e62`) tamamlandi, Sprint 6 (TFT) bilincli olarak
