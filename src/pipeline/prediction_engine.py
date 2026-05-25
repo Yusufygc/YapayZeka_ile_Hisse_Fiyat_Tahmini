@@ -106,6 +106,14 @@ class _PredictionEngineMixin:
         }
 
     def _add_single_split_ensembles(self) -> None:
+        # Sprint 0 (2026-05-25): Bu metot ensemble agirliklarini test setinin
+        # `y_true_aligned` degeri uzerinde optimize ediyor -> in-sample leakage.
+        # Tek-bolunmeli mod artik research-only oldugu icin tolerans gosterilir,
+        # ancak metadata'ya `ensemble_weight_scope: "in_sample_test_set"` flag'i
+        # eklenir ve uretim leaderboard'una sizmasi engellenir.
+        # Gercek train-tail validation slice fix'i Sprint 4 (probabilistic
+        # forecasting + multi-horizon target) ile gelecek; o sprintte
+        # TensorPreparationService train-tail slice ayirmasi yapilacak.
         if not self.ensemble_enabled:
             return
         metadata = getattr(self, "dataset_metadata", {}) or {}
@@ -172,6 +180,11 @@ class _PredictionEngineMixin:
         self.ensemble_weights[stk_name] = stk_weights
         # Cash-Gated, Sharpe-Weighted ağırlıklarını miras alır (gate transformasyondur, blend değil).
         self.ensemble_weights[cg_name] = dict(sharpe_weights)
+        # Sprint 0 (2026-05-25): leakage flag metadata
+        if not hasattr(self, "ensemble_weight_scope"):
+            self.ensemble_weight_scope: Dict[str, str] = {}
+        for _name in (equal_name, inv_name, sharpe_name, rp_name, hier_name, stk_name, cg_name):
+            self.ensemble_weight_scope[_name] = "in_sample_test_set_research_only"
 
         equal_target = EnsembleModel().combine(base_targets) if len(base_targets) >= 2 else None
         inverse_target = (

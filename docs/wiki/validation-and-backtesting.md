@@ -2,7 +2,7 @@
 title: Validation and Backtesting
 type: concept
 status: active
-last_updated: 2026-05-20
+last_updated: 2026-05-25
 owner: llm
 source_count: 6
 ---
@@ -17,19 +17,18 @@ research paths.
 
 ## Validation Modes
 
-### Single Split
+### Walk-Forward (default, 2026-05-25)
 
-`single_split` is the fast mode:
+`walk_forward` is now the **only production validation mode**. Defaults:
 
-1. Chronological train/test split.
-2. Fit scalers on train only.
-3. Train selected candidate models and benchmarks.
-4. Generate aligned predictions.
-5. Compute metrics, plots, backtests, and registry entries.
+- `wf_n_splits = 12`, `wf_test_size = 21`, `wf_max_train_size = 756`,
+  `wf_window_type = "sliding"` → ~252 OOS trading days (~1 year coverage).
+- `wf_embargo_size = None` is auto-resolved to `max(200, time_steps)` at
+  runtime (`_resolve_wf_embargo_size` in `src/pipeline/data_manager.py`). This
+  prevents `Market_Regime_SMA200` and similar 200-bar rolling features from
+  leaking train data into the test slice.
 
-### Walk-Forward
-
-`walk_forward` is the robust mode:
+Flow:
 
 1. Generate chronological folds.
 2. Train each model per fold.
@@ -40,6 +39,32 @@ research paths.
 
 `ValidationConfig` supports sliding and expanding windows. Sliding windows can
 be capped by `wf_max_train_size`; expanding windows set that cap to `None`.
+
+### (Removed from production) Single Split — research-only as of 2026-05-25
+
+`single_split` is **no longer a production validation mode**. It is retained
+only as a research/debug path accessible via `python -m src.cli.batch
+--debug-quick`. When that flag is set the orchestrator calls
+`_run_research_single_split()`, marks the run as `production_eligible=false`,
+and stores `research_policy="debug_quick_single_split"` plus
+`research_metadata.research_only=true` in the run manifest and dataset
+metadata. Production leaderboards, advisory APIs, and registry promotion
+ignore these runs.
+
+Reason for removal:
+
+- Ensemble weight optimization (`_add_single_split_ensembles`) historically
+  ran `optimize_inverse_rmse`, `optimize_by_sharpe`, etc. against the
+  full test-set `y_true_aligned` → in-sample / look-ahead leakage.
+- A single chronological split provides no fold variance → no statistical
+  confidence on Sharpe / Dir_Acc.
+- The CLI prompt that asked users to pick `single_split` vs `walk_forward`
+  silently routed casual runs into the leakage path.
+
+The minimum-invasive Sprint 0 fix flags the leakage scope as
+`ensemble_weight_scope[name] = "in_sample_test_set_research_only"`. The
+proper train-tail validation-slice fix is scheduled for Sprint 4 (probabilistic
+forecasting + multi-horizon target work introduces the slice naturally).
 
 ## Final Holdout
 

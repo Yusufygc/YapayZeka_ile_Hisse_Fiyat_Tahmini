@@ -42,7 +42,9 @@ class DataConfig:
 class ValidationConfig:
     """Validasyon protokolu (Single Split, Walk-Forward) ayarlari."""
 
-    validation_mode: str = "single_split"  # "single_split" veya "walk_forward"
+    # Sprint 0 (2026-05-25): Default `walk_forward`. `single_split` modu yalniz
+    # `--debug-quick` bayragiyla erisilebilir; uretime gitmez.
+    validation_mode: str = "walk_forward"  # "walk_forward" (default) | "single_split" (debug only)
     wf_n_splits: int = 12
     wf_min_train_size: int = 504
     wf_test_size: int = 21

@@ -110,15 +110,9 @@ def select_stock() -> str:
     return stock_files[int(choice) - 1]
 
 # ─── Adım 2 — Validasyon Modu ────────────────────────────────────────────────
-
-def select_validation_mode() -> str:
-    _header("ADIM 2 | Validasyon Modu")
-    print("  [1] single_split   — Tek seferlik eğit/test bölünmesi (hızlı)")
-    print("  [2] walk_forward   — Kayan pencere çapraz doğrulama (kapsamlı)")
-    choice = _ask("Numara girin", {"1", "2"})
-    mode = "single_split" if choice == "1" else "walk_forward"
-    print(f"  ✔ Seçildi: {mode}\n")
-    return mode
+# Sprint 0 (2026-05-25): single_split kullanici arayuzunden kaldirildi.
+# Uretim akisi her zaman walk_forward kullanir. Debug icin `--debug-quick`
+# bayragi batch CLI'da mevcuttur.
 
 # ─── Adım 3 — Model Seçimi ───────────────────────────────────────────────────
 
@@ -205,7 +199,7 @@ def main() -> None:
     _header("TS FORECASTING LAB")
 
     data_file = select_stock()
-    validation_mode = select_validation_mode()
+    validation_mode = "walk_forward"  # Sprint 0: tek gecerli uretim modu
     selected_models = select_models()
 
     # Rely on dataclass defaults for everything else

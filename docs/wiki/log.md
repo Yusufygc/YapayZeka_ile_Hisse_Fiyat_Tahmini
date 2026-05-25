@@ -1,3 +1,37 @@
+## [2026-05-25] Decision | Single-Split Kaldirildi, WF Default + Auto Embargo
+
+- `ValidationConfig.validation_mode` default `walk_forward` oldu
+  (`src/pipeline/config.py:45`). Eski default `single_split` idi ve
+  ensemble agirliklarinin test seti uzerinde optimize edilmesine yol
+  aciyordu (look-ahead leakage).
+- `wf_embargo_size` None veya 0 ise `_resolve_wf_embargo_size` otomatik
+  `max(200, time_steps)` doner (`src/pipeline/data_manager.py`). Sebep:
+  `Market_Regime_SMA200` ve diger 200-bar rolling feature'lar train/test
+  arasinda tampon istemeden sizinti uretiyordu.
+- CLI'dan validasyon modu prompt'u kaldirildi (`src/cli/interactive.py`).
+  Batch CLI'da `--debug-quick` bayragi eklendi; bu mod single_split
+  calistirir ama `research_policy="debug_quick_single_split"` +
+  `research_metadata.research_only=true` ile damgalanir ve uretim
+  leaderboard'una sizmaz.
+- `ForecastingPipeline._run_research_single_split()` private metot eklendi;
+  research_only flag'i olmayan single_split runlarini RuntimeError ile
+  durdurur.
+- `_add_single_split_ensembles` icinde leakage flag'i
+  `ensemble_weight_scope[name] = "in_sample_test_set_research_only"`
+  metadata olarak isaretlendi. Gercek train-tail validation slice fix'i
+  Sprint 4 (probabilistic forecasting) ile gelecek.
+- `src/cli/db_maintenance.py:25` backtest suffix mapping `latest ->
+  walk_forward` olarak guncellendi.
+- Yeni testler: `tests/test_walk_forward_default.py`,
+  `tests/test_embargo_auto.py`.
+- Wiki: `validation-and-backtesting.md` "Removed Single Split" bolumu +
+  "Walk-Forward default" guncellemesi. `index.md` Current Project State
+  WF default notu.
+
+Plan referansi:
+`~/.claude/plans/sistematik-ad-m-ad-m-yap-lacak-expressive-eich.md`
+Sprint 0 (A0.1, A0.2, A0.3, A0.4, A0.5, A0.6, A0.7).
+
 ## [2026-05-24] Maintenance | Ignored Plan Dosyalari Kaldirildi
 
 - Removed the ignored local `docs/gelistirmeplani1.md` and

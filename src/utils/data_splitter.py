@@ -7,6 +7,28 @@ Prevents data leakage by ensuring train bounds strictly precede test bounds.
 import pandas as pd
 from typing import Tuple, List, Dict
 
+
+# Sprint 0 (2026-05-25): WF embargo auto-default. None veya 0 verilirse
+# `max(200, time_steps)` kullanilir. Sebep: Market_Regime_SMA200 ve diger
+# rolling-200 feature'lar train/test arasinda sizinti yaratir; tampon en az
+# 200 olmalidir. Bu helper data_manager.py'dan buraya tasindi ki agir
+# import zincirleri (joblib, tensorflow vb.) olmayan test ortamlarinda da
+# import edilebilsin.
+_MIN_AUTO_EMBARGO_SIZE = 200
+
+
+def _resolve_wf_embargo_size(raw_value, time_steps: int) -> int:
+    """Plan v1.0 Sprint 0 A0.2: None/0/negative → auto max(200, time_steps)."""
+    if raw_value is None:
+        return max(_MIN_AUTO_EMBARGO_SIZE, int(time_steps))
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return max(_MIN_AUTO_EMBARGO_SIZE, int(time_steps))
+    if value <= 0:
+        return max(_MIN_AUTO_EMBARGO_SIZE, int(time_steps))
+    return value
+
 class TimeSeriesSplitter:
     """
     Handles robust train/test splitting for time series to prevent data leakage.

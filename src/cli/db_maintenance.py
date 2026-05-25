@@ -19,10 +19,14 @@ from src.database.stock_model_db import StockModelDB
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "stock_models.db"
 DEFAULT_OUTPUTS_BASE = PROJECT_ROOT / "outputs"
+# Sprint 0 (2026-05-25): "latest" backtest suffixi single_split runlarindan
+# kalan tarihsel ad. Yeni runlar walk_forward urettigi icin mapping guncellendi.
+# Eski single_split run kayitlari icin schema string "single_split" DB'de durur,
+# ama yeni reindex/maintenance islemleri walk_forward etiketler.
 _BACKTEST_SUFFIX_TO_VALIDATION = {
     "final_holdout": "final_holdout",
     "wf": "walk_forward",
-    "latest": "single_split",
+    "latest": "walk_forward",
 }
 _BACKTEST_FIELD_MAP = {
     "RMSE_vs_benchmark": "rmse_vs_benchmark",

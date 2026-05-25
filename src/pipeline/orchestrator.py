@@ -473,11 +473,10 @@ class ForecastingPipeline:
         print("=" * 60)
 
         if self.validation_mode == "single_split":
-            self.model_trainer.train_single_split(self.data_manager.tensors)
-            self.evaluation_manager.generate_predictions(
-                self.model_trainer.trained_models, self.data_manager.tensors
-            )
-            self.evaluation_manager.evaluate_single_split(self.model_trainer.trained_models)
+            # Sprint 0 (2026-05-25): single_split yalniz arastirma/debug akisi.
+            # research_only=True olmayan single_split runlari kabul edilmez —
+            # uretim leaderboard'una sizmasini engellemek icin sert kapidir.
+            self._run_research_single_split()
         elif self.validation_mode == "walk_forward":
             self.model_trainer.train_walk_forward(self.data_manager.wf_splits, self.data_manager)
             wf_result = self.evaluation_manager.evaluate_walk_forward(
@@ -530,3 +529,31 @@ class ForecastingPipeline:
         self._write_run_manifest()
         self._sync_latest_output()
         print("\n  [OK] Pipeline completed successfully!")
+
+    # ------------------------------------------------------------------ #
+    #  Research-only single-split path (Sprint 0, 2026-05-25)             #
+    # ------------------------------------------------------------------ #
+    def _run_research_single_split(self) -> None:
+        """Single-split modu yalniz arastirma/debug akisi icin korunur.
+
+        Cagiri taraf (CLI batch.py veya benzeri) ExecutionConfig'te
+        research_policy + research_metadata.research_only=True ayarlamali.
+        Aksi halde RuntimeError firlatilir; uretim leaderboard'una sizmasi
+        engellenir.
+        """
+        research_only = bool(self.research_metadata.get("research_only", False))
+        if not research_only or not self.research_policy:
+            raise RuntimeError(
+                "single_split modu yalniz arastirma akisi icin gecerlidir. "
+                "batch CLI'da --debug-quick bayragini kullanin; production "
+                "modunda walk_forward zorunludur."
+            )
+        print(
+            "\n  [RESEARCH-ONLY] single_split modu calistiriliyor "
+            f"(policy={self.research_policy}); production_eligible=false."
+        )
+        self.model_trainer.train_single_split(self.data_manager.tensors)
+        self.evaluation_manager.generate_predictions(
+            self.model_trainer.trained_models, self.data_manager.tensors
+        )
+        self.evaluation_manager.evaluate_single_split(self.model_trainer.trained_models)

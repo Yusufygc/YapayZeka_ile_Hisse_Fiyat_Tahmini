@@ -58,6 +58,7 @@ def _run_single_stock(args_dict: Dict[str, Any]) -> Dict[str, Any]:
     disabled_models: List[str] = args_dict.get("disabled_models") or []
     require_available: bool = bool(args_dict.get("require_available", False))
     output_dir_base: Optional[str] = args_dict.get("output_dir_base")
+    debug_quick: bool = bool(args_dict.get("debug_quick", False))
 
     result: Dict[str, Any] = {
         "symbol": symbol,
@@ -83,6 +84,15 @@ def _run_single_stock(args_dict: Dict[str, Any]) -> Dict[str, Any]:
             PipelineConfig, DataConfig, ValidationConfig, ModelConfig, ExecutionConfig,
         )
 
+        execution_cfg = ExecutionConfig()
+        if debug_quick:
+            # Sprint 0: research-only damga; uretim leaderboard'una sizmasin
+            execution_cfg.research_policy = "debug_quick_single_split"
+            execution_cfg.research_phase = "research_only"
+            execution_cfg.research_metadata = dict(execution_cfg.research_metadata or {})
+            execution_cfg.research_metadata["research_only"] = True
+            execution_cfg.research_metadata["uses_final_holdout_for_selection"] = False
+
         pipeline_cfg = PipelineConfig(
             data=DataConfig(
                 data_file=data_file,
@@ -95,7 +105,7 @@ def _run_single_stock(args_dict: Dict[str, Any]) -> Dict[str, Any]:
                 disabled_models=disabled_models,
                 require_available=require_available,
             ),
-            execution=ExecutionConfig(),
+            execution=execution_cfg,
         )
         pipeline = ForecastingPipeline(cfg=pipeline_cfg)
         pipeline.run_all()
@@ -203,9 +213,22 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--mode",
         type=str,
-        choices=["single_split", "walk_forward"],
+        choices=["walk_forward", "single_split"],
         default="walk_forward",
-        help="Validasyon modu (varsayılan: walk_forward)",
+        help=(
+            "Validasyon modu (varsayilan: walk_forward). "
+            "`single_split` yalniz --debug-quick bayragiyla birlikte arastirma "
+            "amacli kullanilabilir; uretim ciktilarinda kullanilmaz."
+        ),
+    )
+    p.add_argument(
+        "--debug-quick",
+        action="store_true",
+        help=(
+            "Hizli arastirma modu: tek bolunmeli (single_split) pipeline calistirir. "
+            "Bu modda uretilen tum ciktilara RESEARCH_ONLY=true damgasi vurulur ve "
+            "stock_models.db'ye production_eligible=false olarak yazilir."
+        ),
     )
     p.add_argument(
         "--models",
@@ -276,6 +299,22 @@ def main() -> None:
         print("[ERROR] Hisse listesi boş.")
         sys.exit(1)
 
+    # Sprint 0 (2026-05-25): single_split sadece --debug-quick ile kullanilabilir.
+    debug_quick = bool(getattr(args, "debug_quick", False))
+    if debug_quick:
+        if args.mode != "single_split":
+            args.mode = "single_split"
+        print(
+            "\n  [DEBUG-QUICK] Tek bolunmeli (single_split) arastirma modu aktif. "
+            "Ciktilar RESEARCH_ONLY damgalidir; uretim tavsiyesine girmez."
+        )
+    elif args.mode == "single_split":
+        print(
+            "[ERROR] --mode single_split yalniz --debug-quick bayragiyla "
+            "birlikte kullanilabilir."
+        )
+        sys.exit(2)
+
     from src.cli._model_filters import resolve_selected, resolve_disabled
 
     explicit = (
@@ -323,6 +362,7 @@ def main() -> None:
             "disabled_models": disabled_models,
             "require_available": require_available,
             "output_dir_base": args.output_dir,
+            "debug_quick": debug_quick,
         }
         for sym in symbols
     ]

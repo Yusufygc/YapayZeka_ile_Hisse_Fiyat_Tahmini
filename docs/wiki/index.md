@@ -2,7 +2,7 @@
 title: Wiki Index
 type: index
 status: active
-last_updated: 2026-05-20
+last_updated: 2026-05-25
 owner: llm
 ---
 
@@ -56,6 +56,9 @@ linked pages below.
 - `AttentionLSTM v2` is an opt-in sequence candidate with temporal attention
   XAI export; it is not part of the default production candidate set.
 - Repository-wide change discipline is captured in `RULES.md` and [Change Management](change-management.md).
+- **Validation mode** (as of 2026-05-25): default and production-only mode is
+  `walk_forward`. `single_split` is research-only via `--debug-quick`. WF
+  embargo auto-resolves to `max(200, time_steps)` when left unset.
 
 ## Navigation Rules for Agents
 

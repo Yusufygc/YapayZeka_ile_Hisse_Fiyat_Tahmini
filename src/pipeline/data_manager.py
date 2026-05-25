@@ -16,7 +16,11 @@ import pandas as pd
 from src.data.data_updater import DataUpdater
 from src.data.data_loader import load_data
 from src.data.preprocessor import scale_data, create_sequences
-from src.utils.data_splitter import TimeSeriesSplitter
+from src.utils.data_splitter import (
+    TimeSeriesSplitter,
+    _MIN_AUTO_EMBARGO_SIZE,
+    _resolve_wf_embargo_size,
+)
 from src.features.feature_pipeline import FeaturePipeline
 from src.features.feature_cache import FeatureCache
 from src.features.macro_pipeline import MacroPipeline
@@ -90,10 +94,9 @@ class DataManager:
             except Exception as _exc:
                 print(f"  [UNIVERSE] sync atlandi: {_exc}")
 
-        effective_wf_embargo_size = (
-            self.data_cfg.time_steps
-            if self.val_cfg.wf_embargo_size is None
-            else max(0, int(self.val_cfg.wf_embargo_size))
+        effective_wf_embargo_size = _resolve_wf_embargo_size(
+            self.val_cfg.wf_embargo_size,
+            self.data_cfg.time_steps,
         )
 
         wf_max_train_size = self.val_cfg.wf_max_train_size
@@ -223,7 +226,7 @@ class DataManager:
             )
         if not hasattr(self, "val_cfg"):
             self.val_cfg = ValidationConfig(
-                validation_mode=getattr(self, "validation_mode", "single_split"),
+                validation_mode=getattr(self, "validation_mode", "walk_forward"),
                 final_holdout_size=getattr(self, "final_holdout_size", 60),
             )
         if not hasattr(self, "models_dir"):
@@ -235,10 +238,9 @@ class DataManager:
         if not hasattr(self, "_wf_mode"):
             self._wf_mode = False
         if not hasattr(self, "validation_config"):
-            effective_wf_embargo_size = (
-                self.data_cfg.time_steps
-                if self.val_cfg.wf_embargo_size is None
-                else max(0, int(self.val_cfg.wf_embargo_size))
+            effective_wf_embargo_size = _resolve_wf_embargo_size(
+                self.val_cfg.wf_embargo_size,
+                self.data_cfg.time_steps,
             )
             wf_max_train_size = (
                 None
