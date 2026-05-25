@@ -2,9 +2,9 @@
 title: Analysis API Contract
 type: concept
 status: active
-last_updated: 2026-05-20
+last_updated: 2026-05-25
 owner: llm
-source_count: 4
+source_count: 5
 ---
 
 # Analysis API Contract
@@ -60,7 +60,23 @@ For Faz 2+, if user-specific scenario parameters are required a
       "relative_strength": "outperforming",
       "alignment_with_forecast": true
     },
-    "points": []
+    "points": [
+      {
+        "target_date": "2026-05-26",
+        "horizon_index": 1,
+        "bounded_predicted_close": 102.5,
+        "predicted_return": 0.025,
+        "p10_close": 100.8,
+        "p50_close": 102.5,
+        "p90_close": 104.5,
+        "predicted_return_p10": 0.008,
+        "predicted_return_p50": 0.025,
+        "predicted_return_p90": 0.045,
+        "lower_band": 99.0,
+        "upper_band": 105.0,
+        "price_tick": 0.05
+      }
+    ]
   },
   "performance": {
     "rmse": 1.23,
@@ -130,6 +146,23 @@ added in the 2026-05-20 serving hardening phase. `forecast_source.type` is
 forecast run has ensemble metadata or an ensemble model name. Ensemble sources
 surface member names, weights, source experiment ids, forecast strategy,
 artifact mode, and warnings.
+
+### Forecast Point Quantile Fields (Sprint 4 — 2026-05-25)
+
+`forecast.points[*]` now exposes optional probabilistic forecasting fields:
+
+| Field | Type | Source |
+|---|---|---|
+| `p10_close`, `p50_close`, `p90_close` | float \| null | Quantile-aware model (LightGBM Quantile, LSTM Lite MC Dropout) |
+| `predicted_return_p10/p50/p90` | float \| null | Same quantiles, returns space |
+| `lower_band`, `upper_band`, `price_tick` | float \| null | BIST band rules applied to bounded close |
+
+Fields are populated only when the production model implements
+`predict_quantiles()`. Scalar-only models leave them as `null` and clients
+must fall back to `bounded_predicted_close` + `predicted_return`. The
+quantile path is recursive — `ForecastPointGenerator.roll_forward_recursive`
+calls `predict_quantiles` on every horizon step and applies the same BIST
+band bounding as the median forecast.
 
 ## Analysis Status Codes
 

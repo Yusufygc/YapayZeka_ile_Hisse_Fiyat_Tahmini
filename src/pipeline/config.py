@@ -36,6 +36,11 @@ class DataConfig:
     auto_update_data: bool = False
     auto_update_interactive: bool = False
     universe_auto_sync: bool = True
+    # Sprint 4 (2026-05-25) A4.3: opt-in multi-horizon target uretimi.
+    # None ise sadece tek-horizon (h=1) target — mevcut davranis korunur.
+    # Listede her h icin ayri target dizisi `build_multi_horizon_targets()`
+    # uretir; ensemble path icin sequence model'ler tek tek egitilir.
+    target_horizons: Optional[List[int]] = None
 
 
 @dataclass

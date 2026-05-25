@@ -21,6 +21,7 @@ _EXPORTS = {
     "RidgeReturnModel": ("linear_model", "RidgeReturnModel"),
     "ElasticNetReturnModel": ("linear_model", "ElasticNetReturnModel"),
     "LightGBMReturnModel": ("gradient_boosting_model", "LightGBMReturnModel"),
+    "QuantileLightGBMModel": ("quantile_lightgbm_model", "QuantileLightGBMModel"),
     "DLinearSequenceModel": ("linear_sequence_model", "DLinearSequenceModel"),
     "NLinearSequenceModel": ("linear_sequence_model", "NLinearSequenceModel"),
 }

@@ -413,6 +413,16 @@ def _build_forecast_block(forecast_row: Dict[str, Any]) -> ForecastBlock:
             horizon_index=int(p.get("horizon_index", 0)),
             bounded_predicted_close=p.get("bounded_predicted_close"),
             predicted_return=p.get("predicted_return"),
+            # Sprint 4 A4.5: quantile / band alanlari (opsiyonel).
+            p10_close=p.get("p10_close"),
+            p50_close=p.get("p50_close"),
+            p90_close=p.get("p90_close"),
+            predicted_return_p10=p.get("predicted_return_p10"),
+            predicted_return_p50=p.get("predicted_return_p50"),
+            predicted_return_p90=p.get("predicted_return_p90"),
+            lower_band=p.get("lower_band"),
+            upper_band=p.get("upper_band"),
+            price_tick=p.get("price_tick"),
         )
         for p in raw_points
     ]

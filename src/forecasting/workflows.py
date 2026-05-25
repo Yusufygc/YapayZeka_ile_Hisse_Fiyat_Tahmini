@@ -504,6 +504,47 @@ class LatestTargetPredictionWorkflow(_OwnerBackedForecastService):
             scaled_target = np.asarray(model.predict(latest_seq)).reshape(-1, 1)
         return float(context["scaler_y"].inverse_transform(scaled_target).ravel()[-1])
 
+    def predict_quantiles_target(
+        self,
+        model_name: str,
+        model: Any,
+        context: Dict[str, Any],
+        quantiles: tuple[float, ...] = (0.1, 0.5, 0.9),
+    ) -> Optional[Dict[float, float]]:
+        """
+        Sprint 4 (2026-05-25) Plan A4.4: model `predict_quantiles` destekliyorsa
+        en son zaman adimi icin {quantile: target_value} doner. Aksi halde None.
+        """
+        if not hasattr(model, "predict_quantiles"):
+            return None
+        if model_name in _SEQ_MODELS:
+            latest = context.get("latest_seq")
+        elif model_name in _TREE_MODELS:
+            latest = context.get("latest_X_s")
+        else:
+            latest = context.get("latest_X")
+        if latest is None:
+            return None
+        try:
+            scaled = np.asarray(model.predict_quantiles(latest))
+        except TypeError:
+            scaled = np.asarray(model.predict_quantiles(latest, quantiles=quantiles))
+        if scaled.ndim != 2 or scaled.shape[1] == 0:
+            return None
+        # Son satir (latest sample) icin quantile vektoru.
+        last_row_scaled = scaled[-1].reshape(-1, 1)
+        scaler_y = context.get("scaler_y")
+        if scaler_y is not None:
+            last_row = scaler_y.inverse_transform(last_row_scaled).ravel()
+        else:
+            last_row = last_row_scaled.ravel()
+        # Quantile sayilari modelinkilerle eslestir; kullanicinin istedigi qs
+        # listesi farkliysa interpolasyon yapmak yerine modelinkileri tutariz.
+        model_qs = getattr(model, "quantiles", None) or quantiles
+        if len(model_qs) != len(last_row):
+            return None
+        return {float(q): float(v) for q, v in zip(model_qs, last_row)}
+
 
 class ForecastPointGenerator(_OwnerBackedForecastService):
     def combine_member_points(
@@ -587,28 +628,54 @@ class ForecastPointGenerator(_OwnerBackedForecastService):
         frame = context["feature_frame"].copy()
         points: list[dict[str, Any]] = []
         previous_close = float(context["last_close"])
+        target_mode = context["target_mode"]
         for idx, target_date in enumerate(dates, start=1):
             self._refresh_latest_context(context, frame, model_name)
             predicted_target = predictor.predict(model_name, model, context)
             raw_close = self._target_to_price(
                 predicted_target,
                 previous_close,
-                context["target_mode"],
+                target_mode,
             )
             bounded_close, band = self.rules.bound_forecast_price(raw_close, previous_close)
             predicted_return = (bounded_close / previous_close) - 1.0
-            points.append(
-                {
-                    "target_date": target_date.strftime("%Y-%m-%d"),
-                    "horizon_index": idx,
-                    "raw_predicted_close": raw_close,
-                    "bounded_predicted_close": bounded_close,
-                    "predicted_return": predicted_return,
-                    "lower_band": band.lower_band,
-                    "upper_band": band.upper_band,
-                    "price_tick": band.price_tick,
-                }
-            )
+            point: dict[str, Any] = {
+                "target_date": target_date.strftime("%Y-%m-%d"),
+                "horizon_index": idx,
+                "raw_predicted_close": raw_close,
+                "bounded_predicted_close": bounded_close,
+                "predicted_return": predicted_return,
+                "lower_band": band.lower_band,
+                "upper_band": band.upper_band,
+                "price_tick": band.price_tick,
+            }
+            # Sprint 4 A4.4: model quantile destekliyorsa p10/p50/p90 close +
+            # returns yayinla. Yoksa point sozluguna ek alan eklenmez.
+            quantile_targets = predictor.predict_quantiles_target(model_name, model, context)
+            if quantile_targets:
+                quantile_close: dict[str, float] = {}
+                quantile_returns: dict[str, float] = {}
+                for q, qval in quantile_targets.items():
+                    qc = self._target_to_price(float(qval), previous_close, target_mode)
+                    bounded_qc, _ = self.rules.bound_forecast_price(qc, previous_close)
+                    label = f"p{int(round(q * 100))}"
+                    quantile_close[label] = float(bounded_qc)
+                    quantile_returns[label] = (
+                        (float(bounded_qc) / previous_close) - 1.0 if previous_close else 0.0
+                    )
+                point["quantile_close"] = quantile_close
+                point["quantile_returns"] = quantile_returns
+                # Convenience top-level alanlari (advisory API icin shortcut):
+                if "p10" in quantile_close:
+                    point["p10_close"] = quantile_close["p10"]
+                    point["predicted_return_p10"] = quantile_returns["p10"]
+                if "p50" in quantile_close:
+                    point["p50_close"] = quantile_close["p50"]
+                    point["predicted_return_p50"] = quantile_returns["p50"]
+                if "p90" in quantile_close:
+                    point["p90_close"] = quantile_close["p90"]
+                    point["predicted_return_p90"] = quantile_returns["p90"]
+            points.append(point)
             frame = self._append_recursive_row(
                 frame=frame,
                 target_date=target_date,

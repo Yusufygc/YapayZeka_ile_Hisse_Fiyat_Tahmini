@@ -143,6 +143,21 @@ def _stub_prophet() -> None:
     setattr(module, "Prophet", MagicMock)
 
 
+def _stub_sklearn() -> None:
+    """Stub sklearn for minimal test envs.
+
+    Yalnizca preprocessing alt-modulu MagicMock olarak yerlestirilir
+    (preprocessor.py StandardScaler/RobustScaler vb. kullanir; testlerde
+    cagrilmaz). sklearn.metrics BILEREK stub edilmez — financial_metrics
+    icindeki try/except yedek implementasyona dusebilsin.
+    """
+    module = _stub("sklearn")
+    preprocessing = _stub("sklearn.preprocessing")
+    module.preprocessing = preprocessing
+    for symbol in ("MinMaxScaler", "RobustScaler", "StandardScaler"):
+        setattr(preprocessing, symbol, MagicMock)
+
+
 def _stub_optuna() -> None:
     module = _stub("optuna")
     setattr(module, "create_study", MagicMock())
@@ -160,6 +175,10 @@ def _install_optional_dependency_stubs() -> None:
         "lightgbm": _stub_lightgbm,
         "prophet": _stub_prophet,
         "optuna": _stub_optuna,
+        # Sprint 4 (2026-05-25): joblib eklenmesi -> data_services/preprocessor
+        # ic chain testlerde import olabilsin (Sprint 0+1+2+3 pattern uyumu).
+        "joblib": lambda: _stub("joblib"),
+        "sklearn": _stub_sklearn,
     }
     for name, installer in optional_modules.items():
         if not _real_import_available(name):

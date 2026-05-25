@@ -290,6 +290,48 @@ class TensorPreparationService(_OwnerBackedService):
             "Beklenen: price, return, log_return"
         )
 
+    def build_multi_horizon_targets(
+        self,
+        close_values: np.ndarray,
+        horizons: list[int] | tuple[int, ...] = (1, 3, 5, 10),
+    ) -> dict[int, np.ndarray]:
+        """
+        Sprint 4 (2026-05-25) Plan A4.3: opt-in multi-horizon target uretimi.
+        Her h icin: y_h[t] = target(close[t+h]) - target(close[t]) semantigi.
+        target_mode'a gore:
+          - log_return: y_h[t] = log(close[t+h] / close[t])
+          - return   : y_h[t] = close[t+h]/close[t] - 1
+          - price    : y_h[t] = close[t+h]
+        Cikti: {h: np.ndarray (len = len(close) - h)}. Tek-horizon path
+        (mevcut `build_target_series`) ile geriye uyumludur — h=1 ayni sonuc.
+        """
+        self._ensure_config_objects()
+        close = np.asarray(close_values, dtype=float).ravel()
+        if close.size == 0:
+            return {int(h): np.asarray([], dtype=float) for h in horizons}
+        out: dict[int, np.ndarray] = {}
+        mode = self.data_cfg.target_mode
+        for h_raw in horizons:
+            h = int(h_raw)
+            if h <= 0:
+                raise ValueError(f"horizon > 0 olmali, alindi: {h}")
+            if h >= close.size:
+                out[h] = np.asarray([], dtype=float)
+                continue
+            past = close[:-h]
+            future = close[h:]
+            if mode == "log_return":
+                out[h] = np.log(future / past)
+            elif mode == "return":
+                out[h] = (future / past) - 1.0
+            elif mode == "price":
+                out[h] = future
+            else:
+                raise ValueError(
+                    f"Desteklenmeyen target_mode: {mode}. Beklenen: price, return, log_return"
+                )
+        return out
+
     @staticmethod
     def scale_data_compat(*args, **kwargs):
         try:

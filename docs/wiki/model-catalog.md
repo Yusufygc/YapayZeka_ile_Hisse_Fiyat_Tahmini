@@ -2,9 +2,9 @@
 title: Model Catalog
 type: concept
 status: active
-last_updated: 2026-05-20
+last_updated: 2026-05-25
 owner: llm
-source_count: 8
+source_count: 9
 ---
 
 # Model Catalog
@@ -97,6 +97,22 @@ literature/practical limitations documented in code comments.
 | `XGBoost` | `src/models/xgboost_model.py` | Main tabular nonlinear model |
 | `Random Forest` | `src/models/random_forest_model.py` | Optional/comparison tree ensemble |
 | `LightGBM Return` | `src/models/gradient_boosting_model.py` | Optional modern boosting baseline |
+| `LightGBM Quantile` | `src/models/quantile_lightgbm_model.py` | Quantile regressor; p10/p50/p90 dağılım (advisory confidence band) |
+
+### Quantile LightGBM (Sprint 4 — 2026-05-25)
+
+`LightGBM Quantile` (`src/models/quantile_lightgbm_model.py`) wraps three
+LightGBM regressors with `objective="quantile"` and `alpha=q` for
+`q ∈ {0.1, 0.5, 0.9}` by default. Output:
+
+- `predict()` returns the median (p50) — `BaseModel` contract.
+- `predict_quantiles(X)` returns an `N × len(quantiles)` matrix.
+- Row-wise sort applied to guard against LightGBM quantile crossing.
+
+Registry: `category="tree"`, `role="candidate"`,
+`ensemble_eligible=False` (scalar ensembles cannot combine quantile output
+correctly), `requires=("lightgbm",)`. Feeds the analysis API
+`forecast.points[*].{p10_close, p50_close, p90_close}` fields.
 
 ### Deep Sequence Models
 
@@ -119,6 +135,18 @@ minimum sequence threshold is separate from the generic deep-learning threshold:
 The model can run with optional train-only Optuna HPO through the
 `deep_learning.lstm_lite` config section. HPO searches units, dense units,
 dropout, learning rate, and batch size, and does not use final-holdout data.
+
+#### MC Dropout Quantile Inference (Sprint 4 — 2026-05-25)
+
+`LSTMLiteModel.predict_quantiles(X, n_samples=200, quantiles=(0.1, 0.5, 0.9),
+seed=20260525)` runs `n_samples` stochastic forward passes with
+`training=True` (dropout active during inference) and reduces to per-row
+quantiles. Output shape `(N, len(quantiles))`, row-wise sorted.
+
+Default seed is fixed for reproducibility; pass `seed=None` for
+non-deterministic Monte Carlo. The empirical posterior feeds the advisory
+`forecast.points[*].{p10_close, p50_close, p90_close}` fields when LSTM Lite
+is the production model.
 
 `AttentionLSTM v2` is a separate opt-in candidate so the existing `LSTM` and
 `LSTM Lite` contracts stay unchanged. It uses a smaller regularized

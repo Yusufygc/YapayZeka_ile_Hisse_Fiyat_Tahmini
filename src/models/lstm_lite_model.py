@@ -226,6 +226,49 @@ class LSTMLiteModel(BaseModel):
         preds = self.model.predict(X_test, verbose=0)
         return preds.ravel()
 
+    def predict_quantiles(
+        self,
+        X_test: np.ndarray,
+        n_samples: int = 200,
+        quantiles: tuple[float, ...] = (0.1, 0.5, 0.9),
+        seed: int | None = 20260525,
+    ) -> np.ndarray:
+        """MC Dropout empirical posterior.
+
+        Sprint 4 (2026-05-25) Plan A4.2: training=True ile inference, dropout
+        aktif kalir -> her cagrida farkli tahmin -> empirical posterior.
+        Quantile'leri np.quantile ile alir.
+
+        Args:
+            X_test: 3D sequence tensor (samples, time_steps, features).
+            n_samples: MC sample sayisi (default 200).
+            quantiles: Hangi quantile'lerin hesaplanacagi (default 0.1/0.5/0.9).
+            seed: TF random seed (deterministic). None -> non-deterministic.
+
+        Returns:
+            (n_test, len(quantiles)) numpy matrix.
+        """
+        if self.model is None:
+            raise RuntimeError("Model henuz egitilmedi.")
+        if not quantiles:
+            raise ValueError("quantiles bos olamaz")
+        qs = tuple(sorted(float(q) for q in quantiles))
+        if any(q <= 0.0 or q >= 1.0 for q in qs):
+            raise ValueError(f"quantiles 0<q<1 olmali, alindi: {qs}")
+        if seed is not None:
+            tf.random.set_seed(int(seed))
+
+        # training=True dropout/BatchNorm'u aktif tutar -> her call farkli sample.
+        preds_stack = np.stack(
+            [self.model(X_test, training=True).numpy().ravel() for _ in range(int(n_samples))],
+            axis=0,
+        )  # (n_samples, n_test)
+        # np.quantile -> shape (len(qs), n_test); transpose to (n_test, len(qs)).
+        out = np.quantile(preds_stack, qs, axis=0).T.astype(float)
+        # Quantile crossing fix: row-wise sort (MC noise edge case).
+        out.sort(axis=1)
+        return out
+
     def save(self, path: str) -> None:
         if self.model is None:
             raise RuntimeError("Kaydedilecek model yok.")

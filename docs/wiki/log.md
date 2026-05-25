@@ -1,3 +1,59 @@
+## [2026-05-25] Feature | Sprint 4 — Probabilistic Forecasting (Quantile LightGBM + MC Dropout LSTM + Multi-Horizon)
+
+- `src/models/quantile_lightgbm_model.py` eklendi.
+  `QuantileLightGBMModel`: her quantile icin ayri LGBMRegressor
+  (objective="quantile", alpha=q). Default `(0.1, 0.5, 0.9)`.
+  `predict_quantiles(X) -> (N, len(quantiles))` row-wise sort
+  (quantile crossing guard). `predict()` median (p50) doner —
+  BaseModel sozlesmesi korunur. Registry'de
+  `ensemble_eligible=False` (scalar ensemble quantile cikti ile
+  uyumsuz). Requires `lightgbm`.
+- `src/models/lstm_lite_model.py`: `predict_quantiles(X,
+  n_samples=200, quantiles=(0.1,0.5,0.9), seed=20260525)` eklendi.
+  MC Dropout (`training=True` inference) ile empirical posterior;
+  row-wise sort.
+- `src/pipeline/data_services.py`:
+  `TensorPreparationService.build_multi_horizon_targets(close,
+  horizons=(1,3,5,10))` eklendi. Opt-in multi-horizon target uretimi
+  (tek-horizon path geriye uyumlu). Cikti: `{h: np.ndarray}` per
+  target_mode (log_return/return/price).
+- `src/pipeline/config.py` `DataConfig.target_horizons: Optional[List[int]]`
+  opt-in flag eklendi (default `None` -> tek-horizon).
+- `src/forecasting/workflows.py`:
+  `LatestTargetPredictionWorkflow.predict_quantiles_target()` model
+  `predict_quantiles` destekliyorsa `{quantile: target_value}` dict
+  doner; scaler_y inverse_transform ile target space. Sequence/tree/
+  date-aware modeller icin uygun `latest_*` context'i secer.
+  `ForecastPointGenerator.roll_forward_recursive()` her horizon
+  adiminda quantile_targets uretir; her q icin `_target_to_price`
+  + `bound_forecast_price` -> `p10_close/p50_close/p90_close` +
+  `predicted_return_p10/p50/p90` point alanlari + nested
+  `quantile_close`/`quantile_returns` dict'leri.
+- `src/api/schemas/analysis.py` `ForecastPoint`:
+  `p10_close, p50_close, p90_close,
+   predicted_return_p10/p50/p90,
+   lower_band, upper_band, price_tick` opsiyonel alanlar.
+- `src/api/services/analysis_service.py` `_build_forecast_block`:
+  yeni quantile/band alanlarini point dict'lerinden okuyup yayinlar.
+- `src/models/__init__.py` `QuantileLightGBMModel` lazy export.
+- `conftest.py`: joblib + sklearn (preprocessing) stub eklendi
+  (data_services/preprocessor chain test ortaminda kirilmasin diye).
+  sklearn.metrics BILEREK stub edilmez — financial_metrics try/except
+  yedek implementasyona dusebilsin.
+- Testler:
+  `tests/test_quantile_lightgbm.py` (8 test) — lightgbm real-dep
+  guard (conftest MagicMock atlanir), constructor validasyon,
+  train/predict/quantile sirali, median == p50, save/load roundtrip.
+  `tests/test_mc_dropout_lstm.py` (6 test) — tensorflow real-dep
+  guard, quantile shape + row-sort, dropout stokastik.
+  `tests/test_multi_horizon_targets.py` (8 test) — h=1 legacy
+  uyumu, lengths, h>n empty, h=0 raises, simple_return/price modlari.
+  `tests/test_recursive_quantile_path.py` (5 test) —
+  `predict_quantiles_target` stub model/scaler ile dict output,
+  seq vs tree path, missing latest, scaler inverse.
+- Sprint 0+1+2+3+4 toplam: 74/74 gecti, 2 skip (lightgbm/tensorflow
+  real-dep gerekli).
+
 ## [2026-05-25] Feature | Sprint 3 — PurgedKFold + CPCV + Concat-Sharpe
 
 - `src/validation/purged_kfold.py` eklendi. AFML Ch.7 PurgedKFold:
