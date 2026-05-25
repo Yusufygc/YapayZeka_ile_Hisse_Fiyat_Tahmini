@@ -35,7 +35,14 @@ def _daily_risk_free_rate(risk_free_annual: float) -> float:
     return float((1.0 + risk_free_annual) ** (1.0 / 252.0) - 1.0)
 
 
-def _annualized_sharpe(returns: np.ndarray, risk_free_annual: float = 0.40) -> float:
+def _annualized_sharpe(returns: np.ndarray, risk_free_annual: float | None = 0.0) -> float:
+    """
+    Sprint 1 (2026-05-25) Plan A1.1: risk_free_annual None ise Sharpe NaN
+    doner; cagiran fonksiyon `risk_free_unavailable` uyarisini metric
+    sozlugune ekler. Macro cache + env yoksa fail-loud.
+    """
+    if risk_free_annual is None:
+        return float("nan")
     returns = np.asarray(returns, dtype=float).ravel()
     if returns.size == 0:
         return 0.0
@@ -94,11 +101,12 @@ def compute_buy_hold_sharpe(
     """
     Compute buy-and-hold Sharpe from daily simple returns, not price differences.
 
-    risk_free_annual: yillik risksiz faiz orani. None ise macro cache'ten dinamik
-    olarak okunur; cache yoksa 0.40 (%40) fallback kullanilir.
+    Sprint 1 (2026-05-25) Plan A1.1: risk_free_annual None ise macro cache'ten
+    dinamik okunur; cache + env yoksa fail-loud — Sharpe NaN doner ve cagiran
+    katmana `risk_free_unavailable` durumu sinyallenir.
     """
     if risk_free_annual is None:
-        risk_free_annual = _get_rf() if _get_rf is not None else 0.40
+        risk_free_annual = _get_rf() if _get_rf is not None else None
     return _annualized_sharpe(_price_to_simple_returns(y_true, prev_close), risk_free_annual)
 
 
@@ -115,11 +123,17 @@ def compute_financial_metrics(
     """
     Compute price-space forecast errors and return-space financial metrics.
 
-    risk_free_annual: yillik risksiz faiz orani (ondalik). None ise macro
-    cache'ten dinamik olarak okunur; yoksa 0.40 (%40) kullanilir.
+    Sprint 1 (2026-05-25) Plan A1.1: risk_free_annual None ise macro cache'ten
+    dinamik okunur. Cache + env yoksa fail-loud: Sharpe + BuyHold_Sharpe
+    NaN doner ve sozluge `Risk_Free_Unavailable=True` +
+    `Sharpe_Warning="risk_free_unavailable"` eklenir. Bu uyari ileride
+    confidence.warnings zincirine baglanir (Sprint 8).
     """
+    risk_free_unavailable = False
     if risk_free_annual is None:
-        risk_free_annual = _get_rf() if _get_rf is not None else 0.40
+        risk_free_annual = _get_rf() if _get_rf is not None else None
+        if risk_free_annual is None:
+            risk_free_unavailable = True
     y_true = np.asarray(y_true, dtype=float).ravel()
     y_pred = np.asarray(y_pred, dtype=float).ravel()
     k_price = min(len(y_true), len(y_pred))
@@ -205,6 +219,10 @@ def compute_financial_metrics(
         "Hit_Rate": hit_rate,
         "Neutral_Rate": neutral_rate,
         "BuyHold_Sharpe": buy_hold_sharpe,
+        # Sprint 1 A1.1: rf yoksa downstream confidence chain'e bayrak.
+        "Risk_Free_Unavailable": bool(risk_free_unavailable),
+        "Risk_Free_Annual_Used": None if risk_free_unavailable else float(risk_free_annual),
+        "Sharpe_Warning": "risk_free_unavailable" if risk_free_unavailable else "",
     }
 
 

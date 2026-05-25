@@ -4,7 +4,7 @@ type: concept
 status: active
 last_updated: 2026-05-25
 owner: llm
-source_count: 6
+source_count: 7
 ---
 
 # Validation and Backtesting
@@ -101,27 +101,87 @@ Core prediction metrics include:
 - MAPE
 - Directional accuracy
 - Hit rate
-- Sharpe-like financial metrics
+- Sharpe-like financial metrics (Sharpe / Sortino / Deflated Sharpe / Calmar)
 - Benchmark-relative fields such as RMSE vs benchmark
 
 Quantile-capable models can also produce interval/quantile metrics.
 
+### Metric Priority for Advisory (Sprint 1 — 2026-05-25)
+
+Because the product is an advisory/recommendation service (no automated
+trading) and the default backtest uses `commission_bps=0` /
+`slippage_bps=0`, monetary fields (`Net_Return`, `BuyHold_Return`,
+`Profit_TL`, `End_Capital`) are **footnotes only**. They test "would the
+direction have been right?" — not "what is the realized P&L?"
+
+`save_metrics_report` (`src/evaluation/evaluator.py`) orders columns as:
+
+1. **Advisory primary**: `Dir_Acc`, `Hit_Rate`, `DirAcc_vs_benchmark`,
+   `Composite_Score`.
+2. **Error metrics**: `RMSE_vs_benchmark`, `RMSE`, `MAE`, `Return_RMSE`,
+   `Return_MAE`, `RMSE_vs_zero_return`.
+3. **Risk-adjusted**: `Calmar`, `Deflated_Sharpe`,
+   `Sharpe_Probabilistic_Score`, `Sharpe`, `BuyHold_Sharpe`,
+   `Sharpe_excess_vs_buy_hold`, `Risk_Free_Unavailable`,
+   `Sharpe_Warning`.
+4. **Probabilistic**: `Pinball_Loss`, `P10_P90_Coverage`,
+   `Avg_Interval_Width`, `Winkler_Score`.
+5. **Benchmark flags**: `Benchmark_Model`, `Beats_*`,
+   `Eligible_For_Leader`, `Neutral_Rate`, `MAPE`.
+6. **Raw returns (footnote)**: `Net_Return`, `BuyHold_Return`,
+   `RMSE_Fark_Delta`, `RMSE_Fark_Yuzde`.
+
+### Risk-Free Rate Fail-Loud (Sprint 1 A1.1)
+
+`src/utils/risk_free_rate.get_current_risk_free_rate` no longer falls
+back to the legacy `0.40` constant. Priority:
+
+1. `data/macro/INTEREST_RATE.csv` (cache from `MacroPipeline`).
+2. `RISK_FREE_RATE_ANNUAL` environment variable.
+3. Explicit `fallback=` argument (default `None`).
+
+When none resolves the function returns `None`. Downstream callers
+(`compute_financial_metrics`, `summarize_backtest`) then:
+
+- Set `Sharpe`, `Sortino`, `BuyHold_Sharpe`, `Deflated_Sharpe` to `NaN`.
+- Add `Risk_Free_Unavailable=True` and
+  `Sharpe_Warning="risk_free_unavailable"` to the metric dict.
+
+The flag flows into the analysis API confidence chain in Sprint 8 (see
+[Confidence and Risk Policy](confidence-and-risk-policy.md) — Soft
+Degradations).
+
+### Backtest Cost Disclaimer (Sprint 1 A1.3)
+
+`save_metrics_report` and the CLI summary block automatically prepend:
+
+> ⚠ Backtest sonuçları işlem maliyeti (commission/slippage) İÇERMEZ.
+> ⚠ Bu çıktı kişisel yatırım tavsiyesi değildir; nihai karar
+>   kullanıcıya aittir.
+
+`src/api/constants.INVESTMENT_DISCLAIMER` carries the same message into
+the analysis API response.
+
 ## Composite Score
 
-`src/database/stock_model_db.py` computes a 0-100 composite score.
+`compute_composite_score` (in `src/database/stock_model_db.py`) computes a
+0-100 score. Sprint 1 A1.4 reweighted the formula for advisory use:
 
-The score rewards:
+| Bileşen | Ağırlık | Açıklama |
+|---|---|---|
+| `RMSE_vs_benchmark` | 0.30 | Hata-bazlı temel skor (was 0.45) |
+| `DirAcc_vs_benchmark` | 0.25 | Göreli yön üstünlüğü |
+| `Dir_Acc` (raw) | 0.20 | Mutlak yön doğruluğu (was 0.10) |
+| `Hit_Rate` (raw) | 0.15 | Kazançlı işlem oranı (yeni) |
+| `Sharpe_excess_vs_buy_hold` | 0.10 | rf-bağımlı; NaN ise nötr 50 puan (was 0.20) |
 
-- Benchmark-relative error performance
-- Directional accuracy
-- Buy-and-hold excess Sharpe behavior
-- Useful trading activity
-
-It penalizes:
-
-- Models worse than benchmark on RMSE
-- Excessive neutral/no-trade behavior
-- Ineligible leader records
+- `Net_Return` formüle dahil **değildir** (advisory için yatırımsal
+  yorumlanmamalı — cost=0).
+- `Neutral_Rate > 0` ise küçük ceza uygulanır.
+- `RMSE_vs_benchmark > 1.0` veya `Eligible_For_Leader=False` ise skor
+  49.0 ile sertçe kapatılır (ineligible model lider olamaz).
+- Sharpe NaN olduğunda formül crash etmez; `sharpe_relative_score=50`
+  (nötr) alınır.
 
 ## Signal Generation
 

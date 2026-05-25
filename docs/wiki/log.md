@@ -1,3 +1,35 @@
+## [2026-05-25] Decision | Advisory Metric Onceligi + Risk-Free Fail-Loud + Backtest Disclaimer
+
+- `src/utils/risk_free_rate.get_current_risk_free_rate` artik 0.40 sabit
+  fallback'i ICERMEZ; macro `INTEREST_RATE.csv` + `RISK_FREE_RATE_ANNUAL`
+  env yoksa `None` doner. Cagiran katman (`compute_financial_metrics`,
+  `summarize_backtest`) Sharpe/Sortino/BuyHold_Sharpe degerlerini
+  `NaN` olarak isaretler ve metric sozlugune
+  `Risk_Free_Unavailable=True` + `Sharpe_Warning="risk_free_unavailable"`
+  ekler. Bu uyari Sprint 8'de `confidence.warnings` zincirine baglanir.
+- `src/evaluation/evaluator.METRICS_REPORT_COLUMNS` advisory-oriented
+  siralandi: `Dir_Acc`, `Hit_Rate`, `Composite_Score` ust banda;
+  `Calmar`, `Deflated_Sharpe`, `Sharpe` ortada; `Net_Return`,
+  `BuyHold_Return` en dipte (dipnot — cost=0 oldugundan yatirimsal
+  yorumlanmamali).
+- `save_metrics_report` MD raporu basina otomatik disclaimer:
+  "Backtest sonuclari islem maliyeti ICERMEZ" + "Kisisel yatirim
+  tavsiyesi degildir". Console summary ayni notu basar.
+- `src/database/stock_model_db.compute_composite_score` formulu
+  yeniden agirliklandirildi (Plan A1.4): `RMSE_vs_benchmark` 0.45->0.30,
+  `Dir_Acc` 0.10->0.20, yeni `Hit_Rate` 0.15, `Sharpe` 0.20->0.10.
+  `Net_Return` zaten yoktu — advisory icin maliyetsiz getiri yaniltici.
+  Sharpe NaN durumunda nötr 50 puan alinir (crash etmez).
+- `docs/wiki/confidence-and-risk-policy.md` Soft Degradations tablosuna
+  `risk_free_unavailable -> lower one level` satiri eklendi.
+- Yeni testler: `tests/test_risk_free_fail_loud.py` (7 test) +
+  `tests/test_metrics_priority.py` (9 test). Toplam Sprint 0+1 yeni
+  testler 25/25 gecti.
+
+Plan referansi:
+`~/.claude/plans/sistematik-ad-m-ad-m-yap-lacak-expressive-eich.md`
+Sprint 1 (A1.1, A1.2, A1.3, A1.4, A1.5, A1.6).
+
 ## [2026-05-25] Decision | Single-Split Kaldirildi, WF Default + Auto Embargo
 
 - `ValidationConfig.validation_mode` default `walk_forward` oldu

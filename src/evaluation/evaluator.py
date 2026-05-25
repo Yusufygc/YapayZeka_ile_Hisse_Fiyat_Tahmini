@@ -27,6 +27,18 @@ from src.utils.reporting_utils import (
     write_csv_and_aligned_view,
 )
 
+# Sprint 1 (2026-05-25) Plan A1.3: Backtest raporlarinda otomatik disclaimer.
+# Iki katmanli: (1) islem maliyeti yok uyarisi, (2) yatirim tavsiyesi degil.
+BACKTEST_COST_DISCLAIMER = (
+    "Backtest sonuclari islem maliyeti (commission/slippage) ICERMEZ. "
+    "Cikti tavsiye/advisory amaclidir; gercek getiri farkli olabilir."
+)
+INVESTMENT_NOTE = (
+    "Bu cikti kisisel yatirim tavsiyesi degildir. "
+    "Model gecmis verilerden uretilmis analitik bir tahmin sunar; "
+    "nihai karar kullaniciya aittir."
+)
+
 _BASELINE_CANDIDATES = (
     "ARIMA",
     "Ridge Return",
@@ -39,36 +51,54 @@ _BASELINE_CANDIDATES = (
     "Naive Last Value",
 )
 
+# Sprint 1 (2026-05-25) Plan A1.2: Advisory-oriented kolon sirasi.
+# Yon dogrulugu (Dir_Acc) + hit-rate + Calmar + Deflated_Sharpe + Composite
+# kolonlar one cikar. Net_Return/BuyHold_Return ve sermaye degerleri dipnota
+# (en altta) gosterilir cunku islem maliyeti=0 oldugundan yatirimsal
+# yorumlanmamali (sadece yon bilgisini test eder).
 METRICS_REPORT_COLUMNS = [
     "Model",
     "Sira",
     "Model_Family",
     "Score_Type",
-    "RMSE",
-    "MAE",
-    "MAPE",
-    "Return_RMSE",
-    "Return_MAE",
+    # === ADVISORY PRIMARY METRICS (yon/dogruluk) ===
     "Dir_Acc",
     "Hit_Rate",
-    "Neutral_Rate",
+    "DirAcc_vs_benchmark",
+    "Composite_Score",
+    # === ERROR METRICS ===
+    "RMSE_vs_benchmark",
+    "RMSE",
+    "MAE",
+    "Return_RMSE",
+    "Return_MAE",
+    "RMSE_vs_zero_return",
+    # === RISK-ADJUSTED METRICS (rf'ye bagimli, NaN olabilir) ===
+    "Calmar",
+    "Deflated_Sharpe",
+    "Sharpe_Probabilistic_Score",
     "Sharpe",
     "BuyHold_Sharpe",
     "Sharpe_excess_vs_buy_hold",
-    "Composite_Score",
-    "Benchmark_Model",
-    "RMSE_vs_benchmark",
-    "RMSE_vs_zero_return",
-    "DirAcc_vs_benchmark",
-    "Beats_Benchmark_RMSE",
-    "Beats_Zero_Return_RMSE",
-    "Eligible_For_Leader",
-    "RMSE_Fark_Delta",
-    "RMSE_Fark_Yuzde",
+    "Risk_Free_Unavailable",
+    "Sharpe_Warning",
+    # === PROBABILISTIC METRICS ===
     "Pinball_Loss",
     "P10_P90_Coverage",
     "Avg_Interval_Width",
     "Winkler_Score",
+    # === BENCHMARK FLAGS ===
+    "Benchmark_Model",
+    "Beats_Benchmark_RMSE",
+    "Beats_Zero_Return_RMSE",
+    "Eligible_For_Leader",
+    "Neutral_Rate",
+    "MAPE",
+    # === RAW RETURNS (dipnot — advisory icin yan referans) ===
+    "Net_Return",
+    "BuyHold_Return",
+    "RMSE_Fark_Delta",
+    "RMSE_Fark_Yuzde",
 ]
 
 METRICS_AUDIT_COLUMNS = [
@@ -107,17 +137,27 @@ def compute_metrics(
         target_mode=target_mode,
     )
 
+    def _round_or_nan(value: float, digits: int) -> float:
+        # Sprint 1 A1.1: NaN korunmali ki risk_free_unavailable durumu metric'lere yansisin.
+        if value is None or not np.isfinite(value):
+            return float("nan")
+        return round(value, digits)
+
     return {
-        "RMSE": round(metrics["RMSE"], 4),
-        "MAE": round(metrics["MAE"], 4),
-        "MAPE": round(metrics["MAPE"], 4),
-        "Return_RMSE": round(metrics["Return_RMSE"], 6),
-        "Return_MAE": round(metrics["Return_MAE"], 6),
-        "Dir_Acc": round(metrics["Dir_Acc"], 2),
-        "Sharpe": round(metrics["Sharpe"], 4),
-        "Hit_Rate": round(metrics["Hit_Rate"], 2),
-        "Neutral_Rate": round(metrics["Neutral_Rate"], 2),
-        "BuyHold_Sharpe": round(metrics["BuyHold_Sharpe"], 4),
+        "RMSE": _round_or_nan(metrics["RMSE"], 4),
+        "MAE": _round_or_nan(metrics["MAE"], 4),
+        "MAPE": _round_or_nan(metrics["MAPE"], 4),
+        "Return_RMSE": _round_or_nan(metrics["Return_RMSE"], 6),
+        "Return_MAE": _round_or_nan(metrics["Return_MAE"], 6),
+        "Dir_Acc": _round_or_nan(metrics["Dir_Acc"], 2),
+        "Sharpe": _round_or_nan(metrics["Sharpe"], 4),
+        "Hit_Rate": _round_or_nan(metrics["Hit_Rate"], 2),
+        "Neutral_Rate": _round_or_nan(metrics["Neutral_Rate"], 2),
+        "BuyHold_Sharpe": _round_or_nan(metrics["BuyHold_Sharpe"], 4),
+        # Sprint 1 A1.1: rf yoksa metric raporlarda gorulebilsin.
+        "Risk_Free_Unavailable": bool(metrics.get("Risk_Free_Unavailable", False)),
+        "Risk_Free_Annual_Used": metrics.get("Risk_Free_Annual_Used"),
+        "Sharpe_Warning": metrics.get("Sharpe_Warning", ""),
     }
 
 
@@ -322,6 +362,9 @@ def save_metrics_report(
     audit_df = prepare_csv_dataframe(compact_columns(csv_df, METRICS_AUDIT_COLUMNS))
     with open(md_save_path, "w", encoding="utf-8") as handle:
         handle.write(f"# {best_model_name} Liderliginde Performans Raporu\n\n")
+        # Sprint 1 A1.3: Backtest raporlarinda otomatik disclaimer (en ust).
+        handle.write("> :warning: " + BACKTEST_COST_DISCLAIMER + "\n>\n")
+        handle.write("> :information_source: " + INVESTMENT_NOTE + "\n\n")
         handle.write("## Ozet\n\n")
 
         if "Composite_Score" in df.columns:
@@ -415,6 +458,10 @@ def save_metrics_report(
     print("\n" + "=" * 70)
     print("  [INFO]  MODEL KARSILASTIRMA VE PERFORMANS TABLOSU")
     print("=" * 70)
+    # Sprint 1 A1.3: console ciktida da disclaimer (kullanici CLI cikti gormeli)
+    print("  [DISCLAIMER] " + BACKTEST_COST_DISCLAIMER)
+    print("  [DISCLAIMER] " + INVESTMENT_NOTE)
+    print("-" * 70)
     print(display_df.to_string(index=False))
     print("-" * 70)
     if "Composite_Score" in df.columns:

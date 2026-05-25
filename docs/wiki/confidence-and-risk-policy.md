@@ -2,7 +2,7 @@
 title: Confidence and Risk Policy
 type: concept
 status: active
-last_updated: 2026-05-20
+last_updated: 2026-05-25
 owner: llm
 source_count: 4
 ---
@@ -50,6 +50,7 @@ Three levels only — never a percentage:
 | `rolling_positive_window_ratio < 0.5` (Faz 2 rolling holdout) | lower one level |
 | `ensemble_direction_agreement < 0.5` (Faz 2) | cap at `medium` |
 | Regime misalignment with forecast direction (Faz 2) | lower one level |
+| `risk_free_unavailable = True` (Sprint 1 A1.1) | lower one level — Sharpe/Sortino NaN; advisory için risk-adjusted skor güvensiz |
 
 ### `high` Conditions
 

@@ -59,6 +59,14 @@ linked pages below.
 - **Validation mode** (as of 2026-05-25): default and production-only mode is
   `walk_forward`. `single_split` is research-only via `--debug-quick`. WF
   embargo auto-resolves to `max(200, time_steps)` when left unset.
+- **Metric priority (Sprint 1, 2026-05-25)**: reports lead with `Dir_Acc`,
+  `Hit_Rate`, `Composite_Score`; `Net_Return` / `BuyHold_Return` move to a
+  footnote because the default backtest is cost-free. Risk-free rate
+  fallback (`0.40`) was removed — Sharpe/Sortino return `NaN` and a
+  `Risk_Free_Unavailable` flag is raised whenever macro
+  `INTEREST_RATE.csv` and `RISK_FREE_RATE_ANNUAL` env are both missing.
+  Backtest CSV/MD reports automatically prepend the cost + advisory
+  disclaimer.
 
 ## Navigation Rules for Agents
 

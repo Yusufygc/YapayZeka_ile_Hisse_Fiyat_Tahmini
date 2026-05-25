@@ -18,7 +18,14 @@ def _daily_risk_free_rate(risk_free_annual: float) -> float:
     return float((1.0 + risk_free_annual) ** (1.0 / 252.0) - 1.0)
 
 
-def _annualized_sharpe(returns: np.ndarray, risk_free_annual: float = 0.40) -> float:
+def _annualized_sharpe(returns: np.ndarray, risk_free_annual: float | None = 0.0) -> float:
+    """
+    Sprint 1 (2026-05-25): risk_free_annual None ise Sharpe NaN doner.
+    Cagiran fonksiyon bu NaN'i `risk_free_unavailable` uyarisi ile
+    metric sozlugune yansitir.
+    """
+    if risk_free_annual is None:
+        return float("nan")
     returns = np.asarray(returns, dtype=float).ravel()
     if returns.size == 0:
         return 0.0
@@ -29,7 +36,10 @@ def _annualized_sharpe(returns: np.ndarray, risk_free_annual: float = 0.40) -> f
     return float(np.mean(excess) / std_excess * np.sqrt(252))
 
 
-def _annualized_sortino(returns: np.ndarray, risk_free_annual: float = 0.40) -> float:
+def _annualized_sortino(returns: np.ndarray, risk_free_annual: float | None = 0.0) -> float:
+    """Sprint 1: risk_free_annual None ise Sortino NaN doner."""
+    if risk_free_annual is None:
+        return float("nan")
     returns = np.asarray(returns, dtype=float).ravel()
     if returns.size == 0:
         return 0.0
@@ -92,8 +102,14 @@ def summarize_backtest(
     risk_free_annual: float | None = None,
     trial_count: int = 1,
 ) -> Dict[str, float | str | bool]:
+    # Sprint 1 (2026-05-25) Plan A1.1: risk_free None ise fail-loud.
+    # _get_rf() macro cache + env yoksa None doner; o zaman Sharpe/Sortino
+    # NaN gelir ve "Risk_Free_Unavailable" bayragi metric'e eklenir.
+    risk_free_unavailable = False
     if risk_free_annual is None:
-        risk_free_annual = _get_rf() if _get_rf is not None else 0.40
+        risk_free_annual = _get_rf() if _get_rf is not None else None
+        if risk_free_annual is None:
+            risk_free_unavailable = True
     equity_curve: pd.DataFrame = backtest_result["equity_curve"]
     trades: pd.DataFrame = backtest_result["trades"]
     model_name = backtest_result["model_name"]
@@ -146,6 +162,9 @@ def summarize_backtest(
             "Recovery_Factor": 0.0,
             "Max_Consecutive_Loss": 0,
             "Information_Ratio": 0.0,
+            "Risk_Free_Unavailable": bool(risk_free_unavailable),
+            "Risk_Free_Annual_Used": None if risk_free_unavailable else float(risk_free_annual),
+            "Sharpe_Warning": "risk_free_unavailable" if risk_free_unavailable else "",
         }
 
     strategy_returns = equity_curve["Net_Return"].to_numpy(dtype=float)
@@ -171,7 +190,8 @@ def summarize_backtest(
     )
     max_drawdown = _max_drawdown(equity)
     calmar = float(annualized_return / abs(max_drawdown)) if max_drawdown < 0 else float("inf")
-    daily_rf = _daily_risk_free_rate(risk_free_annual)
+    # Sprint 1: rf yoksa daily_rf 0.0 alinir; omega/recovery rf'siz cikar.
+    daily_rf = 0.0 if risk_free_unavailable else _daily_risk_free_rate(risk_free_annual)
     omega = _omega_ratio(strategy_returns, threshold=daily_rf)
     recovery_factor = _recovery_factor(net_return, max_drawdown)
     max_consec_loss = _max_consecutive_loss(trades)
@@ -248,6 +268,9 @@ def summarize_backtest(
         "Recovery_Factor": round(recovery_factor, 6) if np.isfinite(recovery_factor) else float("inf"),
         "Max_Consecutive_Loss": max_consec_loss,
         "Information_Ratio": round(information_ratio, 6),
+        "Risk_Free_Unavailable": bool(risk_free_unavailable),
+        "Risk_Free_Annual_Used": None if risk_free_unavailable else float(risk_free_annual),
+        "Sharpe_Warning": "risk_free_unavailable" if risk_free_unavailable else "",
     }
 
 

@@ -1,21 +1,35 @@
 # -*- coding: utf-8 -*-
 """
-risk_free_rate.py - Dinamik TCMB faiz orani yardimcisi (Faz 3.6).
+risk_free_rate.py - Dinamik TCMB faiz orani yardimcisi.
+
+Sprint 1 (2026-05-25) — Plan v1.0 A1.1:
+  Sabit %40 fallback kaldirildi. Macro cache veya environment yoksa
+  fonksiyon ``None`` doner. Cagiran katman (financial_metrics,
+  backtesting.metrics) ``None`` aldiginda Sharpe/Sortino degerini
+  ``NaN`` olarak isaretler ve `risk_free_unavailable` uyarisini
+  metric sozlugune ekler. Bu uyari ileride
+  ``confidence.warnings`` zincirine bağlanir (Sprint 8'de).
 
 Motivasyon:
   Sharpe ve Sortino hesaplamalarinda kullanilan risk-free rate (rf)
-  sabit %40 olarak kodlanmistir. TCMB faizi degistikce bu deger yanlislanir.
+  sabit %40 olarak kodlanmisti. Macro cache yoksa metric sessizce
+  yanlis cikiyordu. Advisory sistemi icin bu kabul edilemez:
+  rf yoksa kullanici NaN gormeli ve uyari almali.
 
 Cozum:
-  - Oncelik 1: macro_pipeline'in cache ettigi INTEREST_RATE.csv dosyasindan
+  - Oncelik 1: macro_pipeline'in cache ettigi INTEREST_RATE.csv'den
     en son gecerli TCMB faizini oku.
-  - Oncelik 2: macro_pipeline'in EVDS'den cektigi son rate_level degerini kullan.
-  - Oncelik 3 (fallback): yapilandirma dosyasindan veya environment degiskeninden.
-  - Oncelik 4: sabit varsayilan (0.40 = %40).
+  - Oncelik 2: Environment degiskeni RISK_FREE_RATE_ANNUAL.
+  - Oncelik 3 (deprecated/legacy): ``fallback`` parametresi (opt-in,
+    default None).  Test ortamlarinda explicit 0.0 vermek icin
+    saklandi; production kodu ``fallback=None`` cagirmalidir.
 
 Kullanim:
     from src.utils.risk_free_rate import get_current_risk_free_rate
     rf = get_current_risk_free_rate(macro_cache_dir="data/macro")
+    if rf is None:
+        # Sharpe hesaplanamaz, NaN dondur + warning
+        ...
 """
 
 from __future__ import annotations
@@ -24,38 +38,40 @@ import os
 from typing import Optional
 
 
-_DEFAULT_RISK_FREE_RATE = 0.40  # Fallback: %40 TCMB referans faizi
-
-
 def get_current_risk_free_rate(
     macro_cache_dir: str = "data/macro",
-    fallback: float = _DEFAULT_RISK_FREE_RATE,
+    fallback: Optional[float] = None,
     project_root: Optional[str] = None,
-) -> float:
+) -> Optional[float]:
     """
-    Guncel TCMB risk-free faiz oranini doner (yillik, ondalik).
+    Guncel TCMB risk-free faiz oranini doner (yillik, ondalik) ya da ``None``.
 
     Oncelik sirasi:
       1. macro_cache_dir/INTEREST_RATE.csv — en son satir (decimal olarak)
       2. Environment degiskeni: RISK_FREE_RATE_ANNUAL
-      3. fallback parametresi (varsayilan: 0.40)
+      3. fallback parametresi (default None — yani fail-loud)
+
+    Sprint 1: Onceki sabit %40 fallback kaldirildi; macro cache yoksa
+    fonksiyon None doner ve cagiran kod metric'i NaN olarak isaretler.
 
     Parameters
     ----------
     macro_cache_dir : str
-        MacroPipeline'in faiz verisini cacheledigii dizin.
+        MacroPipeline'in faiz verisini cacheledigi dizin.
         Proje kokune gore goreli veya mutlak yol.
-    fallback : float
-        Cache okunamayinca kullanilacak varsayilan deger (ondalik, orn. 0.40).
+    fallback : float, optional
+        Cache + environment okunamayinca kullanilacak deger.
+        ``None`` (default) ise fonksiyon None doner ve cagiran katman
+        bu durumu fail-loud islemelidir.
     project_root : str, optional
         Proje kok dizini. None ise bu dosyanin konumundan otomatik hesaplanir.
 
     Returns
     -------
-    float
-        Yillik risk-free faiz orani (0.40 = %40).
+    Optional[float]
+        Yillik risk-free faiz orani (0.40 = %40) veya ``None`` (veri yok).
     """
-    # Cevresel degisken kontrolu
+    # Environment degiskeni kontrolu
     env_val = os.environ.get("RISK_FREE_RATE_ANNUAL")
     if env_val is not None:
         try:
@@ -70,6 +86,7 @@ def get_current_risk_free_rate(
     if rate_from_cache is not None:
         return rate_from_cache
 
+    # Plan v1.0 Sprint 1 A1.1: fail-loud. fallback None ise None doner.
     return fallback
 
 
