@@ -7,6 +7,8 @@ piyasanın kapalı olduğu (hacim=0) günleri eler ve teknik göstergeler
 (RSI, MACD, SMA, EMA) ile gecikme (lag) özellikleri ekler.
 """
 
+import os
+
 import pandas as pd
 import numpy as np
 import ta
@@ -138,7 +140,77 @@ def load_and_clean(csv_path: str, drop_zero_volume: bool = True) -> pd.DataFrame
         df.reset_index(drop=True, inplace=True)
 
     df.attrs["corporate_action_report"] = corporate_action_report
+    # Sprint 2 (2026-05-25) Plan A2.3: survivorship_bias_report.
+    df.attrs["survivorship_bias_report"] = _compute_survivorship_report(df, csv_path)
     return df
+
+
+def _compute_survivorship_report(df: pd.DataFrame, csv_path: str) -> dict:
+    """
+    Sprint 2 (2026-05-25) Plan A2.3:
+      OHLCV serisinden survivorship/listing tabanli risk bayraklarini cikarir.
+      `expected_start` mevcut sistemde bilinmiyor (BIST listing-date metadata
+      yok); bu yuzden actual_start, span_days, max_gap_days uretilir ve
+      kisalik (<2 yil) veya gun-bos boyu (>10 gun) varsa warning eklenir.
+
+    Return shape:
+      {
+        "symbol": "TUPRS",
+        "actual_start": "2015-05-01",
+        "actual_end": "2026-05-23",
+        "span_days": 4036,
+        "row_count": 2715,
+        "max_gap_days": 4,
+        "short_history_warning": False,
+        "delisted_or_late_listing_warning": True,
+        "warning": "delisted_or_late_listing" | "" ,
+      }
+    """
+    try:
+        symbol = os.path.splitext(os.path.basename(csv_path))[0].upper()
+    except Exception:
+        symbol = "UNKNOWN"
+
+    report = {
+        "symbol": symbol,
+        "actual_start": None,
+        "actual_end": None,
+        "span_days": 0,
+        "row_count": int(len(df)),
+        "max_gap_days": 0,
+        "short_history_warning": False,
+        "delisted_or_late_listing_warning": False,
+        "warning": "",
+    }
+    if "Date" not in df.columns or df.empty:
+        return report
+    try:
+        dates = pd.to_datetime(df["Date"], errors="coerce").dropna().sort_values()
+        if len(dates) < 2:
+            return report
+        start, end = dates.iloc[0], dates.iloc[-1]
+        span_days = int((end - start).days)
+        gaps = dates.diff().dt.days.dropna()
+        max_gap = int(gaps.max()) if len(gaps) else 0
+        short_history = span_days < int(365 * 2)
+        late_listing = max_gap > 10
+
+        report.update({
+            "actual_start": start.strftime("%Y-%m-%d"),
+            "actual_end": end.strftime("%Y-%m-%d"),
+            "span_days": span_days,
+            "max_gap_days": max_gap,
+            "short_history_warning": short_history,
+            "delisted_or_late_listing_warning": late_listing,
+            "warning": (
+                "delisted_or_late_listing" if late_listing
+                else ("short_history" if short_history else "")
+            ),
+        })
+    except Exception:
+        # Sessizce sukut etme: kalan akis kalite kontrolu yapmadan devam etmesin.
+        pass
+    return report
 
 
 def add_features(df: pd.DataFrame, lags: int = 5) -> pd.DataFrame:

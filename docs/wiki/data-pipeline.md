@@ -2,9 +2,9 @@
 title: Data Pipeline
 type: concept
 status: active
-last_updated: 2026-05-24
+last_updated: 2026-05-25
 owner: llm
-source_count: 7
+source_count: 8
 ---
 
 # Data Pipeline
@@ -52,6 +52,89 @@ Important fields include:
 - `warning`
 
 This metadata is later folded into run metadata by `DataManager`.
+
+### Corporate Action Audit (Sprint 2 — 2026-05-25)
+
+`tools/audit_corporate_actions.py` scans every CSV under `data/` and flags
+days where `|log_return| >= 0.30`. Such jumps usually mean an unadjusted
+split, a large dividend ex-day, or a data error. Output:
+
+- `outputs/_audits/corporate_action_audit_{timestamp}.csv`
+- `outputs/_audits/corporate_action_audit_latest.csv`
+
+Columns: `Symbol, Date, prev_close, close, log_return, abs_log_return,
+auto_adjust_active, severity (high/extreme), notes`.
+
+Usage:
+
+```bash
+python tools/audit_corporate_actions.py
+python tools/audit_corporate_actions.py --universe data/bist_universe.csv
+python tools/audit_corporate_actions.py --threshold 0.20 --out outputs/_audits
+```
+
+`src/data/quality.py` reads the latest audit and sets
+`corporate_action_anomaly=True` whenever the current symbol has an
+anomaly within the last `252` business days. This flag is a hard block
+in the analysis API confidence chain
+([Confidence and Risk Policy](confidence-and-risk-policy.md)).
+
+### yfinance Auto-Adjust Hard Control (Sprint 2 A2.1)
+
+`YFinanceProvider.AUTO_ADJUST = True` is required. yfinance applies the
+split/dividend correction at fetch time; without it, a `1:2` split day
+produces `log_return ≈ -0.69` and corrupts every trained model.
+Production code must not lower this flag.
+
+### Survivorship Bias Report (Sprint 2 A2.3)
+
+`load_and_clean()` also writes a `survivorship_bias_report` to
+`df.attrs`. Shape:
+
+```json
+{
+  "symbol": "TUPRS",
+  "actual_start": "2015-05-01",
+  "actual_end": "2026-05-23",
+  "span_days": 4036,
+  "row_count": 2715,
+  "max_gap_days": 4,
+  "short_history_warning": false,
+  "delisted_or_late_listing_warning": false,
+  "warning": ""
+}
+```
+
+Triggers:
+
+- `short_history_warning`: total span < 2 years.
+- `delisted_or_late_listing_warning`: a single gap > 10 calendar days
+  between consecutive observations (suggests delisting, late listing,
+  or data hole).
+
+`compute_quality_flags()` exposes the report under
+`survivorship_bias_report` so downstream confidence/warning chains can
+relay the rationale to the user.
+
+### Population Stability Index (PSI)
+
+`src/data/quality.compute_psi(train_df, holdout_df)` returns a per-column
+PSI dictionary. `_psi_one_feature` builds a shared 10-bin histogram from
+the combined sample, then computes:
+
+```
+PSI = Σ (f_holdout - f_train) * log(f_holdout / f_train)
+```
+
+`compute_quality_flags()` sets `psi_high=True` whenever
+`psi_max > 0.25`. This is a hard block. Thresholds (Sprint 7 will add
+`psi_status` enum to the analysis API):
+
+| `psi_max` | Status | Action |
+|---|---|---|
+| < 0.10 | `stable` | no effect |
+| 0.10 - 0.25 | `moderate_drift` | soft degradation (lower confidence) |
+| ≥ 0.25 | `major_drift` | hard block → `low` confidence |
 
 ## Feature Engineering
 

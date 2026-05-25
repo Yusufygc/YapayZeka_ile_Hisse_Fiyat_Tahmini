@@ -38,8 +38,25 @@ class MarketDataProvider:
 
 
 class YFinanceProvider(MarketDataProvider):
+    """
+    Sprint 2 (2026-05-25) Plan A2.1:
+      ``auto_adjust=True`` HARD kontrol. yfinance close serisini split ve
+      temettu icin otomatik duzeltir. Duzeltilmemis seride 1:2 split
+      gunu log_return ≈ -0.69 olur ve tum modeller bozulur. Bu deger
+      degistirilmemelidir; testler de bunu denetler.
+    """
+
+    AUTO_ADJUST: bool = True
+
     def download(self, ticker: str, *, start: str, end: str) -> pd.DataFrame:
-        return yf.download(ticker, start=start, end=end, progress=False, auto_adjust=False)
+        # auto_adjust=True ZORUNLU — split/temettu sizintisini onler.
+        return yf.download(
+            ticker,
+            start=start,
+            end=end,
+            progress=False,
+            auto_adjust=self.AUTO_ADJUST,
+        )
 
 
 class DataUpdater:

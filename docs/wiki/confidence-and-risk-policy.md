@@ -115,9 +115,19 @@ Computed by `src/data/quality.py`:
 | Flag | Threshold | Effect |
 |---|---|---|
 | `psi_high` | PSI (train vs holdout features) > 0.25 | Hard block → `low` confidence |
-| `corporate_action_anomaly` | Detected anomalous price discontinuity | Hard block → `low` confidence |
+| `corporate_action_anomaly` | Detected via `tools/audit_corporate_actions.py` (any `|log_return| >= 0.30` day in last 252 BD) OR Adj_Close anomaly | Hard block → `low` confidence |
 | `clip_rate` | Fraction of prices clipped by BIST band rules | Warning; shown in `confidence.warnings` |
-| `survivorship_warning` | Symbol data may be incomplete | Warning; shown in `confidence.warnings` |
+| `survivorship_warning` / `survivorship_bias_report.warning` | `short_history` (< 2y) or `delisted_or_late_listing` (gap > 10d) | Warning; shown in `confidence.warnings` |
+
+### PSI Threshold Tiers (Sprint 2 A2.4 — exposed via API in Sprint 7)
+
+`compute_psi()` returns per-feature PSI; `psi_max` aggregates the worst.
+
+| `psi_max` | Status | Effect |
+|---|---|---|
+| `< 0.10` | `stable` | no effect |
+| `0.10 - 0.25` | `moderate_drift` | soft degradation (lower one level) |
+| `≥ 0.25` | `major_drift` | hard block → `low` |
 
 ## Stability Score
 

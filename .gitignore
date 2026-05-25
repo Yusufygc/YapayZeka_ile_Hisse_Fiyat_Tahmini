@@ -10,7 +10,8 @@
 graphify-out
 _make_report.py
 rapor.docx
-tools
+tools/*
+!tools/audit_corporate_actions.py
 .claude
 kalinanYer.md
 kalinanYer1.md

@@ -1,3 +1,40 @@
+## [2026-05-25] Feature | Corporate Action Audit + Survivorship Report + PSI Threshold Tiers
+
+- `tools/audit_corporate_actions.py` eklendi. `data/*.csv` altindaki
+  her hisseyi tarayip `|log_return| >= 0.30` olan gunleri tespit eder;
+  CSV raporu `outputs/_audits/corporate_action_audit_{ts}.csv` ve
+  `corporate_action_audit_latest.csv` olarak yazilir. Severity:
+  `high` (>= 0.30) / `extreme` (>= 0.50). `--threshold`, `--universe`,
+  `--data-dir`, `--out` argumanlari ile esnek calistirilabilir.
+- `src/data/data_updater.py`: `YFinanceProvider.AUTO_ADJUST = True` HARD
+  kontrolu (sinif sabiti). Daha onceki `auto_adjust=False` ham seriyi
+  donduruyordu; bu split/temettu sizintisini kalici olarak kapatti.
+- `src/data/data_loader.py` `_compute_survivorship_report()` ekledi.
+  `df.attrs["survivorship_bias_report"]`:
+  `{symbol, actual_start, actual_end, span_days, row_count,
+    max_gap_days, short_history_warning,
+    delisted_or_late_listing_warning, warning}`.
+  Triggerlar: span < 2 yil veya max_gap > 10 gun.
+- `src/data/quality.py` iki yenilik:
+  - `_check_audit_anomaly()`: audit_latest.csv'den son 252 isgunu
+    icin symbol anomalisi tarar; eski Adj_Close-bazli bayraga ek
+    kaynak. `corporate_action_anomaly` ikinci kaynaktan beslenir.
+  - `compute_quality_flags()` cikitsina `survivorship_bias_report`
+    payload'i eklendi.
+- PSI hesabi (`compute_psi`, `_psi_one_feature`) zaten mevcuttu; Sprint
+  2 sadece test+wiki zinciri ekledi. Threshold tiers:
+  `< 0.10 stable | 0.10-0.25 moderate_drift | >= 0.25 major_drift`.
+- Yeni testler: `tests/test_audit_corporate_actions.py` (5),
+  `tests/test_psi.py` (6). Sprint 0+1+2 yeni testler 36/36 gecti.
+- Wiki: `data-pipeline.md` "Corporate Action Audit" + "Survivorship
+  Bias Report" + "PSI" bolumleri (last_updated 2026-05-25,
+  source_count 7->8). `confidence-and-risk-policy.md` PSI tier
+  tablosu + audit-bazli corporate_action_anomaly aciklamasi.
+
+Plan referansi:
+`~/.claude/plans/sistematik-ad-m-ad-m-yap-lacak-expressive-eich.md`
+Sprint 2 (A2.1, A2.2, A2.3, A2.4, A2.5, A2.6).
+
 ## [2026-05-25] Decision | Advisory Metric Onceligi + Risk-Free Fail-Loud + Backtest Disclaimer
 
 - `src/utils/risk_free_rate.get_current_risk_free_rate` artik 0.40 sabit

@@ -10,6 +10,7 @@ compute_quality_flags(): ham OHLCV DataFrame'inden kalite sinyalleri üretir.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -20,6 +21,41 @@ _PSI_THRESHOLD = 0.25
 _PSI_N_BINS = 10
 _SURVIVORSHIP_MIN_YEARS = 2.0
 _SURVIVORSHIP_GAP_DAYS = 10
+
+# Sprint 2 (2026-05-25) Plan A2.3: Audit-bazli corporate action anomaly.
+# tools/audit_corporate_actions.py ciktisini son 252 isgunu icin tarar.
+_AUDIT_LOOKBACK_DAYS = 252
+_AUDIT_LATEST_DEFAULT = os.path.join("outputs", "_audits", "corporate_action_audit_latest.csv")
+
+
+def _check_audit_anomaly(symbol: str, audit_csv: Optional[str] = None) -> bool:
+    """
+    Latest corporate_action_audit CSV'sinden symbol icin son 252 isgununde
+    anomali olup olmadigini doner. CSV yoksa False (silent).
+    """
+    import pandas as pd
+
+    audit_path = audit_csv or _AUDIT_LATEST_DEFAULT
+    if not os.path.exists(audit_path):
+        return False
+    try:
+        df = pd.read_csv(audit_path)
+    except Exception as exc:
+        logger.warning(f"Audit CSV okunamadi ({audit_path}): {exc}")
+        return False
+    if df.empty or "Symbol" not in df.columns or "Date" not in df.columns:
+        return False
+    try:
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        recent_cutoff = pd.Timestamp.today() - pd.Timedelta(days=_AUDIT_LOOKBACK_DAYS)
+        mask = (
+            (df["Symbol"].astype(str).str.upper() == symbol.upper())
+            & (df["Date"] >= recent_cutoff)
+        )
+        return bool(mask.any())
+    except Exception as exc:
+        logger.warning(f"Audit anomaly check basarisiz ({symbol}): {exc}")
+        return False
 
 
 def _psi_one_feature(
@@ -76,8 +112,16 @@ def compute_quality_flags(
     import pandas as pd
 
     # ── Corporate action anomaly ─────────────────────────────────────────
+    # Sprint 2 A2.3: iki kaynak birlestirilir:
+    #   1) data_loader.py'nin Adj_Close-dayali bayragi
+    #   2) tools/audit_corporate_actions.py son 252 isgunu raporu
     ca_report = df.attrs.get("corporate_action_report", {}) if hasattr(df, "attrs") else {}
     corporate_action_anomaly = bool(ca_report.get("corporate_action_anomaly", False))
+    if not corporate_action_anomaly:
+        try:
+            corporate_action_anomaly = _check_audit_anomaly(symbol)
+        except Exception as exc:
+            logger.warning(f"Audit anomaly check basarisiz ({symbol}): {exc}")
 
     # ── Survivorship warning ─────────────────────────────────────────────
     survivorship_warning = False
@@ -117,9 +161,15 @@ def compute_quality_flags(
     except Exception as exc:
         logger.warning(f"Error reading clip rate: {exc}")
 
+    # Sprint 2 A2.3: data_loader survivorship_bias_report'unu da yansit.
+    survivorship_report = (
+        df.attrs.get("survivorship_bias_report", {}) if hasattr(df, "attrs") else {}
+    )
+
     return {
         "corporate_action_anomaly": corporate_action_anomaly,
         "survivorship_warning": survivorship_warning,
+        "survivorship_bias_report": survivorship_report,
         "psi_high": psi_high,
         "psi_max": psi_max,
         "psi_scores": psi_scores,
