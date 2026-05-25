@@ -128,7 +128,7 @@ For Faz 2+, if user-specific scenario parameters are required a
     "source_experiment_ids": [],
     "forecast_strategy": "recursive_direct_target",
     "artifact_mode": "artifact_loaded",
-    "warnings": ["frozen_exogenous_features"]
+    "warnings": ["projected_exogenous_features"]
   },
   "disclaimer": "Bu çıktı kişisel yatırım tavsiyesi değildir. Model geçmiş verilerden üretilmiş analitik bir tahmin sunar; nihai karar kullanıcıya aittir."
 }

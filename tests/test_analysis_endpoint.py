@@ -238,7 +238,7 @@ class TestAnalysisService:
             points=[{"target_date": "2026-05-20", "horizon_index": 1, "bounded_predicted_close": 102.0}],
             forecast_strategy="ensemble_recursive_direct_target",
             artifact_mode="artifact_loaded",
-            forecast_warnings=["frozen_exogenous_features"],
+            forecast_warnings=["projected_exogenous_features"],
             ensemble_metadata={
                 "method": "Inverse RMSE",
                 "members": ["Ridge Return", "LSTM"],

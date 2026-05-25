@@ -4,7 +4,7 @@ type: concept
 status: active
 last_updated: 2026-05-25
 owner: llm
-source_count: 8
+source_count: 9
 ---
 
 # Data Pipeline
@@ -135,6 +135,54 @@ PSI = Σ (f_holdout - f_train) * log(f_holdout / f_train)
 | < 0.10 | `stable` | no effect |
 | 0.10 - 0.25 | `moderate_drift` | soft degradation (lower confidence) |
 | ≥ 0.25 | `major_drift` | hard block → `low` confidence |
+
+## Recursive Forecast Feature Recompute (Sprint 5 — 2026-05-25)
+
+`FeaturePipeline.recompute_close_dependent(frame)` rewrites every
+close-derived technical indicator after a recursive future-forecast row is
+appended. Without this rewrite, SMA/EMA/RSI/MACD/Bollinger/ATR/ADX/MFI/OBV
+values from the original last row would be carried forward unchanged and
+the model would predict against stale technical context — multi-day
+horizons (5+ days) degrade fast.
+
+Order of operations during `ForecastPointGenerator.roll_forward_recursive`:
+
+1. Predict next-day target.
+2. Bound predicted close with BIST band rules.
+3. Append recursive row (`_append_recursive_row`) — Close, Return,
+   Log_Return, LogRet_Lag_* shifted in.
+4. **`recompute_close_dependent(frame)`** — every close-derived feature
+   regenerated through the same `_add_*` chain used in training.
+5. **`MacroForwardProjector.project_last_row`** — macro features ARIMA
+   projected (see below).
+
+Macro, sector, and lag features are not touched by step 4. Lag handled in
+step 3, macro in step 5, sector inherits projected macro.
+
+## Macro Forward Projection (Sprint 5 — 2026-05-25)
+
+`src/features/macro_forward_projection.py:MacroForwardProjector` advances
+known macro columns one step using ARIMA(1,1,1) over the last
+`history_window=252` days. ARIMA failure falls back to a 20-day mean-delta
+trend extrapolation.
+
+Macro whitelist (`_KNOWN_MACRO_COLUMNS`):
+
+- `USDTRY`, `USDTRY_Return`, `EURTRY`
+- `BIST100`, `BIST100_Return`
+- `BIST_*_Return` sector indices
+- `VIX`, `INTEREST_RATE`, `CPI`, `BRENT`, `GOLD`
+
+Projection is applied only to the last (recursive) row. Historical macro
+rows are not modified — backtest and training data stay deterministic.
+
+The forecast warnings enum updated from `frozen_exogenous_features` to
+`projected_exogenous_features`, signaling macro inputs are advanced
+deterministically rather than held constant. See
+[Analysis API Contract](analysis-api-contract.md) `forecast_source.warnings`.
+
+If `statsmodels` is unavailable the projector silently falls back to trend
+extrapolation; the forecast loop never raises.
 
 ## Feature Engineering
 

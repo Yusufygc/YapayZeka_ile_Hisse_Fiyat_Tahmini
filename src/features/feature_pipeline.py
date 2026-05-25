@@ -290,6 +290,42 @@ class FeaturePipeline:
             df[f"LogRet_Lag_{i}"] = log_ret.shift(i)
         return df
 
+    # ── Sprint 5 (2026-05-25) Plan A5.1 ──────────────────────────────────────
+    def recompute_close_dependent(self, frame: pd.DataFrame) -> pd.DataFrame:
+        """
+        Recursive forecast sonrasi close sutunundan turetilen tum teknik
+        gostergeleri yeniden hesaplar. Macro/sector/lag sutunlari KORUNUR
+        (lag_features Sprint 5 oncesi pattern'i takip eder; macro Sprint 5
+        A5.2'de ayri MacroForwardProjector ile guncellenir).
+
+        Mevcut feature_mode'a uygun (stationary/legacy/hybrid) tum
+        close-bagimli sutunlari tekrar uretir:
+          - Return / Log_Return
+          - SMA_*_rel / EMA_*_rel (+ legacy SMA/EMA mutlak)
+          - Market_Regime_SMA200
+          - RollStd_*_norm / BB_Width_* / NATR_14 (+ legacy abs)
+          - RSI_14 / MACD_norm / MACD_Signal_norm / MACD_Diff_norm
+            (+ legacy MACD/MACD_Signal/MACD_Diff)
+          - MFI_14 / ADX_14 / CMF_20
+          - OBV_Norm_20 / VWAP_20_rel
+
+        Args:
+            frame: En son recursive satir eklenmiş DataFrame.
+
+        Returns:
+            Ayni DataFrame, close-bagimli sutunlari yeniden hesaplanmis.
+            Macro + sector + lag + diger ek sutunlar dokunulmaz.
+        """
+        out = frame.copy()
+        # Sirali zincir — orjinal engineer_features sirasini koru.
+        out = self._add_returns(out)
+        out = self._add_moving_averages(out)
+        out = self._add_market_regime(out)
+        out = self._add_volatility(out)
+        out = self._add_momentum_indicators(out)
+        out = self._add_volume_features(out)
+        return out
+
     def _merge_macro(
         self,
         df: pd.DataFrame,

@@ -191,7 +191,7 @@ class ForecastSymbolWorkflow(_OwnerBackedForecastService):
             ensemble_direction_agreement=agreement,
             forecast_strategy="ensemble_recursive_direct_target",
             artifact_mode="artifact_loaded",
-            forecast_warnings=["frozen_exogenous_features"],
+            forecast_warnings=["projected_exogenous_features"],
             ensemble_metadata=metadata,
         )
         return self._result_cls(
@@ -394,7 +394,7 @@ class ProductionTrainingWorkflow(_OwnerBackedForecastService):
             "time_steps": data_manager.data_cfg.time_steps,
             "forecast_strategy": "recursive_direct_target",
             "artifact_mode": "artifact_loaded",
-            "forecast_warnings": ["frozen_exogenous_features"],
+            "forecast_warnings": ["projected_exogenous_features"],
         }
 
     def _resolve_model_path(self, model_path: str) -> str:
@@ -682,6 +682,12 @@ class ForecastPointGenerator(_OwnerBackedForecastService):
                 bounded_close=bounded_close,
                 previous_close=previous_close,
             )
+            # Sprint 5 A5.1: close-bagimli teknik gostergeleri yeniden hesapla.
+            # Macro + sector + lag dokunulmaz (lag _append_recursive_row icinde
+            # ele alindi; macro Sprint 5 A5.2'de MacroForwardProjector).
+            frame = self._recompute_close_dependent_safe(frame, context)
+            # Sprint 5 A5.2: macro feature'leri ARIMA projection ile ileri tasi.
+            frame = self._apply_macro_forward_projection_safe(frame, context, target_date)
             previous_close = bounded_close
         return points
 
@@ -700,6 +706,50 @@ class ForecastPointGenerator(_OwnerBackedForecastService):
                 raise ValueError(f"{model_name} icin recursive sequence yetersiz.")
             X_all_s = ProductionTrainingWorkflow._transform_features(context["scaler_X"], X_all)
             context["latest_seq"] = X_all_s[-time_steps:].reshape(1, time_steps, X_all_s.shape[1])
+
+    def _recompute_close_dependent_safe(
+        self, frame: pd.DataFrame, context: Dict[str, Any]
+    ) -> pd.DataFrame:
+        """
+        Sprint 5 A5.1: FeaturePipeline.recompute_close_dependent() cagrisi.
+        FeaturePipeline yuklenemezse veya hata olursa frame degismez —
+        forecast yine de uretilir; warning'ler context['warnings'] icine
+        eklenir (varsa).
+        """
+        try:
+            from src.features.feature_pipeline import FeaturePipeline
+        except Exception:
+            return frame
+        feature_mode = context.get("feature_mode", "stationary_features")
+        try:
+            fp = FeaturePipeline(feature_mode=feature_mode)
+            updated = fp.recompute_close_dependent(frame)
+            # NaN guard: yeni satirda NaN olursa eski deger ile doldur (ffill).
+            updated = updated.ffill().bfill()
+            return updated
+        except Exception:
+            return frame
+
+    def _apply_macro_forward_projection_safe(
+        self,
+        frame: pd.DataFrame,
+        context: Dict[str, Any],
+        target_date: pd.Timestamp,
+    ) -> pd.DataFrame:
+        """
+        Sprint 5 A5.2: Son satir macro feature'lerini ARIMA projection ile
+        gunceller. MacroForwardProjector yuklenemezse veya hata olursa
+        frame degismez.
+        """
+        try:
+            from src.features.macro_forward_projection import MacroForwardProjector
+        except Exception:
+            return frame
+        try:
+            projector = MacroForwardProjector()
+            return projector.project_last_row(frame, target_date=pd.to_datetime(target_date))
+        except Exception:
+            return frame
 
     @staticmethod
     def _append_recursive_row(

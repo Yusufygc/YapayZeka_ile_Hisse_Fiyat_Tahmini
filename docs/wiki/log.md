@@ -1,3 +1,39 @@
+## [2026-05-25] Feature | Sprint 5 — Recursive Feature Recompute + Macro Forward Projection
+
+- `src/features/feature_pipeline.py`: `recompute_close_dependent(frame)`
+  eklendi. Recursive forecast satiri eklendikten sonra close-bagimli
+  tum teknik gostergeleri (SMA/EMA/RSI/MACD/Bollinger/ATR/NATR/ADX/
+  MFI/CMF/OBV/VWAP/Market_Regime) `_add_*` zinciri ile yeniden uretir.
+  Macro/sector/lag sutunlari KORUNUR.
+- `src/features/macro_forward_projection.py` eklendi.
+  `MacroForwardProjector`: known macro whitelist (USDTRY/BIST100/VIX/
+  INTEREST_RATE/CPI/BRENT/GOLD/EURTRY + sektor _Return'leri) icin
+  ARIMA(1,1,1) tek-adim forecast (history_window=252). ARIMA fail
+  -> son 20 gun ortalama-delta trend extrapolation fallback.
+  `project_last_row(frame, target_date)` yalniz son (recursive)
+  satiri gunceller; tarihsel rows degismez.
+- `src/forecasting/workflows.py`:
+  `ForecastPointGenerator._recompute_close_dependent_safe()` ve
+  `_apply_macro_forward_projection_safe()` helper'lari eklendi.
+  Recursive loop her horizon adimi sonrasi sirasiyla recompute +
+  projection cagiriyor; helper'lar exception'da frame'i degistirmez
+  (graceful degradation).
+- `frozen_exogenous_features` warning enum'u `projected_exogenous_features`
+  ile degistirildi (single forecast + ensemble path).
+- Tests:
+  `tests/test_recompute_close_dependent.py` (5 test) - real `ta`
+    real-dep guard, SMA_7_rel/RSI/Market_Regime guncellenir, lag/
+    macro sutunlar dokunulmaz.
+  `tests/test_macro_forward_projection.py` (8 test) - auto column
+    resolve, override, project_last_row macro-only update,
+    empty/no-macro/short-series/single-value/empty-series fallback.
+  `tests/test_analysis_endpoint.py`: fixture warning enum guncellendi.
+- Sprint 0+1+2+3+4+5 toplam: 82/82 pass, 3 skip (lightgbm/tensorflow/
+  ta real-dep gerekli).
+- Wiki: data-pipeline.md "Recursive Forecast Feature Recompute" +
+  "Macro Forward Projection" bolumleri (source_count 8->9).
+  analysis-api-contract.md warning enum guncellendi.
+
 ## [2026-05-25] Feature | Sprint 4 — Probabilistic Forecasting (Quantile LightGBM + MC Dropout LSTM + Multi-Horizon)
 
 - `src/models/quantile_lightgbm_model.py` eklendi.
