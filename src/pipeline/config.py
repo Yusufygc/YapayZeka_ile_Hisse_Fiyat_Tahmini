@@ -52,6 +52,13 @@ class ValidationConfig:
     wf_window_type: str = "sliding"
     wf_embargo_size: Optional[int] = None
     final_holdout_size: int = 60
+    # Sprint 3 (2026-05-25) A3.4: PurgedKFold + CPCV opt-in flag'ler.
+    # Default False — production WF akisi degismez; arastirma/CI gucu icin
+    # opsiyonel ek validasyon.
+    use_purged_kfold: bool = False
+    use_cpcv: bool = False
+    cpcv_n_groups: int = 6
+    cpcv_k_test: int = 2
 
 
 @dataclass

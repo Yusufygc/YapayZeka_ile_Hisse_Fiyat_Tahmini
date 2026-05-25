@@ -1,3 +1,37 @@
+## [2026-05-25] Feature | Sprint 3 — PurgedKFold + CPCV + Concat-Sharpe
+
+- `src/validation/purged_kfold.py` eklendi. AFML Ch.7 PurgedKFold:
+  test fold'unun etrafinda `purge_window` (onerilen `max(200, time_steps)`)
+  + arkasinda `embargo` train ornekleri atilir. Constructor validasyon,
+  `split()` iterator (train_idx, test_idx).
+- `src/validation/cpcv.py` eklendi. AFML Ch.12 CombinatorialPurgedCV:
+  veriyi `n_groups` parcaya boler, `C(n_groups, k_test)` kombinasyon
+  uretir; her path icin purge + embargo. Default `n_groups=6, k_test=2`
+  → 15 path.
+- `src/validation/walk_forward.py`:
+  `_compute_strategy_returns()` + `_bootstrap_sharpe_ci()` yardimcilari.
+  `WalkForwardValidator.run()` fold strateji getirilerini biriktirir,
+  concat eder; `aggregated_metrics` icine `Sharpe_Concat`,
+  `Sharpe_CI_95_Low`, `Sharpe_CI_95_High`, `Concat_Returns_N` eklenir.
+  Bootstrap 1000 resample, seed 20260525 (deterministic).
+  Preprocessor lazy-import (`reconstruct_prices_*`) — joblib yokken
+  yardimcilar test edilebilir.
+- `src/pipeline/config.py` `ValidationConfig`: opt-in flag'ler
+  `use_purged_kfold`, `use_cpcv`, `cpcv_n_groups=6`, `cpcv_k_test=2`.
+  Default `False` — production WF akisi degismez.
+- Risk-free fail-loud (Sprint 1 A1.1) ile uyumlu: rf yoksa concat-Sharpe
+  ve CI alanlari NaN doner; `aggregated_metrics`'da `Sharpe_Warning`
+  zinciri korunur.
+- Testler:
+  `tests/test_purged_kfold.py` (9 test) — kurucu validasyon, partition,
+  purge zone, embargo zone, disjoint.
+  `tests/test_cpcv.py` (9 test) — `C(N,k)` path sayisi, purge, disjoint.
+  `tests/test_concat_sharpe.py` (7 test) — strategy returns log_return /
+  sign mismatch / empty, bootstrap CI low/high / NaN-on-no-rf / few samples,
+  concat-Sharpe ≠ mean-of-fold-Sharpe.
+- Sprint 0+1+2+3 toplam: 61/61 test gecti.
+- Plan Bolum 10 Live State guncellendi: Sprint 3 ✅ TAMAM.
+
 ## [2026-05-25] Feature | Corporate Action Audit + Survivorship Report + PSI Threshold Tiers
 
 - `tools/audit_corporate_actions.py` eklendi. `data/*.csv` altindaki

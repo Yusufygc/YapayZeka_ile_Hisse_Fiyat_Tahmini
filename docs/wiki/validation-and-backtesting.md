@@ -4,7 +4,7 @@ type: concept
 status: active
 last_updated: 2026-05-25
 owner: llm
-source_count: 7
+source_count: 8
 ---
 
 # Validation and Backtesting
@@ -65,6 +65,70 @@ The minimum-invasive Sprint 0 fix flags the leakage scope as
 `ensemble_weight_scope[name] = "in_sample_test_set_research_only"`. The
 proper train-tail validation-slice fix is scheduled for Sprint 4 (probabilistic
 forecasting + multi-horizon target work introduces the slice naturally).
+
+## PurgedKFold and CPCV (Sprint 3 — 2026-05-25)
+
+Opt-in validators that augment walk-forward by tightening leakage control
+and producing statistical confidence intervals on Sharpe.
+
+### PurgedKFold (`src/validation/purged_kfold.py`)
+
+Per López de Prado, *Advances in Financial Machine Learning* Ch. 7.
+Classical KFold is unsafe for time series (test fold may sit in the middle
+of train; rolling features see test data). PurgedKFold:
+
+- Folds are produced in chronological order — no shuffle.
+- `purge_window` train samples around each test fold are dropped (default
+  recommendation `max(rolling_feature_window, time_steps)` ≈ `max(200, time_steps)`).
+- `embargo` additional train samples after the test fold are dropped
+  (overlapping label leakage for `h>1` forward-return targets).
+
+Constructor:
+
+```python
+PurgedKFold(n_splits=5, purge_window=200, embargo=10)
+```
+
+Returns an iterator of `(train_idx, test_idx)` numpy arrays.
+
+### Combinatorial Purged CV (`src/validation/cpcv.py`)
+
+Per López de Prado AFML Ch. 12. Splits data into `n_groups` chronological
+groups, then for every `C(n_groups, k_test)` combination uses `k_test` groups
+as test and the rest as train (with purge + embargo around each test group).
+
+Defaults exposed via `ValidationConfig`:
+
+```python
+use_purged_kfold = False
+use_cpcv         = False
+cpcv_n_groups    = 6     # C(6, 2) = 15 paths
+cpcv_k_test      = 2
+```
+
+`C(6, 2) = 15` paths means each backtest produces 15 different OOS return
+series → empirical 95% CI on Sharpe via bootstrap (see Concat-Sharpe below).
+
+### Concat-Sharpe Aggregation (Sprint 3 A3.3)
+
+`WalkForwardValidator.run()` now collects per-fold strategy returns and
+appends three new keys to `aggregated_metrics`:
+
+| Field | Meaning |
+|---|---|
+| `Sharpe_Concat` | Sharpe computed on concatenated daily strategy returns across all folds (not fold-mean Sharpe — statistically correct) |
+| `Sharpe_CI_95_Low` | Bootstrap (1000 resamples) lower bound at 95% CI |
+| `Sharpe_CI_95_High` | Bootstrap upper bound at 95% CI |
+| `Concat_Returns_N` | Number of concatenated daily returns |
+
+If `risk_free_unavailable` (Sprint 1 A1.1), all four collapse to `NaN`
+and confidence label is degraded one level via the existing
+`risk_free_unavailable` rule in
+[Confidence and Risk Policy](confidence-and-risk-policy.md).
+
+Bootstrap parameters (`_BOOTSTRAP_RESAMPLES = 1000`,
+`_BOOTSTRAP_SEED = 20260525`) are module-level constants in
+`src/validation/walk_forward.py` and deterministic across runs.
 
 ## Final Holdout
 
