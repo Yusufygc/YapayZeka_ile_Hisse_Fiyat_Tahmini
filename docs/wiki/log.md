@@ -1,3 +1,30 @@
+## [2026-05-26] Feature | Sprint 9 — Advisory audit log + response cache + rate limit + UTC datetime
+
+- `src/api/services/advisory_audit.py` eklendi: `AdvisoryAuditRecord`
+  dataclass + `build_record_from_response()` (AnalysisResponse'tan field
+  cikartir) + `append_record()` / `append_response()` (CSV append, thread-
+  safe). Disk yolu varsayilan `data/advisory_history.csv`. Yazma hatasi
+  response'u bozmaz (best-effort).
+- `src/api/services/response_cache.py` eklendi: `ResponseCache` 24h TTL
+  in-memory cache; uppercase + strip key normalize; lazy eviction;
+  `AI_CORE_RESPONSE_CACHE_TTL_SECONDS` ve `AI_CORE_RESPONSE_CACHE_DISABLED`
+  env'leri ile yonetim.
+- `src/api/services/rate_limit.py` eklendi: `RateLimiter` fixed-window
+  IP rate limit (default 60/min/IP); `AI_CORE_RATE_LIMIT_PER_MINUTE` ve
+  `AI_CORE_RATE_LIMIT_TRUSTED_IPS` env'leri; `rate_limit_middleware_factory()`
+  lazy-import starlette ile FastAPI'ye middleware uretir. Over-limit 429 +
+  Retry-After.
+- `src/api/routers/analysis.py`: `/analysis` ve `/v1/analysis` icin response
+  cache hit kontrolu + audit log append eklendi.
+- `src/api/main.py`: rate limit middleware enable koruyucusu + tum
+  `datetime.now()` cagrilari `datetime.now(tz=timezone.utc)` ile degistirildi
+  (RULES.md timezone-aware).
+- Wiki: `persistence-and-api.md` source_count 11->14 (Advisory Audit Log +
+  Response Cache + Rate Limit + Timezone-Aware Datetimes bolumleri); log
+  ust girisi.
+- Tests: `test_advisory_audit.py` (6), `test_response_cache.py` (7),
+  `test_rate_limit.py` (6). Sprint 0-9 toplam: 127 pass / 6 skip.
+
 ## [2026-05-26] Feature | Sprint 8 — Analysis API Faz 2 doldurma (confidence reasons + ensemble agreement + /v1 alias)
 
 - `src/api/services/analysis_service.py`:

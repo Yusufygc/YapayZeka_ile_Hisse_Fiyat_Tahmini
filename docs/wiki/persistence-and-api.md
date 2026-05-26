@@ -2,9 +2,9 @@
 title: Persistence and API
 type: concept
 status: active
-last_updated: 2026-05-24
+last_updated: 2026-05-26
 owner: llm
-source_count: 11
+source_count: 14
 ---
 
 # Persistence and API
@@ -263,6 +263,58 @@ masking the best model's explanations.
 
 The current job tracker is in-memory. For production multi-process deployment,
 the API comments note that Redis would be more appropriate.
+
+## Advisory Audit Log (Sprint 9 — 2026-05-26)
+
+Every `GET /analysis/{symbol}` response is appended to
+`data/advisory_history.csv` via `src/api/services/advisory_audit.py`.
+Failures here never break the response (audit best-effort).
+
+Schema (one row per response):
+
+| Column | Type | Source |
+|---|---|---|
+| `timestamp_utc` | ISO-8601 string | `datetime.now(tz=UTC)` |
+| `symbol` | string | `response.symbol` |
+| `horizon_days` | int \| null | `forecast.horizon_days` |
+| `model_name` | string \| null | `model.model_name` |
+| `trend_label` | string \| null | `forecast.trend_label` |
+| `p50_return` | float \| null | first point `predicted_return_p50` (fallback `predicted_return`) |
+| `p10_return` | float \| null | first point `predicted_return_p10` |
+| `p90_return` | float \| null | first point `predicted_return_p90` |
+| `confidence_label` | enum | `confidence.label` |
+| `analysis_status` | enum | `response.analysis_status` |
+
+Backfill job (future): at `T + horizon_days` fetch realized return and
+emit `realized_dir_correct` boolean for calibration drift dashboards.
+
+## Response Cache (Sprint 9 A9.2)
+
+`src/api/services/response_cache.py:ResponseCache` provides an in-memory
+TTL cache keyed by uppercase `symbol`. Default TTL: 24h
+(`AI_CORE_RESPONSE_CACHE_TTL_SECONDS` env override; `0` disables).
+`AI_CORE_RESPONSE_CACHE_DISABLED=1` also disables. The cache is lazy-eviction
+(no background sweeper) and thread-safe.
+
+Cache invalidation: callers must invoke `cache.invalidate(symbol)` after a
+new training run or forecast persistence (TODO: wire into refresh job
+completion in Sprint 10).
+
+## Rate Limit (Sprint 9 A9.3)
+
+`src/api/services/rate_limit.py:RateLimiter` is a fixed-window IP rate
+limiter. Default: 60 req/min/IP (`AI_CORE_RATE_LIMIT_PER_MINUTE`; `0`
+disables). Trusted IPs in `AI_CORE_RATE_LIMIT_TRUSTED_IPS` (comma-separated;
+default `127.0.0.1`) bypass the limit. Over-limit requests get HTTP 429
+with `Retry-After: 60`. The middleware is added at app construction time
+only when the limit is enabled.
+
+## Timezone-Aware Datetimes (Sprint 9 A9.4)
+
+All API-layer timestamps (health, audit log) use `datetime.now(tz=timezone.utc)`
+with `isoformat(timespec="seconds")`. Database writes that pre-date Sprint 9
+continue to use local wall-clock strings; gradual migration is in scope for
+Sprint 10.
 
 ## Related Pages
 

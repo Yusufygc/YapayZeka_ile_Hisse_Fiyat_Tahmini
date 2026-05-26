@@ -26,7 +26,7 @@ import os
 import sys
 import uuid
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 # Proje kökünü path'e ekle (uvicorn proje kökünden çalıştırılırsa gerekli)
@@ -50,6 +50,10 @@ except ImportError as exc:
 from src.database.stock_model_db import StockModelDB
 from src.api.routers.analysis import router as analysis_router
 from src.api.runtime_config import get_cors_settings
+from src.api.services.rate_limit import (
+    get_default_limiter,
+    rate_limit_middleware_factory,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # App ve DB başlatma
@@ -77,6 +81,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Sprint 9 A9.3 — IP rate limit middleware (env: AI_CORE_RATE_LIMIT_PER_MINUTE).
+_RATE_LIMITER = get_default_limiter()
+_RATE_MW = rate_limit_middleware_factory()
+if _RATE_LIMITER.enabled() and _RATE_MW is not None:
+    app.add_middleware(_RATE_MW)
 
 app.include_router(analysis_router)
 
@@ -171,7 +181,7 @@ def health_check() -> Dict[str, Any]:
             "python": sys.executable,
         },
         "registered_symbols": total_symbols,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
     }
 
 
@@ -313,7 +323,7 @@ def trigger_pipeline(
         "job_id": job_id,
         "symbol": symbol,
         "status": "queued",
-        "started_at": datetime.now().isoformat(),
+        "started_at": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
         "finished_at": None,
         "error": None,
     }
@@ -351,7 +361,7 @@ def trigger_pipeline(
             _jobs[job_id]["status"] = "error"
             _jobs[job_id]["error"] = str(exc)
         finally:
-            _jobs[job_id]["finished_at"] = datetime.now().isoformat()
+            _jobs[job_id]["finished_at"] = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
 
     background_tasks.add_task(_bg_run)
 

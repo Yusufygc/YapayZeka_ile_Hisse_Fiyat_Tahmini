@@ -11,12 +11,16 @@ except ImportError:
 
 from src.api.schemas.analysis import AnalysisResponse
 from src.api.observability import log_event
+from src.api.services.advisory_audit import append_response as audit_append
 from src.api.services.analysis_service import AnalysisService
+from src.api.services.response_cache import get_default_cache
 
 router = APIRouter(tags=["Analiz"])
 
 _service = AnalysisService()
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+_cache = get_default_cache()
+_AUDIT_LOG_PATH = os.path.join(_PROJECT_ROOT, "data", "advisory_history.csv")
 
 
 @router.get("/v1/analysis/{symbol}", response_model=AnalysisResponse)
@@ -44,6 +48,12 @@ def get_analysis(symbol: str) -> AnalysisResponse:
     - ``error``: Beklenmeyen hata.
     """
     try:
+        # Sprint 9 A9.2 — response cache (24h TTL by symbol).
+        normalized = str(symbol).upper().strip()
+        cached = _cache.get(normalized)
+        if cached is not None:
+            return cached
+
         result = _service.build(symbol)
         source = result.forecast_source
         log_event(
@@ -61,6 +71,12 @@ def get_analysis(symbol: str) -> AnalysisResponse:
                 "last_observed_date": source.last_observed_date,
             },
         )
+        # Sprint 9 A9.1 — advisory audit log (CSV append).
+        try:
+            audit_append(result, log_path=_AUDIT_LOG_PATH)
+        except Exception:  # audit basarisizligi response'u bozmasin
+            pass
+        _cache.set(normalized, result)
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
