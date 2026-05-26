@@ -1,3 +1,31 @@
+## [2026-05-26] Feature | Sprint 8 — Analysis API Faz 2 doldurma (confidence reasons + ensemble agreement + /v1 alias)
+
+- `src/api/services/analysis_service.py`:
+  - `compute_confidence` cagrisi `psi_high` (PSI 30d major_drift),
+    `rmse_vs_benchmark`, `ensemble_direction_agreement` parametreleriyle
+    beslendi (Faz 2 confidence hesabi).
+  - `_build_positive_reasons()` helper eklendi: `dir_acc`, `hit_rate`,
+    `rmse_vs_benchmark < 1.0`, `stability_score >= 0.5`, `composite_score`,
+    `ensemble_direction_agreement >= 5/7`, `psi_status == "stable"`
+    sinyallerinden Turkce kisa neden ifadeleri uretir.
+  - `confidence.reasons` medium/high label'larinda dolduruluyor.
+  - moderate_drift `data_drift_moderate:` warning string'i ve high->medium
+    downgrade'i tutuldu; major_drift compute_confidence path'iyla zaten
+    low'a dusurulurken `data_drift_major:` warning'i de eklendi.
+- `src/api/routers/analysis.py`: `/v1/analysis/{symbol}` alias rotasi eklendi
+  (gelecek breaking change icin yer). Davranis `/analysis/{symbol}` ile birebir
+  ayni; sadece path versiyonlu.
+- `forecast.ensemble_agreement` (zaten Sprint 4'te persistence + schema
+  hazirlanmisti) confidence-and-risk-policy ile akti dogrulandi.
+- XAI top reasons (`build_xai_product_summary`) zaten CSV'den okuyup
+  yayinliyor; degisiklik gerektirmedi.
+- Wiki: `analysis-api-contract.md` source_count 6->7; "Confidence Reasons"
+  + "Forecast Ensemble Agreement" + `/v1` alias bolumleri eklendi.
+- Tests: `test_analysis_api_faz2.py` (8 test: confidence reasons,
+  quantile fields propagation via monkeypatch, ensemble agreement,
+  disclaimer, data_quality block, /v1 alias). Sprint 0-8 toplam:
+  108 pass / 6 skip (FastAPI/httpx eksik env'lerde alias testleri skip).
+
 ## [2026-05-25] Decision | Plan PAUSED at Sprint 8
 
 - Sprint 7 (`71bba60`) tamamlandi (calendar + cross-sectional momentum +

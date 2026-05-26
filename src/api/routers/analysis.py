@@ -19,6 +19,13 @@ _service = AnalysisService()
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 
+@router.get("/v1/analysis/{symbol}", response_model=AnalysisResponse)
+def get_analysis_v1(symbol: str) -> AnalysisResponse:
+    """Sprint 8 A8.6 — /analysis ile ayni sozlesme; gelecek breaking change
+    icin versiyonlu alias. Davranis birebir ayni."""
+    return get_analysis(symbol)
+
+
 @router.get("/analysis/{symbol}", response_model=AnalysisResponse)
 def get_analysis(symbol: str) -> AnalysisResponse:
     """Belirtilen hisse için tek seferlik analiz payload'u döner.

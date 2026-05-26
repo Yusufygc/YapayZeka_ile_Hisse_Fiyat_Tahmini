@@ -240,35 +240,57 @@ def _build_forecast_response(
     perf = _build_performance_block(best)
     live_model_status = _live_model_status(db, symbol)
 
+    # Sprint 7 A7.3 — early PSI fetch (re-used in confidence + response).
+    _early_dq = _build_data_quality_block(symbol=symbol, project_root=project_root)
+    psi_high = _early_dq.psi_status == "major_drift"
+
+    ensemble_agreement_raw = forecast_row.get("ensemble_direction_agreement")
+    ensemble_agreement = (
+        float(ensemble_agreement_raw) if ensemble_agreement_raw is not None else None
+    )
+
     conf_result = compute_confidence(
         eligibility_status=str(best.get("eligibility_status", "eligible")),
         data_freshness=freshness.status,
         directional_accuracy=best.get("dir_acc"),
-        rmse_vs_benchmark=None,
+        rmse_vs_benchmark=best.get("rmse_vs_benchmark"),
         signal_diagnosis=best.get("signal_diagnosis"),
         stability_score=best.get("stability_score"),
+        psi_high=psi_high,
         model_status=live_model_status,
+        ensemble_direction_agreement=ensemble_agreement,
     )
     warnings = list(conf_result.warnings)
     if freshness.warning:
         warnings.append(freshness.warning)
-    # Sprint 7 A7.3 — major_drift confidence warning + label downgrade.
-    _early_dq = _build_data_quality_block(symbol=symbol, project_root=project_root)
+
+    # Sprint 8 A8.1 — pozitif sebepleri ekle (high veya medium icin).
+    reasons = list(conf_result.reasons)
+    positive_reasons = _build_positive_reasons(
+        best=best,
+        ensemble_agreement=ensemble_agreement,
+        data_quality_block=_early_dq,
+    )
+    if conf_result.label in {"medium", "high"}:
+        reasons.extend(positive_reasons)
+
+    # Sprint 7 A7.3 — moderate_drift soft downgrade (major_drift compute_confidence
+    # icinde psi_high path'iyle zaten hard block oluyor; burada moderate'i ekle).
     conf_label = conf_result.label
-    if _early_dq.psi_status == "major_drift":
-        warnings.append(
-            f"data_drift_major:psi_30d={_early_dq.psi_30d:.3f}_>=0.25"
-        )
-        conf_label = "low"
-    elif _early_dq.psi_status == "moderate_drift":
+    if _early_dq.psi_status == "moderate_drift":
         warnings.append(
             f"data_drift_moderate:psi_30d={_early_dq.psi_30d:.3f}"
         )
         if conf_label == "high":
             conf_label = "medium"
+    elif _early_dq.psi_status == "major_drift" and _early_dq.psi_30d is not None:
+        # compute_confidence zaten low veriyor; richer warning string ekle.
+        warnings.append(
+            f"data_drift_major:psi_30d={_early_dq.psi_30d:.3f}_>=0.25"
+        )
     conf_block = ConfidenceBlock(
         label=conf_label,
-        reasons=conf_result.reasons,
+        reasons=reasons,
         warnings=warnings,
     )
 
@@ -312,6 +334,71 @@ def _build_forecast_response(
         forecast_source=_build_forecast_source_block(forecast_row),
         data_quality=data_quality_block,
     )
+
+
+def _build_positive_reasons(
+    *,
+    best: Dict[str, Any],
+    ensemble_agreement: Optional[float],
+    data_quality_block: "DataQualityBlock",
+) -> list:
+    """
+    Sprint 8 A8.1 — confidence.reasons pozitif sinyalleri.
+
+    confidence-and-risk-policy.md uyari mapping'i: medium/high label'larda
+    kullaniciya neden bu seviye verildigini anlatan kisa Turkce ifadeler.
+    """
+    reasons: list = []
+    dir_acc = best.get("dir_acc")
+    if dir_acc is not None:
+        try:
+            reasons.append(f"Walk-forward yonsel dogruluk: %{float(dir_acc):.1f}")
+        except (TypeError, ValueError):
+            pass
+
+    hit_rate = best.get("hit_rate")
+    if hit_rate is not None:
+        try:
+            reasons.append(f"Hit rate: %{float(hit_rate):.1f}")
+        except (TypeError, ValueError):
+            pass
+
+    rmse_bench = best.get("rmse_vs_benchmark")
+    if rmse_bench is not None:
+        try:
+            ratio = float(rmse_bench)
+            if ratio < 1.0:
+                reasons.append(
+                    f"RMSE benchmark altinda (rmse_vs_benchmark={ratio:.3f})"
+                )
+        except (TypeError, ValueError):
+            pass
+
+    stability = best.get("stability_score")
+    if stability is not None:
+        try:
+            val = float(stability)
+            if val >= 0.5:
+                reasons.append(f"Fold istikrari yuksek (stability_score={val:.2f})")
+        except (TypeError, ValueError):
+            pass
+
+    composite = best.get("composite_score")
+    if composite is not None:
+        try:
+            reasons.append(f"Composite score: {float(composite):.1f}/100")
+        except (TypeError, ValueError):
+            pass
+
+    if ensemble_agreement is not None and ensemble_agreement >= 5 / 7:
+        reasons.append(
+            f"Ensemble yon uzlasisi yuksek ({ensemble_agreement:.2f})"
+        )
+
+    if data_quality_block.psi_status == "stable":
+        reasons.append("Veri dagilimi stabil (PSI 30g < 0.10)")
+
+    return reasons
 
 
 def _build_data_quality_block(

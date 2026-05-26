@@ -4,7 +4,7 @@ type: concept
 status: active
 last_updated: 2026-05-25
 owner: llm
-source_count: 6
+source_count: 7
 ---
 
 # Analysis API Contract
@@ -17,9 +17,14 @@ product-facing endpoint; existing registry endpoints (`/best-model`,
 
 ```http
 GET /analysis/{symbol}
+GET /v1/analysis/{symbol}   # Sprint 8 A8.6 — versiyonlu alias, ayni davranis
 ```
 
 `symbol` is case-insensitive (e.g. `TUPRS`, `tuprs`).
+The `/v1/` alias is intended for clients that want explicit API versioning;
+its response body is byte-identical to `/analysis/{symbol}` (sans
+`generated_at` timestamp). A future breaking change will introduce `/v2/`
+without altering `/v1/`.
 
 For Faz 2+, if user-specific scenario parameters are required a
 `POST /assistant/stock-analysis` variant can be added.
@@ -231,6 +236,42 @@ Every XAI block must include the caveat string:
 ```
 XAI, modelin tahmininde öne çıkan değişkenleri gösterir; nedensellik kanıtı değildir.
 ```
+
+## Confidence Reasons (Sprint 8 — 2026-05-25)
+
+`confidence.reasons` is populated for both `medium` and `high` labels with
+positive signals so consumers can render rationale strings. The current
+generator (`analysis_service._build_positive_reasons`) emits a subset of:
+
+| Trigger | Example |
+|---|---|
+| Always when present | `Walk-forward yonsel dogruluk: %62.0` |
+| `hit_rate` present | `Hit rate: %58.0` |
+| `rmse_vs_benchmark < 1.0` | `RMSE benchmark altinda (rmse_vs_benchmark=0.850)` |
+| `stability_score >= 0.5` | `Fold istikrari yuksek (stability_score=0.65)` |
+| `composite_score` present | `Composite score: 78.0/100` |
+| `ensemble_direction_agreement >= 5/7` | `Ensemble yon uzlasisi yuksek (0.83)` |
+| `data_quality.psi_status == "stable"` | `Veri dagilimi stabil (PSI 30g < 0.10)` |
+
+Negative reasons come from `compute_confidence` directly (e.g. signal
+diagnosis flags, low stability, low ensemble agreement). The two lists
+share the same `reasons` array.
+
+`confidence.warnings` accumulates:
+
+- Stale data: `Veri guncel degil; tahmin yorumlanirken dikkatli olunmali.`
+- `data_drift_moderate:psi_30d=<value>` (Sprint 7)
+- `data_drift_major:psi_30d=<value>_>=0.25` (Sprint 7; also forces `low`)
+- Other compute_confidence warnings (PSI hard block, corporate-action,
+  degraded model status, etc.)
+
+## Forecast Ensemble Agreement (Sprint 8 A8.4)
+
+`forecast.ensemble_agreement` is populated for ensemble forecast rows from
+the persisted `ensemble_direction_agreement` column. Value range: `0.0..1.0`
+(fraction of ensemble members that match the head model's direction).
+Single-model forecasts return `null`. Used by `compute_confidence` as a
+soft signal — `< 0.5` degrades to medium, `>= 5/7` allows high.
 
 ## Data Quality Block (Sprint 7 — 2026-05-25)
 
