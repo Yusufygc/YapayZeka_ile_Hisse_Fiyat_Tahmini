@@ -70,6 +70,13 @@ def test_walk_forward_split_excludes_final_holdout_from_selection(monkeypatch, t
         wf_min_train_size=10,
         wf_test_size=4,
         wf_max_train_size=20,
+        # wf_embargo_size None/0/negatif birakilirsa _resolve_wf_embargo_size
+        # max(200, time_steps)=200'e cikar; bu fixture'da (40 satir)
+        # min_required=222>40 olur ve holdout ayrilamaz. Test holdout-exclusion
+        # davranisini olcer (embargo'yu degil) ve walk_forward_splits zaten
+        # monkeypatch'li (embargo_context 2 satir), bu yuzden embargo'yu 2'ye
+        # sabitliyoruz: min_required=10+2+8+4=24<=40, holdout ayrilir.
+        wf_embargo_size=2,
         final_holdout_size=4,
     )
     manager = _manager(tmp_path, val_cfg=val_cfg)

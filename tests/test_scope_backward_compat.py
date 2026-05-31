@@ -32,6 +32,8 @@ def test_candidate_models_content():
         "Prophet", "ARIMA", "Ridge Return", "ElasticNet Return", "LightGBM Return",
         "DLinear", "NLinear", "XGBoost", "Random Forest", "LSTM", "LSTM Lite",
         "AttentionLSTM v2", "Prophet-ML/DL Hybrid",
+        # Sprint 4: quantile LightGBM candidate olarak eklendi.
+        "LightGBM Quantile",
     }
     assert set(CANDIDATE_MODELS) == expected
 
@@ -50,6 +52,9 @@ def test_canonical_ordering_preserved():
         "Prophet", "ARIMA", "Ridge Return", "ElasticNet Return", "LightGBM Return",
         "DLinear", "NLinear", "XGBoost", "Random Forest", "LSTM", "LSTM Lite",
         "AttentionLSTM v2", "Prophet-ML/DL Hybrid",
+        # Sprint 4: "LightGBM Quantile" _CANONICAL_ORDER'da degil; _sort_by_canonical
+        # alfabetik leftover olarak sona ekler.
+        "LightGBM Quantile",
     )
     assert CANDIDATE_MODELS == expected_order
 

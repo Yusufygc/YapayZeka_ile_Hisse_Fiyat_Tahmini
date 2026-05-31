@@ -84,6 +84,11 @@ def test_recursive_forecast_updates_feature_state_between_horizons(tmp_path):
         def predict(self, model_name, model, context):
             return float(context["latest_X"][0, 0])
 
+        def predict_quantiles_target(self, model_name, model, context, quantiles=(0.1, 0.5, 0.9)):
+            # Sprint 4 A4.4: roll_forward_recursive predictor'dan bu metodu
+            # cagiriyor; quantile desteklemeyen model icin None doner (kontrat).
+            return None
+
     class Scaler:
         def transform(self, values):
             return np.asarray(values, dtype=float)

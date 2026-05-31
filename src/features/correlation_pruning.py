@@ -13,12 +13,20 @@ def prune_correlated_features(
     feature_names: list[str],
     *,
     threshold: float,
+    fit_df: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, list[str], dict[str, Any]]:
+    """Korelasyon-bazli feature pruning.
+
+    Leakage onlemi: korelasyon matrisi ``fit_df`` verilirse yalnizca o
+    (egitim) dilimi uzerinden hesaplanir; dusurme karari tum ``df``'e
+    uygulanir. ``fit_df=None`` ise geriye-uyumlu olarak tum ``df`` kullanilir.
+    """
     numeric_features = [name for name in feature_names if pd.api.types.is_numeric_dtype(df[name])]
     if len(numeric_features) < 2:
         return df, feature_names, _report(threshold, [])
 
-    corr = df[numeric_features].corr().abs()
+    corr_source = df if fit_df is None else fit_df
+    corr = corr_source[numeric_features].corr().abs()
     feature_order = {name: idx for idx, name in enumerate(feature_names)}
     adjacency = _correlation_adjacency(corr, numeric_features, threshold)
     dropped = _cluster_drop_decisions(corr, numeric_features, feature_order, adjacency)

@@ -72,11 +72,18 @@ class DataIngestionService(_OwnerBackedService):
                 correlation_threshold=self.data_cfg.correlation_threshold,
                 lag_feature_count=self.data_cfg.lag_feature_count,
             )
+            # Leakage onlemi: korelasyon pruning fit'i final holdout'u haric
+            # tutsun (feature-secim sizmasi onlemi). Holdout tail engineered
+            # frame'in sonundan kesilir; pruning de ayni tail'i corr'dan disar.
+            prune_fit_tail = int(
+                getattr(self, "validation_config", {}).get("final_holdout_size", 0) or 0
+            )
             self.df = feature_pipeline.engineer_features(
                 raw_df,
                 macro_df=macro_df,
                 symbol=self.stock_symbol,
                 sector_mapping=sector_mapping,
+                prune_fit_tail=prune_fit_tail,
             )
             self.feature_names = feature_pipeline.feature_names
             self.feature_groups = feature_pipeline.feature_groups

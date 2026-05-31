@@ -88,7 +88,18 @@ def compute_psi(
     holdout_df,
     exclude_cols: Optional[list] = None,
 ) -> Dict[str, float]:
-    exclude = set(exclude_cols or []) | {"Date", "date", "Symbol", "symbol"}
+    # Ham OHLCV/fiyat sutunlari non-stationary; trend nedeniyle PSI daima
+    # yuksek cikar ve psi_high'i yaniltici sekilde tetikler. Yalnizca
+    # durağan feature'lar uzerinde PSI hesapla.
+    _RAW_NON_STATIONARY = {
+        "Open", "High", "Low", "Close", "Adj_Close", "Volume",
+        "open", "high", "low", "close", "adj_close", "volume",
+    }
+    exclude = (
+        set(exclude_cols or [])
+        | {"Date", "date", "Symbol", "symbol"}
+        | _RAW_NON_STATIONARY
+    )
     numeric_cols = [
         c for c in train_df.columns
         if c not in exclude and np.issubdtype(train_df[c].dtype, np.number)

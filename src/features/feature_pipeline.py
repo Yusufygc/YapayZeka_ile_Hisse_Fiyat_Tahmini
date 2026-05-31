@@ -97,6 +97,7 @@ class FeaturePipeline:
         macro_df: Optional[pd.DataFrame] = None,
         symbol: Optional[str] = None,
         sector_mapping: Optional[SectorMapping | dict] = None,
+        prune_fit_tail: int = 0,
     ) -> pd.DataFrame:
         """
         Tüm özellik üretim adımlarını sırayla uygular.
@@ -157,20 +158,30 @@ class FeaturePipeline:
 
         candidate_features = [c for c in df.columns if c not in ["Date", self.close_col]]
         if self.prune_correlated_features:
-            df, candidate_features = self._prune_correlated(df, candidate_features)
+            df, candidate_features = self._prune_correlated(
+                df, candidate_features, prune_fit_tail=prune_fit_tail
+            )
 
         self.feature_names = candidate_features
         self.feature_groups = {name: feature_group(name) for name in self.feature_names}
         return df
 
     def _prune_correlated(
-        self, df: pd.DataFrame, feature_names: list[str]
+        self, df: pd.DataFrame, feature_names: list[str], prune_fit_tail: int = 0
     ) -> tuple[pd.DataFrame, list[str]]:
+        # Leakage onlemi: korelasyon yalnizca egitim diliminde hesaplanir.
+        # prune_fit_tail > 0 ise son N satir (final holdout) corr fit'inden
+        # haric tutulur; dusurme karari tum frame'e uygulanir.
+        fit_df = None
+        if prune_fit_tail and prune_fit_tail > 0 and len(df) > prune_fit_tail:
+            fit_df = df.iloc[:-prune_fit_tail]
         df, feature_names, self.pruning_report = prune_correlated_features(
             df,
             feature_names,
             threshold=self.correlation_threshold,
+            fit_df=fit_df,
         )
+        self.pruning_report["corr_fit_excluded_tail"] = int(prune_fit_tail or 0)
         drop_names = [item["feature"] for item in self.pruning_report["dropped_features"]]
         if drop_names:
             print(
