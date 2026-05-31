@@ -40,6 +40,36 @@ def _slope(prices: np.ndarray, window: int) -> Optional[float]:
     return slope / (float(np.mean(y)) + 1e-9)
 
 
+def _regime_short_only(current: float, sma_short: Optional[float], slope: Optional[float]) -> str:
+    """SMA200 yokken (kısa geçmiş) yalnız SMA50 + slope ile rejim sınıflaması."""
+    if sma_short is None:
+        return "uncertain"
+    slope_up = slope is not None and slope > 0
+    slope_down = slope is not None and slope < 0
+    above_sma50 = current > sma_short
+    if above_sma50 and slope_up:
+        return "bull"
+    if not above_sma50 and slope_down:
+        return "bear"
+    return "uncertain"
+
+
+def _regime_full(current: float, sma_short: float, sma_long: float, slope: Optional[float]) -> str:
+    """SMA50 + SMA200 cross + slope ile tam rejim sınıflaması."""
+    slope_up = slope is not None and slope > 0
+    slope_down = slope is not None and slope < 0
+    above_sma50 = current > sma_short
+    above_sma200 = current > sma_long
+    sma_cross_bull = sma_short > sma_long
+    if above_sma50 and above_sma200 and sma_cross_bull and slope_up:
+        return "bull"
+    if not above_sma50 and not above_sma200 and not sma_cross_bull and slope_down:
+        return "bear"
+    if slope is not None and abs(slope) < 0.001:
+        return "sideways"
+    return "uncertain"
+
+
 def compute_market_regime(index_close: np.ndarray) -> str:
     """BIST100 fiyat serisinden piyasa rejimini hesapla.
 
@@ -53,30 +83,11 @@ def compute_market_regime(index_close: np.ndarray) -> str:
     sma_short = _sma(index_close, _SMA_SHORT)
     sma_long = _sma(index_close, _SMA_LONG)
     slope = _slope(index_close, _SLOPE_LOOKBACK)
-
     current = float(index_close[-1])
 
     if sma_long is None:
-        if sma_short is None:
-            return "uncertain"
-        above_sma50 = current > sma_short
-        if above_sma50 and (slope is not None and slope > 0):
-            return "bull"
-        if not above_sma50 and (slope is not None and slope < 0):
-            return "bear"
-        return "uncertain"
-
-    above_sma50 = current > sma_short
-    above_sma200 = current > sma_long
-    sma_cross_bull = sma_short > sma_long
-
-    if above_sma50 and above_sma200 and sma_cross_bull and (slope is not None and slope > 0):
-        return "bull"
-    if not above_sma50 and not above_sma200 and not sma_cross_bull and (slope is not None and slope < 0):
-        return "bear"
-    if slope is not None and abs(slope) < 0.001:
-        return "sideways"
-    return "uncertain"
+        return _regime_short_only(current, sma_short, slope)
+    return _regime_full(current, sma_short, sma_long, slope)
 
 
 def compute_relative_strength(
@@ -109,6 +120,26 @@ def compute_relative_strength(
     return "inline"
 
 
+def _forecast_alignment(market_regime: str, forecast_direction: Optional[float]) -> tuple[str, bool]:
+    """Tahmin yönü ile rejim uyumu → (alignment, regime_misalignment).
+
+    bull+yukarı / bear+aşağı = aligned; bull+aşağı / bear+yukarı = misaligned
+    (misalignment=True). Diğer tüm durumlar 'neutral'.
+    """
+    if forecast_direction is None or forecast_direction == 0:
+        return "neutral", False
+    forecast_up = forecast_direction > 0
+    if market_regime == "bull" and forecast_up:
+        return "aligned", False
+    if market_regime == "bear" and not forecast_up:
+        return "aligned", False
+    if market_regime == "bull" and not forecast_up:
+        return "misaligned", True
+    if market_regime == "bear" and forecast_up:
+        return "misaligned", True
+    return "neutral", False
+
+
 def compute_regime_context(
     stock_close: np.ndarray,
     index_close: Optional[np.ndarray] = None,
@@ -139,20 +170,7 @@ def compute_regime_context(
     if index_close is not None and len(index_close) >= 5 and stock_close is not None and len(stock_close) >= 5:
         relative_strength = compute_relative_strength(stock_close, index_close)
 
-    alignment = "neutral"
-    regime_misalignment = False
-    if forecast_direction is not None and forecast_direction != 0:
-        forecast_up = forecast_direction > 0
-        if market_regime == "bull" and forecast_up:
-            alignment = "aligned"
-        elif market_regime == "bear" and not forecast_up:
-            alignment = "aligned"
-        elif market_regime == "bull" and not forecast_up:
-            alignment = "misaligned"
-            regime_misalignment = True
-        elif market_regime == "bear" and forecast_up:
-            alignment = "misaligned"
-            regime_misalignment = True
+    alignment, regime_misalignment = _forecast_alignment(market_regime, forecast_direction)
 
     return {
         "market_regime": market_regime,

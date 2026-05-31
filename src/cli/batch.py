@@ -270,15 +270,11 @@ def _load_universe(universe_file: str) -> List[str]:
     return symbols
 
 
-def main() -> None:
-    args = _parse_args()
+def _resolve_symbols(args: argparse.Namespace) -> List[str]:
+    """--stocks/--universe'den sembol listesi üretir; pre-flight universe sync yapar.
 
-    # --list-models stand-alone: tabloyu yaz ve çık.
-    if getattr(args, "list_models", False):
-        from src.cli._model_filters import list_models_table
-        print(list_models_table())
-        return
-
+    Liste eksik/boşsa hata yazıp ``sys.exit`` ile çıkar (orijinal davranış).
+    """
     universe_path = args.universe or os.path.join(_PROJECT_ROOT, "data", "bist_universe.csv")
     try:
         from src.data.universe_sync import sync_universe
@@ -286,7 +282,6 @@ def main() -> None:
     except Exception as _exc:
         print(f"  [UNIVERSE] pre-flight sync atlandi: {_exc}")
 
-    # Hisse listesi
     if args.stocks:
         symbols = [s.strip().upper() for s in args.stocks.split(",") if s.strip()]
     elif args.universe:
@@ -298,8 +293,15 @@ def main() -> None:
     if not symbols:
         print("[ERROR] Hisse listesi boş.")
         sys.exit(1)
+    return symbols
 
-    # Sprint 0 (2026-05-25): single_split sadece --debug-quick ile kullanilabilir.
+
+def _resolve_mode(args: argparse.Namespace) -> bool:
+    """--debug-quick / --mode tutarlılığını uygular (``args.mode`` mutate edilir).
+
+    Sprint 0: single_split yalnız --debug-quick ile; aksi halde sys.exit(2).
+    Returns debug_quick bayrağı.
+    """
     debug_quick = bool(getattr(args, "debug_quick", False))
     if debug_quick:
         if args.mode != "single_split":
@@ -314,7 +316,11 @@ def main() -> None:
             "birlikte kullanilabilir."
         )
         sys.exit(2)
+    return debug_quick
 
+
+def _resolve_models(args: argparse.Namespace) -> tuple[Optional[List[str]], List[str], bool]:
+    """(selected_models, disabled_models, require_available) üçlüsünü çözer."""
     from src.cli._model_filters import resolve_selected, resolve_disabled
 
     explicit = (
@@ -329,7 +335,17 @@ def main() -> None:
     )
     disabled_models = resolve_disabled(disable=getattr(args, "disable", None))
     require_available = bool(getattr(args, "strict_deps", False))
+    return selected_models, disabled_models, require_available
 
+
+def _print_banner(
+    symbols: List[str],
+    args: argparse.Namespace,
+    selected_models: Optional[List[str]],
+    disabled_models: List[str],
+    require_available: bool,
+) -> None:
+    """Batch çalıştırma başlık özetini yazar."""
     print(f"\n{'=' * 60}")
     print(f"  ts_forecasting_lab — Batch Runner")
     print(f"{'=' * 60}")
@@ -344,32 +360,11 @@ def main() -> None:
     print(f"  Data dizini : {args.data_dir}")
     print(f"{'=' * 60}\n")
 
-    if args.dry_run:
-        print("[DRY-RUN] Çalıştırılacak hisseler:")
-        for sym in symbols:
-            csv_path = os.path.join(args.data_dir, f"{sym}.csv")
-            exists = "✓" if os.path.exists(csv_path) else "✗ (dosya yok)"
-            print(f"  {sym:12s}  {csv_path}  {exists}")
-        return
 
-    # Worker argümanları hazırla
-    worker_args = [
-        {
-            "symbol": sym,
-            "data_dir": args.data_dir,
-            "mode": args.mode,
-            "selected_models": selected_models,
-            "disabled_models": disabled_models,
-            "require_available": require_available,
-            "output_dir_base": args.output_dir,
-            "debug_quick": debug_quick,
-        }
-        for sym in symbols
-    ]
-
+def _execute_batch(worker_args: List[Dict[str, Any]], workers: int) -> List[Dict[str, Any]]:
+    """Worker'ları sıralı (workers==1) ya da ProcessPool ile paralel çalıştırır."""
     results: List[Dict[str, Any]] = []
-
-    if args.workers == 1:
+    if workers == 1:
         # Sıralı mod — hata ayıklama için daha güvenli
         for wa in worker_args:
             print(f"\n[Batch] {wa['symbol']} işleniyor...")
@@ -379,7 +374,7 @@ def main() -> None:
             print(f"  {status_icon} {wa['symbol']:12s}  {r['status']:10s}  {r['duration_sec']:.0f}s")
     else:
         # Paralel mod
-        with concurrent.futures.ProcessPoolExecutor(max_workers=args.workers) as executor:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
             future_to_sym = {
                 executor.submit(_run_single_stock, wa): wa["symbol"]
                 for wa in worker_args
@@ -400,8 +395,11 @@ def main() -> None:
                 results.append(r)
                 status_icon = "✓" if r["status"] == "ok" else "✗"
                 print(f"  {status_icon} {sym:12s}  {r['status']:10s}  {r['duration_sec']:.0f}s")
+    return results
 
-    # Özet
+
+def _print_and_save_summary(results: List[Dict[str, Any]], output_dir: str) -> None:
+    """Toplu sonuç sayımını yazar, hatalı hisseleri listeler, özet CSV/JSON kaydeder."""
     ok_count = sum(1 for r in results if r["status"] == "ok")
     err_count = sum(1 for r in results if r["status"] == "error")
     skip_count = sum(1 for r in results if r["status"] == "skipped")
@@ -418,8 +416,48 @@ def main() -> None:
             if r["status"] == "error":
                 print(f"    {r['symbol']}: {r['error']}")
 
-    csv_path = _save_summary(results, args.output_dir)
+    csv_path = _save_summary(results, output_dir)
     print(f"\n  Özet rapor: {csv_path}")
+
+
+def main() -> None:
+    args = _parse_args()
+
+    # --list-models stand-alone: tabloyu yaz ve çık.
+    if getattr(args, "list_models", False):
+        from src.cli._model_filters import list_models_table
+        print(list_models_table())
+        return
+
+    symbols = _resolve_symbols(args)
+    debug_quick = _resolve_mode(args)
+    selected_models, disabled_models, require_available = _resolve_models(args)
+    _print_banner(symbols, args, selected_models, disabled_models, require_available)
+
+    if args.dry_run:
+        print("[DRY-RUN] Çalıştırılacak hisseler:")
+        for sym in symbols:
+            csv_path = os.path.join(args.data_dir, f"{sym}.csv")
+            exists = "✓" if os.path.exists(csv_path) else "✗ (dosya yok)"
+            print(f"  {sym:12s}  {csv_path}  {exists}")
+        return
+
+    worker_args = [
+        {
+            "symbol": sym,
+            "data_dir": args.data_dir,
+            "mode": args.mode,
+            "selected_models": selected_models,
+            "disabled_models": disabled_models,
+            "require_available": require_available,
+            "output_dir_base": args.output_dir,
+            "debug_quick": debug_quick,
+        }
+        for sym in symbols
+    ]
+
+    results = _execute_batch(worker_args, args.workers)
+    _print_and_save_summary(results, args.output_dir)
 
 
 if __name__ == "__main__":

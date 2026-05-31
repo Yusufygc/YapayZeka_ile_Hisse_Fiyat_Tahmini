@@ -31,6 +31,7 @@ linked pages below.
 - [Staged Code Review Guide](code-review-stages.md): Project split into 8 dependency-ordered stages for staged code review; per-stage files, checklist, tests, and dependency notes.
 - [Code Quality and Refactoring](code-quality-and-refactoring.md): Code thresholds, file/class size limits, input validation guidelines, error handling, and datetime policy.
 - [Code Quality Audit (2026-05-31)](code-quality-audit.md): God-object/SOLID/DRY findings, bloated file/function metrics, and the phased docstring/comment plan.
+- [Staged Refactor Plan (2026-05-31)](refactor-plan.md): Per-stage god-object/complexity/SOLID-KISS-DRY findings mapped to the 8 review stages, behavior-preserving refactor actions, cross-cutting epics (owner-forward removal, DRY, god constructors), and risk-tiered execution order.
 - [Product Decision Support Design](product-decision-support-design.md): Desktop AI decision-support product boundary, target architecture, MVP scope, and phase roadmap.
 - [Analysis API Contract](analysis-api-contract.md): `GET /analysis/{symbol}` response schema, status codes, and confidence label definition.
 - [Confidence and Risk Policy](confidence-and-risk-policy.md): Confidence label derivation rules, signal-diagnosis mapping, eligibility status, and data-quality gates.

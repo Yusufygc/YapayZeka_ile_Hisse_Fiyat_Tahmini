@@ -1,3 +1,34 @@
+## [2026-05-31] Refactor | Tier 0 fonksiyon parcalama (davranis-koruyan)
+
+- `refactor-plan.md` Tier 0 uygulandi: 7 yuksek-karmasiklik fonksiyon helper'lara
+  bolundu. CXTY hepsinde hedefe (<12) indi:
+  `walk_forward_splits` 27→6, `WalkForwardValidator.run` 28→7 (171→43L),
+  `summarize_backtest` 27→10 (193→130L), `compute_market_regime` 33→4,
+  `compute_regime_context` 24→7, `compute_confidence` 41→11 (143→84L),
+  `batch.main` 37→6 (150→38L).
+- Davranis degismedi (leakage/determinizm/sys.exit/warnings semantigi korundu);
+  py_compile + 121 ilgili test yesil.
+- CLAUDE.md auto-refresh kurali graphify'dan WIKI guncellemesine cevrildi
+  (graphify auto-trigger kaldirildi).
+- Sirada Tier 1 (E2 DRY birlestirmeleri).
+
+## [2026-05-31] Ekle | Asamali refactor plani (8 asama, davranis-koruyan)
+
+- Yeni sayfa `docs/wiki/refactor-plan.md`: [code-review-stages.md] 8 asamasina
+  gore god-object / sismi dosya-fonksiyon / CXTY / SOLID-KISS-DRY bulgulari +
+  davranis-koruyan refactor aksiyonlari. `index.md`'ye link eklendi.
+- Taze AST taramasi (per-stage LOC/CXTY/god-class). En kritik: CXTY
+  `_add_walk_forward_ensembles` 58 / `_add_single_split_ensembles` 51
+  (prediction_engine), `compute_confidence` 41, `batch.main` 37,
+  `compute_market_regime` 33. En buyuk dosya `signal_calibrator.py` 997L; en
+  buyuk class `_SignalCalibratorMixin` 34m/898L.
+- Caprez-kesen epikler: E1 owner-forward kaldirma (evaluation_services +
+  forecasting/workflows, B1), E2 DRY (ikiz ensemble builder + 3x run() + tree
+  tune_and_train), E3 god constructor (orchestrator/evaluation_manager __init__).
+- Uygulama sirasi risk-ayarli 4 tier: Tier0 fonksiyon parcalama (dusuk risk) →
+  Tier1 DRY → Tier2 dosya bolme → Tier3 mimari (en son). Henuz uygulanmadi.
+- Docstring Faz 3-4 refactor sonrasina ertelendi (yapi degisecek).
+
 ## [2026-05-31] Ekle | Kod kalitesi denetimi + docstring plani (Faz 1)
 
 - Yeni sayfa `docs/wiki/code-quality-audit.md`: god-object/SOLID/DRY bulgulari +
