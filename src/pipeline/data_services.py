@@ -50,6 +50,21 @@ class DataIngestionService(_OwnerBackedService):
         self.sector_mapping_report = sector_mapping.to_dict()
 
         # Teknik + makro özellikler (cache destekli)
+        self._engineer_features_cached(raw_df, macro_df, sector_mapping)
+
+        self.survivorship_bias_report = self._check_survivorship_bias()
+
+        self._print_ingestion_summary(macro_df)
+        self._refresh_dataset_metadata()
+
+    def _engineer_features_cached(self, raw_df, macro_df, sector_mapping) -> None:
+        """Teknik + makro özellikleri üretir (FeatureCache destekli) ve self.df,
+        feature_names/groups/pruning/sector raporlarını doldurur.
+
+        Cache hit → kayıtlı frame + metadata; miss → FeaturePipeline çalıştırır ve
+        cache'e yazar. Korelasyon-pruning fit'i final holdout'u hariç tutar
+        (`prune_fit_tail`) — feature-seçim sızıntısı önlemi.
+        """
         feature_cache_dir = os.path.join(self.project_root, "data", "feature_cache")
         _cache = FeatureCache(cache_dir=feature_cache_dir, ttl_hours=24.0)
         _cache_key = _cache.make_key(self.data_cfg.data_file, self.data_cfg)
@@ -65,44 +80,45 @@ class DataIngestionService(_OwnerBackedService):
                 self.sector_mapping_report,
             )
             print("  [CACHE] Ozellik muhendisligi cache'den yuklendi.")
-        else:
-            feature_pipeline = FeaturePipeline(
-                feature_mode=self.data_cfg.feature_mode,
-                prune_correlated_features=self.data_cfg.prune_correlated_features,
-                correlation_threshold=self.data_cfg.correlation_threshold,
-                lag_feature_count=self.data_cfg.lag_feature_count,
-            )
-            # Leakage onlemi: korelasyon pruning fit'i final holdout'u haric
-            # tutsun (feature-secim sizmasi onlemi). Holdout tail engineered
-            # frame'in sonundan kesilir; pruning de ayni tail'i corr'dan disar.
-            prune_fit_tail = int(
-                getattr(self, "validation_config", {}).get("final_holdout_size", 0) or 0
-            )
-            self.df = feature_pipeline.engineer_features(
-                raw_df,
-                macro_df=macro_df,
-                symbol=self.stock_symbol,
-                sector_mapping=sector_mapping,
-                prune_fit_tail=prune_fit_tail,
-            )
-            self.feature_names = feature_pipeline.feature_names
-            self.feature_groups = feature_pipeline.feature_groups
-            self.feature_pruning_report = feature_pipeline.pruning_report
-            self.sector_mapping_report = feature_pipeline.sector_mapping_report
-            _cache.put(
-                _cache_key,
-                self.df,
-                {
-                    "feature_names": self.feature_names,
-                    "feature_groups": self.feature_groups,
-                    "feature_pruning_report": self.feature_pruning_report,
-                    "sector_mapping_report": self.sector_mapping_report,
-                },
-            )
+            return
 
-        self.survivorship_bias_report = self._check_survivorship_bias()
+        feature_pipeline = FeaturePipeline(
+            feature_mode=self.data_cfg.feature_mode,
+            prune_correlated_features=self.data_cfg.prune_correlated_features,
+            correlation_threshold=self.data_cfg.correlation_threshold,
+            lag_feature_count=self.data_cfg.lag_feature_count,
+        )
+        # Leakage onlemi: korelasyon pruning fit'i final holdout'u haric
+        # tutsun (feature-secim sizmasi onlemi). Holdout tail engineered
+        # frame'in sonundan kesilir; pruning de ayni tail'i corr'dan disar.
+        prune_fit_tail = int(
+            getattr(self, "validation_config", {}).get("final_holdout_size", 0) or 0
+        )
+        self.df = feature_pipeline.engineer_features(
+            raw_df,
+            macro_df=macro_df,
+            symbol=self.stock_symbol,
+            sector_mapping=sector_mapping,
+            prune_fit_tail=prune_fit_tail,
+        )
+        self.feature_names = feature_pipeline.feature_names
+        self.feature_groups = feature_pipeline.feature_groups
+        self.feature_pruning_report = feature_pipeline.pruning_report
+        self.sector_mapping_report = feature_pipeline.sector_mapping_report
+        _cache.put(
+            _cache_key,
+            self.df,
+            {
+                "feature_names": self.feature_names,
+                "feature_groups": self.feature_groups,
+                "feature_pruning_report": self.feature_pruning_report,
+                "sector_mapping_report": self.sector_mapping_report,
+            },
+        )
 
-        # Özet
+    def _print_ingestion_summary(self, macro_df) -> None:
+        """Veri boyutu, teknik/makro özellik sayıları, kurumsal aksiyon, pruning
+        ve eğitim penceresi özetini yazdırır (yan etkisiz, yalnız print)."""
         has_rel_str = "Relative_Strength" in self.feature_names
         has_sec_str = "Sector_Relative_Strength" in self.feature_names
         macro_base = len(MacroPipeline.macro_feature_names(include_rates=True))
@@ -145,7 +161,6 @@ class DataIngestionService(_OwnerBackedService):
                 f"{self.training_window_report.get('effective_date_end')}, "
                 f"{self.training_window_report.get('history_days')} satir)"
             )
-        self._refresh_dataset_metadata()
 
     def apply_training_window(self, raw_df: pd.DataFrame) -> pd.DataFrame:
         cfg = getattr(self, "data_cfg", self)
