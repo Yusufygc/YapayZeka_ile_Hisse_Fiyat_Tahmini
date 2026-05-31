@@ -243,5 +243,31 @@ en son.
     metadata-attach çiftleri (`composite+scope`, `leakage+family`)
     `_attach_score_metadata`/`_attach_guard_metadata` modül helper'larına alındı.
   - Doğrulama: py_compile + 114 ilgili test + tune_and_train fonksiyonel smoke yeşil.
-- **Sıradaki:** Tier 2 (dosya/sorumluluk bölme — `signal_calibrator.py`,
-  `data_services.py`, `analysis_service.build`, `api/main.py`, `macro_pipeline.py`).
+- 2026-05-31: **Tier 2 (dosya/sorumluluk bölme) tamamlandı** — her hedef ayrı
+  commit. Davranış-koruyan; her birinde ilgili test süiti yeşil.
+  - **`analysis_service.build`:** iki neredeyse-aynı refresh dalı (missing_forecast
+    + stale_data) `_try_refresh_and_rebuild`'e DRY'landi. CXTY/LOC düştü.
+  - **`api/main.py` (425→~340L):** POST /run job tracker (`RunRequest`/`RunStatus`,
+    `_jobs`, inline `_bg_run`) yeni `src/api/services/pipeline_jobs.py`'ye taşındı.
+    main artık yalnız route katmanı — gerçek SRP ayrımı.
+  - **`macro_pipeline.py`:** `get_macro_features` global-gösterge döngüsü
+    `_refresh_global_daily_frames`'e alındı (mevcut `_refresh_*` desenine uygun).
+    **Bulgu:** MacroPipeline 29 metod ama çoğu <25L + yüksek kohezyon → zorla
+    file-split YOK (cache state coupling riski, marjinal kazanım).
+  - **`data_services.py`:** `DataIngestionService.run` (123→~30L) iki helper'a
+    bölündü (`_engineer_features_cached` + `_print_ingestion_summary`).
+    **Bulgu:** dosya zaten 4 SRP servise ayrık; **paket-split GÜVENSİZ** çünkü
+    testler `data_services.load_data`/`DataUpdater`/`FeatureCache`'i monkeypatch
+    ediyor (modül namespace değişimi patch hedeflerini kırar). In-place
+    decomposition seçildi; `prepare_tensors` (scaling, yüksek sayısal risk) ertelendi.
+  - **`signal_calibrator.py` (997L):** **bulgu** — zaten yoğun decompose: 34 küçük
+    metod, grid logic önceden `signal_calibration/grid.py`'ye çıkarılmış,
+    `_calibrate_walk_forward_signal_parameters` temiz orkestrasyon. Zararlı god
+    object DEĞİL; büyüklük dağıtılmış kalibrasyon karmaşıklığından. Esas borç
+    owner-forward mixin coupling (**B1/E1**). Zorla file-split kozmetik + owner-state
+    riski (tam B1 tuzağı) olacağı için YAPILMADI; derin bölme **E1/Tier 3'e ertelendi**.
+- **Genel ilke (Tier 2):** "büyük dosya" her zaman "kötü dosya" değildir.
+  macro_pipeline + signal_calibrator zaten iyi-faktörlü; gerçek borç owner-forward
+  mimari (E1). Kozmetik LOC-azaltma için zorla bölme yapılmadı.
+- **Sıradaki:** Tier 3 (mimari — E1 owner-forward kaldırma + E3 god constructor).
+  Karakterizasyon testi gerektiren ayrı epik; en yüksek risk.

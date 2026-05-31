@@ -1,3 +1,19 @@
+## [2026-05-31] Refactor | Tier 2 dosya/sorumluluk bolme (5 commit)
+
+- `analysis_service.build`: iki refresh dali `_try_refresh_and_rebuild`'e DRY.
+- `api/main.py` (425->~340L): POST /run job tracker yeni `pipeline_jobs.py`'ye
+  tasindi; main artik yalniz route katmani.
+- `macro_pipeline`: global-gosterge dongusu `_refresh_global_daily_frames`'e.
+  Bulgu: 29 metod ama kohezyon yuksek -> zorla file-split yok.
+- `data_services`: `run` (123->~30L) iki helper'a bolundu. Bulgu: paket-split
+  GUVENSIZ (testler load_data/DataUpdater/FeatureCache monkeypatch ediyor);
+  in-place decomposition secildi. prepare_tensors (scaling) ertelendi.
+- `signal_calibrator` (997L): bulgu -> zaten yogun decompose (grid logic
+  calibration_grid.py'de). Zararli god object degil; esas borc owner-forward
+  mixin (B1/E1). Zorla split YAPILMADI; E1/Tier 3'e ertelendi.
+- Ilke: buyuk dosya != kotu dosya. Kozmetik LOC-azaltma icin zorla bolme yok.
+- Her commit davranis-koruyan; ilgili test suitleri yesil. Sirada Tier 3 (E1/E3).
+
 ## [2026-05-31] Refactor | Tier 1 E2 DRY birlestirmeleri
 
 - **Ikiz ensemble builder:** prediction_engine `_add_single_split_ensembles`
