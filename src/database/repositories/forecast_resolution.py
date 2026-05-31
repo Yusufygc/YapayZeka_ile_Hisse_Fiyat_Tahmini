@@ -1,4 +1,10 @@
 # -*- coding: utf-8 -*-
+"""Forecast doğruluk çözümleme deposu (SQLite).
+
+Sorumluluklar:
+  - ForecastResolutionRepository: gerçekleşen fiyatları kayıtlı forecast
+    noktalarıyla eşleştirir ve doğruluk metriklerini günceller.
+"""
 from __future__ import annotations
 
 import math
@@ -14,6 +20,14 @@ class ForecastResolutionRepository:
         self.db = db
 
     def resolve_forecasts(self, stock_symbol: str, actual_prices: Dict[str, float]) -> int:
+        """Gerçekleşen fiyatları forecast noktalarıyla eşleştirir, doğruluğu günceller.
+
+        Args:
+            actual_prices: tarih(str) -> gerçekleşen kapanış eşlemesi.
+
+        Returns:
+            Çözümlenen (eşleşen) forecast noktası sayısı.
+        """
         stock_symbol = stock_symbol.upper()
         normalized_actuals = {
             str(key)[:10]: float(value)
@@ -83,6 +97,7 @@ class ForecastResolutionRepository:
         )
 
     def refresh_forecast_accuracy(self, conn: sqlite3.Connection, run_id: int) -> None:
+        """Verilen forecast run'ı için toplu doğruluk metriklerini yeniden hesaplar."""
         run = conn.execute("SELECT * FROM forecast_runs WHERE id = ?", (run_id,)).fetchone()
         if run is None:
             return
@@ -144,6 +159,13 @@ class ForecastResolutionRepository:
         return int(self.db._sign(float(run["weekly_expected_return"])) == self.db._sign(weekly_actual_return))
 
     def resolve_forecasts_from_csv(self, stock_symbol: str, csv_path: str) -> int:
+        """CSV'den gerçekleşen fiyatları okuyup `resolve_forecasts`'a yönlendirir.
+
+        Tarih ve kapanış kolonlarını TR/EN başlık varyantlarından otomatik bulur.
+
+        Returns:
+            Çözümlenen forecast noktası sayısı.
+        """
         import pandas as pd
 
         df = pd.read_csv(csv_path)

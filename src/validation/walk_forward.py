@@ -108,6 +108,21 @@ class WalkForwardValidator:
         raise ValueError(f"Desteklenmeyen target_mode: {self.target_mode}")
 
     def run(self, splits: List[Dict], verbose: bool = True) -> Dict[str, Any]:
+        """Walk-forward pencerelerini sırayla eğitir/değerlendirir.
+
+        Her pencere için scaler yalnızca o fold'un train dilimine fit edilir,
+        model sıfırdan kurulur ve test diliminde tahmin üretilir; fold metrikleri
+        ve strateji getirileri toplanır (concat-Sharpe için).
+
+        Args:
+            splits: `train`/`test` (+ opsiyonel `embargo_context`) içeren pencere
+                sözlüklerinin kronolojik listesi.
+            verbose: True ise her pencere için tarih/uzunluk özetini yazdırır.
+
+        Returns:
+            Toplu fold metrikleri ve birleştirilmiş strateji getirilerini içeren
+            sözlük.
+        """
         self.results = []
         all_metrics = []
         all_strategy_returns: List[np.ndarray] = []

@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+"""Database repository paketi.
+
+Şema, deney, best-model, forecast ve forecast-çözümleme depolarını tek
+noktadan dışa açar.
+"""
 from __future__ import annotations
 
 from src.database.repositories.schema import SchemaRepository

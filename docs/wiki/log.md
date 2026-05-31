@@ -1,3 +1,96 @@
+## [2026-05-31] Ekle | Kod kalitesi denetimi + docstring plani (Faz 1)
+
+- Yeni sayfa `docs/wiki/code-quality-audit.md`: god-object/SOLID/DRY bulgulari +
+  fazli docstring/yorum plani. `index.md`'ye link eklendi.
+- Ana bulgu (B1): `evaluation_services._OwnerBackedService` ve
+  `forecasting/workflows._OwnerBackedForecastService` kozmetik servis ayrimi —
+  tum attribute erisimi tek owner'a forward; `EvaluationManager` de-facto god
+  object (48 metod, mixin'ler ~2300 satir paylasimli state). Refactor ayri plan.
+- Metrikler: public docstring kapsami %31 (145/467); module-docstring eksik 31
+  modul; 500+ satir 16 dosya; 100+ satir 31 fonksiyon.
+- **Faz 1 uygulandi:** module-docstring'i olmayan modullere sorumluluk ozeti
+  eklendi (kod davranisi degismedi).
+- **Faz 2 (oncelik 1-3) uygulandi:** 77 public docstring eklendi — validation +
+  backtest (11), persistence stock_model_db/repositories (37), api/services +
+  forecasting/workflows (29). Public docstring kapsami %31 -> %47 (145 -> 221).
+  py_compile + 89 ilgili test yesil. Faz 3-4 beklemede.
+
+## [2026-05-31] Fix | Review acik bulgulari giderildi (3 fix, 549 pass)
+
+- **#1 forecast UTC** — `database/repositories/forecast.py` `run_at` artik
+  `datetime.now(tz=timezone.utc)` (Sprint 9 UTC mandate'i; api katmaniyla tutarli).
+- **#2 PSI ham kolon** — `data/quality.py::compute_psi` ham OHLCV/fiyat
+  (Open/High/Low/Close/Adj_Close/Volume) sutunlarini disliyor; non-stationary
+  trend `psi_high`'i yaniltici tetiklemesin.
+- **#3 correlation pruning leakage** — `correlation_pruning.prune_correlated_features`
+  artik opsiyonel `fit_df` aliyor: korelasyon yalnizca egitim diliminde
+  hesaplanir, dusurme tum frame'e uygulanir. `FeaturePipeline.engineer_features`
+  `prune_fit_tail` parametresi ekledi; `DataIngestionService` final_holdout_size
+  kadar tail'i corr fit'inden cikariyor. (Residual: WF test fold'lari hala fit'te;
+  pruning default kapali.)
+- Yeni test: `tests/test_stage1_review_fixes.py` (3 test) — PSI ham kolon
+  exclusion + pruning fit_df train-only + backcompat.
+- Tum suite: **549 passed, 0 failed** (546 + 3 yeni).
+
+## [2026-05-31] Review | 8 asamali code-review tamamlandi (546 pass)
+
+- `code-review-stages.md` rehberindeki 8 asama sirayla review edildi (dl_env).
+  Tum suite yesil: **546 passed, 0 failed**.
+- Asama sonuclari: S1 Veri/Feature 66, S2 Model/Factory 125, S3 Egitim/
+  Validation 73, S4 Backtest/Sinyal 36, S5 Eval/Rapor/XAI 77, S6 Persistence 46,
+  S7 Forecast/API 92, S8 CLI/Orkestrasyon 69.
+- **3 stale test fix** (kod davranisi hep dogruydu; testler eski varsayim):
+  1. `test_data_services.py` — embargo auto-default 200 nedeniyle holdout
+     ayrilamadi; `wf_embargo_size=2` eklendi.
+  2. `test_forecast_workflows.py` — Sprint 4 `predict_quantiles_target`
+     cagrisi; fake Predictor double'a None donen metod eklendi.
+  3. `test_scope_backward_compat.py` — Sprint 4 `LightGBM Quantile` candidate
+     eklendi; beklenen set+order guncellendi (canonical leftover, sona eklenir).
+- **Leakage dogrulamasi (temiz):** scaler train-only fit, kronolojik split +
+  embargo, makro release-lag, backtest `positions[t]*realized[t]` kausal (ekstra
+  lag yok), sinyal kalibrasyon `_assert_wf_train_scope` (final holdout disi),
+  recursive forecast kausal zincir, serve'de retrain yok.
+- **Acik bulgular (fix yok, karar bekliyor):**
+  1. `correlation_pruning` tum frame uzerinde corr → feature-secim leakage
+     (default kapali, dusuk sev).
+  2. `quality.compute_psi` ham non-stationary kolonlari da alabilir → psi_high
+     yanlis tetikleme riski (caller frame netlestirilmeli).
+  3. `database/repositories/forecast.py:39` `datetime.now()` timezone-naive;
+     Sprint 9 UTC mandate'ina aykiri (api katmani UTC). Fix: `tz=timezone.utc`.
+- Kullanilan interpreter: `anaconda3/envs/dl_env` (PATH'teki Python310'da `ta` yok).
+
+## [2026-05-31] Fix | Stage 1 review — stale test (embargo auto-default)
+
+- `tests/test_data_services.py::test_walk_forward_split_excludes_final_holdout_from_selection`
+  fail veriyordu: `wf_embargo_size` set edilmediginden Sprint 0 auto-default
+  `_resolve_wf_embargo_size(None|0, time_steps=3)=max(200,3)=200` uygulaniyor,
+  40-satirlik fixture'da `min_required=10+200+8+4=222>40` → holdout ayrilamiyor,
+  `source_rows=40 != 36`. Kod davranisi DOGRU/kasitli; test Sprint 0 sonrasi
+  guncellenmemis. Fix: teste `wf_embargo_size=2` eklendi (monkeypatch'li split
+  zaten 2-satir embargo_context kullaniyor; min_required=24<=40). Test yesil.
+- Not: `_resolve_wf_embargo_size` 0 ve negatifi de "unset" sayip 200'e cikariyor;
+  embargo'yu kucuk pozitif vermek gerekir.
+- Stage 1 suite dl_env'de yesil: 66 passed.
+- Acik bulgular (henuz fix yok): (1) `correlation_pruning` tum frame uzerinde
+  corr hesapliyor → feature-secim leakage'i (default kapali, dusuk sev);
+  (2) `quality.compute_psi` Date/Symbol disindaki tum numeric kolonlari aliyor,
+  ham non-stationary `Close` gecerse psi_high yanlis tetiklenebilir — caller'in
+  hangi frame'i gecirdigi netlestirilmeli.
+- Kullanilan interpreter: `anaconda3/envs/dl_env` (Python310 PATH'inde `ta` yok).
+
+## [2026-05-31] Ekle | Aşamalı code-review rehberi
+
+- `docs/wiki/code-review-stages.md` eklendi: proje bağımlılık-sıralı 8 aşamaya
+  bölündü (1-Veri/Feature, 2-Model/Factory, 3-Eğitim/Validation, 4-Backtest/
+  Sinyal, 5-Eval/Rapor/XAI, 6-Persistence/Seçim, 7-Forecast/API, 8-CLI/
+  Orkestrasyon). Her aşama: dosya+amaç tablosu, review checklist, ilgili pytest
+  komutu, bağımlılık notu. Ayrıca aşama bağımlılık grafiği + çapraz-kesen
+  endişeler (leakage, reproducibility, UTC, CORS/rate-limit) bölümü.
+- Amaç: tek seferde review zor olan ~120 dosya / 16 modül / 68 test'i izole,
+  sıralı incelenebilir parçalara ayırmak.
+- `index.md`: System Knowledge altına yeni sayfa linki eklendi.
+- Yalnız dokümantasyon — kod değişmedi.
+
 ## [2026-05-26] Feature | Sprint 9 — Advisory audit log + response cache + rate limit + UTC datetime
 
 - `src/api/services/advisory_audit.py` eklendi: `AdvisoryAuditRecord`

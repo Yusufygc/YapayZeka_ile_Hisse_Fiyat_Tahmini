@@ -60,6 +60,7 @@ class PurgedKFold:
         self.embargo = int(embargo)
 
     def get_n_splits(self, X=None, y=None, groups=None) -> int:
+        """Fold sayısını döner (scikit-learn splitter arayüzü uyumu)."""
         return self.n_splits
 
     def split(self, X, y=None, groups=None) -> Iterator[Tuple[np.ndarray, np.ndarray]]:

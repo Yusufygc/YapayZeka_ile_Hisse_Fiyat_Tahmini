@@ -1,3 +1,9 @@
+"""Rapor biçimlendirme ve CSV çıktı yardımcıları.
+
+Sorumluluklar:
+  - Sayısal/tam-sayı kolon biçimleme ve hizalı görünüm (aligned view) üretimi.
+  - CSV yazımı ve çıktı yolu yönlendirme (route_output_path).
+"""
 from __future__ import annotations
 
 import os

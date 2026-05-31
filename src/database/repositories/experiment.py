@@ -1,4 +1,10 @@
 # -*- coding: utf-8 -*-
+"""Deney (experiment) kayıt deposu (SQLite).
+
+Sorumluluklar:
+  - ExperimentRepository: model çalıştırma metriklerini ve ensemble metadata'sını
+    kaydeder/okur; ardından best-model deposunu günceller.
+"""
 from __future__ import annotations
 
 import json
@@ -35,6 +41,14 @@ class ExperimentRepository:
         selection_source: Optional[str] = None,
         run_id: Optional[str] = None,
     ) -> int:
+        """Bir deney kaydını ekler; composite_score hesaplar ve best-model'i tetikler.
+
+        Üretim adayı + uygun validation_mode ise best_models güncellemesini
+        denetler.
+
+        Returns:
+            Eklenen deney kaydının id'si.
+        """
         composite = schema.compute_composite_score(metrics)
         trained_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         dataset_metadata = dataset_metadata or {}
@@ -132,6 +146,7 @@ class ExperimentRepository:
         model_name: Optional[str] = None,
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
+        """Deney kayıtlarını sembol/model filtreleriyle (parametrik) döner."""
         clauses, params = [], []
         if stock_symbol:
             clauses.append("stock_symbol = ?")
@@ -189,6 +204,7 @@ class ExperimentRepository:
         return [dict(row) for row in rows]
 
     def get_model_comparison(self, stock_symbol: str) -> List[Dict[str, Any]]:
+        """Sembol için model bazlı toplu istatistikleri (run sayısı, ort. skor) döner."""
         with self.db._connect() as conn:
             rows = conn.execute(
                 """

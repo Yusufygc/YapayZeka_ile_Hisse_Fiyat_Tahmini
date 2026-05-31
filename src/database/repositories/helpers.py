@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+"""Repository ortak yardımcıları.
+
+JSON-ish parse, opsiyonel float/int/text dönüşümleri ve üretim ensemble metod
+kümesi gibi tüm repository modüllerinin paylaştığı küçük saf yardımcılar.
+"""
 from __future__ import annotations
 
 import json

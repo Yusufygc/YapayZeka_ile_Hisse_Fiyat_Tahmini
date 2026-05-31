@@ -1,4 +1,10 @@
 # -*- coding: utf-8 -*-
+"""SQLite şema kurulum deposu.
+
+Sorumluluklar:
+  - SchemaRepository.initialize(): tablo/indeks DDL'lerini idempotent çalıştırır
+    (additive migration; mevcut veriyi bozmaz).
+"""
 from __future__ import annotations
 
 import sqlite3
@@ -11,6 +17,11 @@ class SchemaRepository:
         self.db = db
 
     def initialize(self) -> None:
+        """Tüm tablo/indeksleri kurar ve additive migration'ları idempotent uygular.
+
+        Tablo DDL'leri + eksik kolon eklemeleri + legacy üretim-aday migrasyonu +
+        best_models yeniden inşası. Mevcut veriyi bozmaz (yalnızca ekleme).
+        """
         with self.db._connect() as conn:
             conn.execute(schema._CREATE_EXPERIMENTS)
             conn.execute(schema._CREATE_BEST_MODELS)
@@ -33,6 +44,11 @@ class SchemaRepository:
 
     @staticmethod
     def ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+        """Kolon yoksa ALTER TABLE ile ekler (idempotent additive migration).
+
+        Not: `table`/`column`/`ddl` yalnızca dahili sabitlerden gelir (SQL identifier
+        parametrize edilemediği için string interpolasyonu kullanılır).
+        """
         existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
         if column not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
@@ -80,6 +96,11 @@ class SchemaRepository:
         self.ensure_column(conn, "best_models", "signal_diagnosis", "TEXT")
 
     def migrate_legacy_production_candidates(self, conn: sqlite3.Connection) -> None:
+        """Eski final_holdout deneylerini üretim-aday olarak geriye dönük işaretler.
+
+        Benchmark ve ensemble modelleri hariç tutulur; idempotent (yalnızca
+        COALESCE(is_production_candidate,0)=0 satırlara dokunur).
+        """
         placeholders = ",".join("?" for _ in schema.BENCHMARK_MODELS)
         conn.execute(
             f"""
@@ -95,6 +116,11 @@ class SchemaRepository:
         )
 
     def refresh_best_models_from_production_experiments(self, conn: sqlite3.Connection) -> None:
+        """best_models'i üretim-aday deneylerden yeniden inşa eder.
+
+        Üretim adayı olmayan kayıtları temizler, her sembol için en iyi üretim
+        deneyini yeniden upsert eder (final_holdout veya üretim ensemble'ları).
+        """
         conn.execute(
             """
             DELETE FROM best_models

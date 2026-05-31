@@ -38,6 +38,7 @@ class AdvisoryAuditRecord:
     analysis_status: Optional[str]
 
     def to_dict(self) -> Dict[str, Any]:
+        """Audit kaydını JSON-serileştirilebilir dict'e çevirir."""
         return {
             "timestamp_utc": self.timestamp_utc,
             "symbol": self.symbol,

@@ -44,6 +44,24 @@ class ForecastSymbolWorkflow(_OwnerBackedForecastService):
         auto_update_data: bool = True,
         auto_update_interactive: bool = False,
     ):
+        """Tek sembol için uçtan uca forward forecast üretir.
+
+        Modeli çözer, veriyi hazırlar; ensemble seçilmişse ensemble dalına,
+        aksi halde tek-model recursive horizon üretimine yönlendirir. Sonuç
+        BIST kurallarıyla band-clip edilir ve persist edilir.
+
+        Args:
+            symbol: Hisse sembolü.
+            data_file: OHLCV CSV yolu.
+            horizon_days: İleriye dönük işlem günü sayısı.
+            force_model_name: Verilirse seçim guard'ını atlayıp bu modeli kullanır.
+            use_macro: Makro feature'ları dahil et.
+            auto_update_data: Eksik/eski veriyi otomatik güncelle.
+            auto_update_interactive: Güncellemede etkileşimli onay iste.
+
+        Returns:
+            Forecast noktaları ve metadata içeren sonuç sözlüğü.
+        """
         symbol = symbol.upper()
         selection = self.model_resolver.resolve(symbol, force_model_name)
         data_manager = self.data_preparation_service.prepare(
@@ -207,6 +225,10 @@ class ForecastSymbolWorkflow(_OwnerBackedForecastService):
 
 class BestModelResolver(_OwnerBackedForecastService):
     def resolve(self, symbol: str, force_model_name: str | None = None) -> Dict[str, Any]:
+        """Forecast için kullanılacak model + mod (target/feature/scaling) seçimini döner.
+
+        `force_model_name` verilmezse kayıtlı best model kullanılır.
+        """
         best = self.db.get_best_model(symbol)
         if force_model_name:
             return {
@@ -277,6 +299,7 @@ class BestModelResolver(_OwnerBackedForecastService):
             return None
 
     def best_trainable_experiment(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Ensemble/baseline dışı, en yüksek composite_score'lu deneyi döner (yoksa None)."""
         rows = self.db.get_experiments(stock_symbol=symbol, limit=500)
         candidates = [
             row
@@ -291,6 +314,7 @@ class BestModelResolver(_OwnerBackedForecastService):
         return max(candidates, key=lambda row: float(row.get("composite_score") or float("-inf")))
 
     def latest_member_experiment(self, symbol: str, model_name: str) -> Optional[Dict[str, Any]]:
+        """Model adı için artifact dosyası mevcut olan en güncel deneyi döner (yoksa None)."""
         rows = self.db.get_experiments(stock_symbol=symbol, model_name=model_name, limit=100)
         candidates = [
             row
@@ -315,6 +339,11 @@ class ForecastDataPreparationService(_OwnerBackedForecastService):
         auto_update_data: bool,
         auto_update_interactive: bool,
     ) -> DataManager:
+        """Forecast için veriyi yükleyip feature'ları üreten DataManager döner.
+
+        single_split modunda ingest + feature engineering çalıştırır; veri boşsa
+        ValueError yükselir.
+        """
         data_cfg = DataConfig(
             data_file=data_file,
             target_mode=target_mode,
@@ -345,6 +374,13 @@ class ProductionTrainingWorkflow(_OwnerBackedForecastService):
         *,
         selection: Optional[Dict[str, Any]] = None,
     ) -> tuple[Any, Dict[str, Any]]:
+        """Üretim forecast'i için tek modeli tüm veri üzerinde yeniden eğitir.
+
+        Ensemble adları reddedilir (ayrı ensemble artifact workflow gerekir).
+
+        Returns:
+            (egitilmis_model, artifact_metadata) ikilisi.
+        """
         selection = selection or {}
         if model_name.startswith("Ensemble "):
             raise ForecastArtifactError(
@@ -480,6 +516,11 @@ class ProductionTrainingWorkflow(_OwnerBackedForecastService):
 
 class LatestTargetPredictionWorkflow(_OwnerBackedForecastService):
     def predict(self, model_name: str, model: Any, context: Dict[str, Any]) -> float:
+        """En son gözlem penceresinden tek-adım hedef tahmini üretir.
+
+        Model tipine göre (date-aware / tree / sequence) uygun giriş tensörünü
+        seçer ve son adımın skaler tahminini döner.
+        """
         if model_name in _DATE_AWARE_MODELS:
             raw = model.predict(context["latest_X"], dates_test=[context["last_observed_date"]])
             return float(np.asarray(raw).ravel()[-1])
@@ -556,6 +597,11 @@ class ForecastPointGenerator(_OwnerBackedForecastService):
         last_observed_date: Any,
         last_close: float,
     ) -> list[dict[str, Any]]:
+        """Ensemble üye nokta tahminlerini ağırlıklı birleştirip tek seriye indirger.
+
+        `method`/`weights` ile her horizon adımında üye getirilerini harmanlar ve
+        `last_close`'tan başlayarak fiyat serisini yeniden kurar.
+        """
         names = list(member_points)
         normalized = self._normalized_weights(names, weights)
         horizon = min(len(points) for points in member_points.values())
@@ -603,6 +649,11 @@ class ForecastPointGenerator(_OwnerBackedForecastService):
     def member_direction_agreement(
         member_points: Dict[str, list[dict[str, Any]]],
     ) -> Optional[float]:
+        """Ensemble üyelerinin yön (işaret) uzlaşı oranını [0.5, 1.0] döner (yoksa None).
+
+        Son horizon adımının `predicted_return` işaretlerine bakar; çoğunluk
+        oranını verir.
+        """
         if not member_points:
             return None
         returns = [
@@ -624,6 +675,14 @@ class ForecastPointGenerator(_OwnerBackedForecastService):
         predictor: LatestTargetPredictionWorkflow,
         horizon_days: int,
     ) -> list[dict[str, Any]]:
+        """Close-bağımlı feature'ları yeniden hesaplayarak recursive horizon tahmini üretir.
+
+        Her BIST işlem günü için: tahmin -> fiyat -> feature frame güncelle -> bir
+        sonraki adım. Nedensel zincir korunur (gelecek bilgisi sızmaz).
+
+        Returns:
+            Horizon boyunca tarih/fiyat/getiri nokta sözlüklerinin listesi.
+        """
         dates = self.rules.next_trading_days(context["last_observed_date"], horizon_days)
         frame = context["feature_frame"].copy()
         points: list[dict[str, Any]] = []
@@ -790,6 +849,14 @@ class ForecastPointGenerator(_OwnerBackedForecastService):
         last_observed_date: pd.Timestamp,
         target_mode: str,
     ) -> list[dict[str, Any]]:
+        """Sabit tek hedef tahminini horizon boyunca tekrarlayarak fiyat serisi üretir.
+
+        Feature recompute yapmayan basit ileri-yuvarlama; tahmini her adımda aynı
+        `predicted_target` ile uygular ve `last_close`'tan fiyatları kurar.
+
+        Returns:
+            Horizon boyunca tarih/fiyat/getiri nokta sözlüklerinin listesi.
+        """
         dates = self.rules.next_trading_days(last_observed_date, horizon_days)
         points: list[dict[str, Any]] = []
         previous_close = float(last_close)

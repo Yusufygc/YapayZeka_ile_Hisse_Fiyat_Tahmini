@@ -1,3 +1,8 @@
+"""Forward forecast persistence facade'ı.
+
+ForecastPersistence: StockModelDB üzerine ince bir kayıt katmanı; forecast run
+ve nokta tahminlerini saklar.
+"""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional

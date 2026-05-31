@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+"""Üretim 'best model' kayıt deposu (SQLite).
+
+Sorumluluklar:
+  - BestModelRepository: sembol başına seçili üretim modelini günceller/okur.
+  - Seçim guard'ı: eligible aday ineligible'ı geçmeli ve yalnızca final_holdout
+    değerlendirmesi üretim seçimine girer.
+"""
 from __future__ import annotations
 
 import json
@@ -37,6 +44,13 @@ class BestModelRepository:
         run_id: Optional[str],
         ensemble_metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
+        """Üretim best-model kaydını seçim guard'ı altında günceller.
+
+        Yalnızca final_holdout değerlendirmesi (veya üretim ensemble'ı) ve
+        production-candidate işaretli adaylar değerlendirilir. Mevcut kayıt;
+        eligibility ve composite_score karşılaştırmasında geçilirse değiştirilir
+        (eligible aday, ineligible'ı skordan bağımsız geçer).
+        """
         is_prod_ensemble = (
             str(model_name).startswith("Ensemble ")
             and ensemble_metadata
@@ -122,6 +136,10 @@ class BestModelRepository:
 
     @staticmethod
     def eligibility_from_experiment_row(row) -> tuple[str, str]:
+        """Deney satırından (status, reason) eligibility ikilisini hesaplar.
+
+        selection_guard.evaluate_best_model_eligibility'e delege eder.
+        """
         from src.pipeline.selection_guard import evaluate_best_model_eligibility
 
         ensemble_metadata = _parse_jsonish(row["ensemble_metadata_json"])
@@ -135,6 +153,7 @@ class BestModelRepository:
 
     @staticmethod
     def upsert_best_from_row(conn: sqlite3.Connection, row) -> None:
+        """Bir deney satırını best_models'e upsert eder (eligibility'yi türeterek)."""
         ensemble_metadata = _parse_jsonish(row["ensemble_metadata_json"])
         eligibility_status, eligibility_reason = BestModelRepository.eligibility_from_experiment_row(row)
         BestModelRepository.upsert_best_from_values(
@@ -193,6 +212,11 @@ class BestModelRepository:
         eligibility_reason: str = "",
         ensemble_metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
+        """best_models tablosuna ham değerlerle upsert eder (ON CONFLICT(stock_symbol)).
+
+        Guard içermeyen düşük seviyeli yazıcı; guard `update_production_best_model`
+        veya `upsert_best_from_row` içinde uygulanır.
+        """
         ensemble_metadata_json = (
             json.dumps(ensemble_metadata, ensure_ascii=False) if ensemble_metadata else None
         )
@@ -254,6 +278,7 @@ class BestModelRepository:
         )
 
     def get_best_model(self, stock_symbol: str) -> Optional[Dict[str, Any]]:
+        """Sembolün best_models satırını dict olarak döner (yoksa None)."""
         with self.db._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM best_models WHERE stock_symbol = ?",
@@ -262,6 +287,7 @@ class BestModelRepository:
         return dict(row) if row else None
 
     def get_leaderboard(self, top_n: int = 20) -> List[Dict[str, Any]]:
+        """best_models'i composite_score azalan sırada ilk `top_n` ile döner."""
         with self.db._connect() as conn:
             rows = conn.execute(
                 """

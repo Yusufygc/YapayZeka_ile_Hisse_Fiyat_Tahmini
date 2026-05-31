@@ -1,4 +1,14 @@
 # -*- coding: utf-8 -*-
+"""Backtest yürütme motoru.
+
+Sorumluluklar:
+  - run_backtest(): sinyal + fiyat serisinden pozisyon, işlem ve equity üretir.
+  - Sinyal modu seçimi (simple / professional / long-flat) ile maliyet ve
+    slippage uygulamasını equity/execution/trades yardımcılarına delege eder.
+
+Nedensellik: pozisyon[t] yalnızca t anındaki bilgiyle realized[t]'ye uygulanır
+(look-ahead yok).
+"""
 
 from __future__ import annotations
 
@@ -40,6 +50,34 @@ def run_backtest(
     signal_config: SignalConfig | None = None,
     model_metrics: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
+    """Tahmin serisinden tek bir backtest çalıştırır.
+
+    Sinyal modu (`simple` / `professional` / `long_flat`) ile sinyalleri üretir,
+    komisyon ve slippage uygulayıp pozisyon, işlem ve equity eğrisini çıkarır.
+    Pozisyon[t] yalnızca t anındaki tahminle realized[t]'ye uygulanır (look-ahead
+    yok).
+
+    Args:
+        dates: Test diliminin tarih dizisi.
+        prediction_dates: Tahminlerin ilişkilendiği tarihler (opsiyonel).
+        y_true_price: Gerçekleşen kapanış fiyatları.
+        pred_price: Modelin fiyat tahminleri.
+        prev_close: Bir önceki kapanış (sinyal yönü ve getiri için).
+        fold_ids: Walk-forward fold etiketleri (opsiyonel).
+        market_regime: Rejim etiketleri (opsiyonel).
+        model_name: Rapor/log etiketi.
+        validation_mode: Doğrulama modu (örn. `walk_forward`).
+        target_mode: `log_return` / `return` / `price`.
+        pred_target: Ham hedef tahmini; sinyal kaynağı olarak tercih edilir.
+        commission_bps: İşlem başına komisyon (baz puan).
+        slippage_bps: İşlem başına slippage (baz puan).
+        signal_mode: Sinyal üretim modu.
+        signal_config: Eşik/mod ayarları (opsiyonel).
+        model_metrics: İlişkili model metrikleri (opsiyonel).
+
+    Returns:
+        equity_curve, işlemler, pozisyonlar ve özet alanlarını içeren sözlük.
+    """
     prices = np.asarray(y_true_price, dtype=float).ravel()
     pred_price = np.asarray(pred_price, dtype=float).ravel()
     prev_close = np.asarray(prev_close, dtype=float).ravel()

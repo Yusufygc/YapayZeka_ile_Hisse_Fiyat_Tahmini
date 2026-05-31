@@ -1,9 +1,15 @@
 # -*- coding: utf-8 -*-
+"""Forward forecast çalıştırma/nokta kayıt deposu (SQLite).
+
+Sorumluluklar:
+  - ForecastRepository: forecast run ve nokta tahminlerini idempotent (run_key)
+    şekilde kaydeder. Zaman damgaları UTC (timezone-aware) tutulur.
+"""
 from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from src.database.repositories.helpers import _optional_float
@@ -35,8 +41,18 @@ class ForecastRepository:
         forecast_warnings: Optional[List[str]] = None,
         ensemble_metadata: Optional[Dict[str, Any]] = None,
     ) -> int:
+        """Forecast çalıştırmasını ve nokta tahminlerini idempotent kaydeder.
+
+        `run_key` (sembol+model+kaynak+gözlem tarihi+horizon+kurallar) ile
+        tekrarlı çağrılar aynı run'a düşer. `run_at` verilmezse UTC zaman damgası
+        kullanılır (Sprint 9 UTC mandate).
+
+        Returns:
+            forecast_runs kaydının id'si.
+        """
         stock_symbol = stock_symbol.upper()
-        run_at = run_at or datetime.now().isoformat(timespec="seconds")
+        # Sprint 9 UTC mandate: timezone-aware (api katmaniyla tutarli).
+        run_at = run_at or datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
         run_key = self.db._forecast_run_key(
             stock_symbol, model_name, source_experiment_id,
             last_observed_date, horizon_days, rules_version,
@@ -143,10 +159,12 @@ class ForecastRepository:
         )
 
     def get_latest_forecast(self, stock_symbol: str) -> Optional[Dict[str, Any]]:
+        """En son forecast çalıştırmasını (noktalarıyla) döner; yoksa None."""
         rows = self.get_forecast_history(stock_symbol, limit=1)
         return rows[0] if rows else None
 
     def get_forecast_history(self, stock_symbol: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Sembolün son `limit` forecast çalıştırmasını (her biri noktalarıyla) döner."""
         stock_symbol = stock_symbol.upper()
         with self.db._connect() as conn:
             runs = conn.execute(

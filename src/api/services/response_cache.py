@@ -40,6 +40,7 @@ class ResponseCache:
         return str(symbol).upper().strip()
 
     def get(self, symbol: str) -> Optional[Any]:
+        """Sembolün önbellekteki değerini döner; süresi geçmiş/yoksa None (lazy evict)."""
         if _DISABLED or self._ttl <= 0:
             return None
         key = self._key(symbol)
@@ -55,6 +56,7 @@ class ResponseCache:
             return entry.value
 
     def set(self, symbol: str, value: Any) -> None:
+        """Sembol için değeri TTL süresiyle önbelleğe yazar (cache kapalıysa no-op)."""
         if _DISABLED or self._ttl <= 0:
             return
         key = self._key(symbol)
@@ -63,11 +65,16 @@ class ResponseCache:
             self._store[key] = _Entry(value=value, expires_at=expires_at)
 
     def invalidate(self, symbol: str) -> bool:
+        """Sembolün önbellek girdisini siler; girdi vardıysa True döner.
+
+        Yeni training/forecast run sonrası çağrılmalı.
+        """
         key = self._key(symbol)
         with self._lock:
             return self._store.pop(key, None) is not None
 
     def clear(self) -> int:
+        """Tüm önbelleği temizler ve silinen girdi sayısını döner."""
         with self._lock:
             n = len(self._store)
             self._store.clear()
@@ -75,6 +82,7 @@ class ResponseCache:
 
     @property
     def ttl_seconds(self) -> int:
+        """Önbellek girdilerinin yaşam süresi (saniye; 0 = devre dışı)."""
         return self._ttl
 
 
@@ -82,6 +90,7 @@ _default_cache: Optional[ResponseCache] = None
 
 
 def get_default_cache() -> ResponseCache:
+    """Süreç-genelinde paylaşılan tekil ResponseCache örneğini döner (lazy init)."""
     global _default_cache
     if _default_cache is None:
         _default_cache = ResponseCache()

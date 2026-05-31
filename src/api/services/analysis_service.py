@@ -78,6 +78,20 @@ class AnalysisService:
         return StockModelDB(self._db_path)
 
     def build(self, symbol: str) -> AnalysisResponse:
+        """Sembol için tam analiz yanıtını (model + forecast + confidence) kurar.
+
+        Sembolü `^[A-Z0-9]{1,10}$` ile doğrular, best model ve forecast'i
+        DB'den çeker, güven etiketi ve gerekçelerini birleştirir.
+
+        Args:
+            symbol: Hisse sembolü (büyük harfe normalize edilir).
+
+        Returns:
+            Dolu AnalysisResponse.
+
+        Raises:
+            ValueError: Sembol formatı geçersizse.
+        """
         if not re.match(r"^[A-Z0-9]{1,10}$", symbol.upper()):
             raise ValueError(f"Invalid symbol format: {symbol}")
         symbol = symbol.upper()

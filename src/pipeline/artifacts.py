@@ -1,4 +1,10 @@
 # -*- coding: utf-8 -*-
+"""Pipeline çıktı/manifest yazma yardımcıları.
+
+Sorumluluklar:
+  - Pencere seçim kararı, run manifest ve diğer I/O + dosya formatlama
+    sorumluluklarını orchestrator'dan ayırır (orchestrator şişkinliğini azaltır).
+"""
 from __future__ import annotations
 
 import os

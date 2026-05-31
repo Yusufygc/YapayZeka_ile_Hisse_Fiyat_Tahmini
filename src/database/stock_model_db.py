@@ -366,6 +366,14 @@ class StockModelDB:
         selection_source: Optional[str] = None,
         run_id: Optional[str] = None,
     ) -> int:
+        """Bir model değerlendirme deneyini kaydeder (ExperimentRepository'e delege).
+
+        `is_production_candidate` + `validation_mode` best-model seçim guard'ını
+        besler.
+
+        Returns:
+            Eklenen deney kaydının id'si.
+        """
         self._ensure_repositories()
         return self.experiment_repository.log_experiment(
             stock_symbol=stock_symbol,
@@ -501,10 +509,12 @@ class StockModelDB:
         return self.schema_repository.refresh_best_models_from_production_experiments(conn)
 
     def get_best_model(self, stock_symbol: str) -> Optional[Dict[str, Any]]:
+        """Sembolün üretim 'best model' kaydını döner (BestModelRepository'e delege)."""
         self._ensure_repositories()
         return self.best_model_repository.get_best_model(stock_symbol)
 
     def get_leaderboard(self, top_n: int = 20) -> List[Dict[str, Any]]:
+        """En iyi modellerin lider tablosunu döner (BestModelRepository'e delege)."""
         self._ensure_repositories()
         return self.best_model_repository.get_leaderboard(top_n)
 
@@ -514,6 +524,7 @@ class StockModelDB:
         model_name: Optional[str] = None,
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
+        """Deney kayıtlarını filtreleyerek döner (ExperimentRepository'e delege)."""
         self._ensure_repositories()
         return self.experiment_repository.get_experiments(
             stock_symbol=stock_symbol,
@@ -522,12 +533,14 @@ class StockModelDB:
         )
 
     def get_model_comparison(self, stock_symbol: str) -> List[Dict[str, Any]]:
+        """Sembol için model karşılaştırma satırlarını döner (ExperimentRepository'e delege)."""
         self._ensure_repositories()
         return self.experiment_repository.get_model_comparison(stock_symbol)
 
     def get_cross_run_leaderboard(
         self, stock_symbol: str, n_runs: int = 5
     ) -> List[Dict[str, Any]]:
+        """Çoklu run boyunca lider tabloyu döner (ExperimentRepository'e delege)."""
         self._ensure_repositories()
         return self.experiment_repository.get_cross_run_leaderboard(stock_symbol, n_runs=n_runs)
 
@@ -553,6 +566,11 @@ class StockModelDB:
         forecast_warnings: Optional[List[str]] = None,
         ensemble_metadata: Optional[Dict[str, Any]] = None,
     ) -> int:
+        """Forecast çalıştırması ve nokta tahminlerini kaydeder (ForecastRepository'e delege).
+
+        Returns:
+            Eklenen forecast run kaydının id'si.
+        """
         self._ensure_repositories()
         return self.forecast_repository.log_forecast_run(
             stock_symbol=stock_symbol,
@@ -576,24 +594,29 @@ class StockModelDB:
         )
 
     def get_latest_forecast(self, stock_symbol: str) -> Optional[Dict[str, Any]]:
+        """En son forecast çalıştırmasını döner (ForecastRepository'e delege)."""
         self._ensure_repositories()
         return self.forecast_repository.get_latest_forecast(stock_symbol)
 
     def get_forecast_history(self, stock_symbol: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Forecast geçmişini döner (ForecastRepository'e delege)."""
         self._ensure_repositories()
         return self.forecast_repository.get_forecast_history(stock_symbol, limit=limit)
 
     def resolve_forecasts(self, stock_symbol: str, actual_prices: Dict[str, float]) -> int:
+        """Gerçekleşen fiyatlarla forecast noktalarını eşleştirir (ForecastResolutionRepository'e delege)."""
         self._ensure_repositories()
         return self.forecast_resolution_repository.resolve_forecasts(stock_symbol, actual_prices)
 
     def resolve_forecasts_from_csv(self, stock_symbol: str, csv_path: str) -> int:
+        """CSV'deki gerçekleşen fiyatlarla forecast'leri çözer (ForecastResolutionRepository'e delege)."""
         self._ensure_repositories()
         return self.forecast_resolution_repository.resolve_forecasts_from_csv(stock_symbol, csv_path)
 
     def get_rolling_resolution_accuracy(
         self, stock_symbol: str, days: int = 60
     ) -> Dict[str, Any]:
+        """Son `days` günlük yuvarlanan çözümleme doğruluğunu döner (ForecastResolutionRepository'e delege)."""
         self._ensure_repositories()
         return self.forecast_resolution_repository.get_rolling_resolution_accuracy(
             stock_symbol, days=days
@@ -607,6 +630,14 @@ class StockModelDB:
         job_type: str = "analysis_refresh",
         payload: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """Sembol+reason için açık (queued/running) refresh job'ı bulur veya yeni oluşturur.
+
+        Idempotent: aynı sembol/reason için aktif bir job varsa onu döner, yoksa
+        yeni `queued` job ekler.
+
+        Returns:
+            Mevcut veya yeni oluşturulan refresh job satırı (dict).
+        """
         import json as _json
         import uuid as _uuid
         from datetime import datetime as _datetime
@@ -653,6 +684,10 @@ class StockModelDB:
         payload: Optional[Dict[str, Any]] = None,
         finish: bool = False,
     ) -> None:
+        """Refresh job durumunu günceller; `finish=True` ise bitiş zamanı yazılır.
+
+        `error` ve `payload` yalnızca verildiğinde (COALESCE ile) güncellenir.
+        """
         import json as _json
         from datetime import datetime as _datetime
 
@@ -672,6 +707,7 @@ class StockModelDB:
             )
 
     def get_refresh_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """`job_id`'ye karşılık gelen refresh job satırını döner (yoksa None)."""
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM analysis_refresh_jobs WHERE job_id = ?",
@@ -680,6 +716,7 @@ class StockModelDB:
         return dict(row) if row else None
 
     def get_latest_refresh_job(self) -> Optional[Dict[str, Any]]:
+        """En son başlatılan refresh job satırını döner (yoksa None)."""
         with self._connect() as conn:
             row = conn.execute(
                 """
@@ -692,6 +729,11 @@ class StockModelDB:
         return dict(row) if row else None
 
     def get_table_counts(self, tables: Optional[List[str]] = None) -> Dict[str, Optional[int]]:
+        """Tablo başına satır sayısını döner; erişilemeyen tablo için None.
+
+        `tables` verilmezse `REQUIRED_SCHEMA_TABLES` kullanılır (yalnızca dahili
+        sabit tablo adları beklenir).
+        """
         tables = list(tables or REQUIRED_SCHEMA_TABLES)
         counts: Dict[str, Optional[int]] = {}
         with self._connect() as conn:
@@ -703,6 +745,7 @@ class StockModelDB:
         return counts
 
     def get_schema_status(self) -> Dict[str, Any]:
+        """Şema sağlığını döner: zorunlu tablolar, eksik tablolar ve satır sayıları."""
         with self._connect() as conn:
             existing = {
                 row["name"]

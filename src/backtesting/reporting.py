@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+"""Backtest rapor ve grafik çıktıları.
+
+Sorumluluklar:
+  - save_backtest_report(): CSV/MD özet ve (varsa) equity grafiği üretir.
+  - matplotlib yoksa grafik atlanır (headless-safe).
+  - Maliyet + advisory disclaimer raporlara otomatik eklenir.
+"""
 
 from __future__ import annotations
 
@@ -105,6 +112,14 @@ BACKTEST_ORDER_COLUMNS = [
 
 
 def save_backtest_report(metrics_by_model: Dict[str, Dict[str, object]], save_path: str) -> pd.DataFrame:
+    """Model bazlı backtest metriklerini CSV + hizalı görünüm olarak kaydeder.
+
+    Net getiriye (varsa Sharpe ikincil) göre sıralar ve disclaimer'lı raporu
+    `save_path`'e yazar.
+
+    Returns:
+        Sıralanmış metrik DataFrame'i.
+    """
     df = pd.DataFrame(metrics_by_model).T
     df.index.name = "Model"
     if "Model" in df.columns:
@@ -222,6 +237,14 @@ def save_fold_backtest_report(
     initial_capital: float = 100000.0,
     trial_count: int | None = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Walk-forward fold bazlı backtest sonuçlarını özetleyip kaydeder.
+
+    Her fold için metrikleri toplar, fold-bazlı ve birleşik (concat) tabloları
+    üretir; `trial_count` verilmezse model sayısından türetilir.
+
+    Returns:
+        (fold_bazli_df, birlesik_df) ikilisi.
+    """
     rows = []
     trial_count = len(backtest_results) if trial_count is None else max(1, int(trial_count))
     for model_name, result in backtest_results.items():
@@ -297,6 +320,13 @@ def save_fold_backtest_report(
 
 
 def save_trade_logs(trades_by_model: Dict[str, pd.DataFrame], save_path: str) -> pd.DataFrame:
+    """Model bazlı işlem (trade) loglarını tek tabloya birleştirip kaydeder.
+
+    Boş işlem çerçevelerini atlar, her satıra `Model` kolonu ekler.
+
+    Returns:
+        Birleştirilmiş işlem DataFrame'i (hiç işlem yoksa boş).
+    """
     frames = []
     for model_name, trades in trades_by_model.items():
         if trades is None or trades.empty:
@@ -313,6 +343,14 @@ def save_trade_logs(trades_by_model: Dict[str, pd.DataFrame], save_path: str) ->
 
 
 def save_order_report(equity_curves: Dict[str, pd.DataFrame], save_path: str) -> pd.DataFrame:
+    """Equity eğrilerinden emir (order) raporu üretip kaydeder.
+
+    Her model eğrisine `Model` kolonu ekler, `Execution_Date`/`Order_Reason`
+    alanlarını mevcut kolonlardan türetir.
+
+    Returns:
+        Birleştirilmiş emir DataFrame'i.
+    """
     frames = []
     for model_name, curve in equity_curves.items():
         if curve is None or curve.empty:
@@ -338,6 +376,11 @@ def plot_equity_curves(
     title: str,
     selected_models: set[str] | None = None,
 ) -> None:
+    """Model equity eğrilerini tek grafikte çizip `save_path`'e kaydeder.
+
+    matplotlib yoksa sessizce atlanır (headless-safe). `selected_models` verilirse
+    yalnızca o modeller çizilir.
+    """
     if plt is None:
         print("[WARN] matplotlib yok; backtest equity curve grafigi atlandi.")
         return

@@ -1,4 +1,10 @@
 # -*- coding: utf-8 -*-
+"""Backtesting paketi.
+
+Motor (run_backtest), metrikler (summarize_backtest) ve raporlama
+yardımcılarını lazy (__getattr__) olarak dışa açar; ağır importlar yalnızca
+kullanıldığında yüklenir.
+"""
 
 __all__ = [
     "plot_equity_curves",

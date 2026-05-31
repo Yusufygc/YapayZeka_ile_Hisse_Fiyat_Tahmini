@@ -61,6 +61,14 @@ class DataRefreshService:
         best_model: Optional[Dict[str, Any]] = None,
         wait_timeout_seconds: float = 0.0,
     ) -> Dict[str, Any]:
+        """Sembol için refresh job'ı sağlar (idempotent) ve opsiyonel bekler.
+
+        Aynı sembol/reason için aktif job varsa onu döner; `wait_timeout_seconds`
+        > 0 ise job bitene kadar (timeout'a dek) bekler.
+
+        Raises:
+            ValueError: Sembol formatı geçersizse.
+        """
         if not re.match(r"^[A-Z0-9]{1,10}$", symbol.upper()):
             raise ValueError(f"Invalid symbol format: {symbol}")
         payload = {
@@ -149,6 +157,7 @@ class DataRefreshService:
             )
 
     def wait_for_job(self, job_id: str, *, timeout_seconds: float) -> Dict[str, Any]:
+        """Job `completed`/`failed` olana ya da timeout dolana dek bekleyip son halini döner."""
         deadline = time.monotonic() + max(0.0, float(timeout_seconds))
         latest = self.db.get_refresh_job(job_id) or {"job_id": job_id, "status": "queued"}
         while time.monotonic() < deadline:
@@ -159,6 +168,11 @@ class DataRefreshService:
         return self.db.get_refresh_job(job_id) or latest
 
     def refresh_symbol(self, *, symbol: str, best_model: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Sembolün piyasa verisini günceller ve (gerekiyorsa) forecast'i yeniler.
+
+        Returns:
+            Yenileme sonucunu özetleyen dict.
+        """
         data_file = self.data_file_for(symbol)
         calendar_path = default_calendar_path(self.project_root)
         try:
@@ -239,6 +253,11 @@ class DataRefreshService:
         }
 
     def data_file_for(self, symbol: str) -> str:
+        """Sembolün CSV veri dosyası yolunu döner (sembolü doğrulayarak).
+
+        Raises:
+            ValueError: Sembol formatı geçersizse (path traversal koruması).
+        """
         if not re.match(r"^[A-Z0-9]{1,10}$", symbol.upper()):
             raise ValueError(f"Invalid symbol format: {symbol}")
         return os.path.join(self.project_root, "data", f"{symbol.upper()}.csv")
@@ -252,6 +271,11 @@ class DataRefreshService:
 
 
 def read_latest_market_row(csv_path: str) -> LatestMarketRow:
+    """CSV'den en son tarih/kapanış satırını okur (TR/EN kolon başlıklarını destekler).
+
+    Raises:
+        ValueError: Tarih veya kapanış kolonu bulunamazsa.
+    """
     df = pd.read_csv(csv_path)
     date_col = _find_column(df.columns, ["Date", "Tarih"])
     close_col = _find_column(df.columns, ["Close", "Kapanış", "Kapanis", "Adj Close", "Düzeltilmiş_Kapanış"])

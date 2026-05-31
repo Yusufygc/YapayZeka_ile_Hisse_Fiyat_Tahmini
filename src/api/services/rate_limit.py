@@ -36,9 +36,11 @@ class RateLimiter:
 
     @property
     def per_minute(self) -> int:
+        """Dakika başına izin verilen istek limiti (0 = devre dışı)."""
         return self._per_minute
 
     def enabled(self) -> bool:
+        """Limit pozitifse (devredeyse) True döner."""
         return self._per_minute > 0
 
     @staticmethod
@@ -46,6 +48,11 @@ class RateLimiter:
         return datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M")
 
     def is_allowed(self, ip: str) -> bool:
+        """IP için güncel dakika penceresinde limit aşılmadıysa True döner.
+
+        Trusted IP'ler ve limit kapalıysa daima True. Sayaç dakika değişince
+        sıfırlanır (sabit-window).
+        """
         if not self.enabled():
             return True
         if ip in _TRUSTED_IPS:
@@ -60,6 +67,7 @@ class RateLimiter:
             return buckets[window] <= self._per_minute
 
     def reset(self) -> None:
+        """Tüm IP sayaçlarını sıfırlar (test/manuel kullanım)."""
         with self._lock:
             self._counts.clear()
 
@@ -68,6 +76,7 @@ _default_limiter: Optional[RateLimiter] = None
 
 
 def get_default_limiter() -> RateLimiter:
+    """Süreç-genelinde paylaşılan tekil RateLimiter örneğini döner (lazy init)."""
     global _default_limiter
     if _default_limiter is None:
         _default_limiter = RateLimiter()

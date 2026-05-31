@@ -1,3 +1,11 @@
+"""BIST pay piyasası fiyat kuralları.
+
+Sorumluluklar:
+  - Fiyat adımı (tick size) ve günlük fiyat bandı (PriceBand) hesabı.
+  - Tahmin fiyatlarını geçerli tick/band'a yuvarlar ve clip eder.
+
+RULES_VERSION ile kural sürümü izlenir.
+"""
 from __future__ import annotations
 
 import math

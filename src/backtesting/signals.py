@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+"""Long/flat sinyal üretimi (simple / professional modlar).
+
+Sorumluluklar:
+  - SignalConfig: eşik ve mod ayarları (frozen dataclass).
+  - generate_simple_signals / generate_professional_signals /
+    generate_long_flat_signals: tahminlerden long/flat pozisyon serisi üretir.
+"""
 
 from __future__ import annotations
 
@@ -62,6 +69,21 @@ def generate_long_flat_signals(
     prev_close: np.ndarray,
     target_mode: str,
 ) -> np.ndarray:
+    """Hedef/fiyat tahmininden long(1)/flat(0) sinyal serisi üretir.
+
+    Sinyal kaynağı `target_mode`'a göre seçilir: `log_return`/`return` ham hedefi,
+    `price` ise (pred_price - prev_close) farkını kullanır. Kaynak > 0 olan barlar
+    long, diğerleri flat olur. Diziler en kısa ortak uzunluğa hizalanır.
+
+    Args:
+        pred_target: Ham hedef tahmini (None olabilir).
+        pred_price: Fiyat tahmini.
+        prev_close: Bir önceki kapanış.
+        target_mode: `log_return` / `return` / `price`.
+
+    Returns:
+        0.0/1.0 değerli pozisyon dizisi.
+    """
     pred_price = np.asarray(pred_price, dtype=float).ravel()
     prev_close = np.asarray(prev_close, dtype=float).ravel()
 

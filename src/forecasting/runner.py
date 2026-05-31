@@ -1,3 +1,10 @@
+"""Forward forecast orkestrasyonu (sembol bazlı).
+
+Sorumluluklar:
+  - En iyi üretim modelini çözer, veriyi hazırlar, recursive horizon tahmini
+    üretir ve BIST kurallarıyla band-clip eder; sonucu persist eder.
+  - Serve aşamasında YENİDEN EĞİTİM YOK — kayıtlı sidecar artifact kullanılır.
+"""
 from __future__ import annotations
 
 import os

@@ -1,4 +1,12 @@
 # -*- coding: utf-8 -*-
+"""Backtest performans metrikleri.
+
+Sorumluluklar:
+  - summarize_backtest(): getiri, drawdown, Sharpe/Sortino, hit-rate gibi özet
+    metrikleri hesaplar.
+  - Risk-free oran yoksa Sharpe/Sortino NaN döner ve Risk_Free_Unavailable
+    bayrağı yükselir (sessiz fallback yok).
+"""
 
 from __future__ import annotations
 
@@ -102,6 +110,23 @@ def summarize_backtest(
     risk_free_annual: float | None = None,
     trial_count: int = 1,
 ) -> Dict[str, float | str | bool]:
+    """Backtest sonucundan özet performans metriklerini hesaplar.
+
+    Net getiri, drawdown, hit-rate, Sharpe/Sortino gibi metrikleri üretir.
+    Risk-free oran None ise macro cache + env'den çözülmeye çalışılır; yine
+    bulunamazsa Sharpe/Sortino NaN döner ve `Risk_Free_Unavailable` bayrağı
+    eklenir (sessiz fallback yok). `trial_count` çoklu deneme deflated-Sharpe
+    düzeltmesi için kullanılır.
+
+    Args:
+        backtest_result: `equity_curve` ve işlem/pozisyon alanlarını içeren sonuç.
+        initial_capital: Başlangıç sermayesi.
+        risk_free_annual: Yıllık risk-free oran; None ise otomatik çözülür.
+        trial_count: Deneme sayısı (deflated-Sharpe için).
+
+    Returns:
+        Metrik adı -> değer sözlüğü (`Risk_Free_Unavailable` bayrağı dahil).
+    """
     # Sprint 1 (2026-05-25) Plan A1.1: risk_free None ise fail-loud.
     # _get_rf() macro cache + env yoksa None doner; o zaman Sharpe/Sortino
     # NaN gelir ve "Risk_Free_Unavailable" bayragi metric'e eklenir.

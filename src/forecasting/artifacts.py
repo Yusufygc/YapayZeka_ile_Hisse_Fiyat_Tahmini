@@ -1,3 +1,9 @@
+"""Üretim forecast artifact paketleme/yükleme.
+
+Sorumluluklar:
+  - ForecastArtifactPackage: model + scaler + metadata sidecar paketi.
+  - ForecastArtifactError: eksik/bozuk artifact paketinde fırlatılır.
+"""
 from __future__ import annotations
 
 import json
