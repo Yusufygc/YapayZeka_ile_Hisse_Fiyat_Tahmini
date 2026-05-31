@@ -227,5 +227,21 @@ en son.
   `_check_hard_blocks`/`_soft_degradation_reasons` (confidence); `_resolve_symbols`/
   `_resolve_mode`/`_resolve_models`/`_print_banner`/`_execute_batch`/
   `_print_and_save_summary` (batch). Doğrulama: py_compile + 121 ilgili test yeşil.
-- **Sıradaki:** Tier 1 (E2 DRY — ikiz ensemble builder, 3× run() workflow, tree
-  tune_and_train).
+- 2026-05-31: **Tier 1 (E2 DRY) tamamlandı** — kopya kod tek kaynağa indirildi:
+  - **İkiz ensemble builder:** `prediction_engine._add_single_split_ensembles`
+    (CXTY 51→17) ve `_add_walk_forward_ensembles` (CXTY 58→21); ~140 satır kopya
+    çekirdek `_compute_ensemble_blends` helper'ına çıkarıldı + ortak `payload`
+    dilimleme `_slice_template_payload`'a alındı. Cash-gate length-guard ortaklaştı
+    (normal durumda SS ile birebir, dejenere durumda strictly daha güvenli).
+  - **Tree `tune_and_train`:** yeni `src/models/_tuning.py` — `run_optuna_study`
+    (SQLite warm-start + fallback) + `stability_adjusted_cv_objective` (Sharpe CV).
+    XGBoost + Random Forest artık bu ortak çekirdeği kullanır (modele özgü tek
+    kısım param-space + fit yolu). ~50 satır × 2 kopya silindi.
+  - **3× `run()` workflow:** İncelemede güçlü ikiz OLMADIĞI görüldü (workflow
+    gövdeleri esasen farklı). Zorla template-method KASITLI uygulanmadı (B1
+    owner-forward kozmetik-SRP tuzağına düşmemek için). Yalnızca gerçek tekrar olan
+    metadata-attach çiftleri (`composite+scope`, `leakage+family`)
+    `_attach_score_metadata`/`_attach_guard_metadata` modül helper'larına alındı.
+  - Doğrulama: py_compile + 114 ilgili test + tune_and_train fonksiyonel smoke yeşil.
+- **Sıradaki:** Tier 2 (dosya/sorumluluk bölme — `signal_calibrator.py`,
+  `data_services.py`, `analysis_service.build`, `api/main.py`, `macro_pipeline.py`).

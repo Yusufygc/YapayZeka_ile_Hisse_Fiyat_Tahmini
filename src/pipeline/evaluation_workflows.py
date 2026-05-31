@@ -83,6 +83,18 @@ def _write_attention_xai_if_available(owner, *, model_name: str, model, tensors:
         print(f"  [WARN] Attention XAI tablosu olusturulamadi ({model_name}): {exc}")
 
 
+def _attach_score_metadata(svc, metrics: dict) -> dict:
+    """Composite score + model-scope metadata ekler (3 run() workflow ortak)."""
+    metrics = svc._attach_composite_scores(metrics)
+    return svc._attach_model_scope_metadata(metrics)
+
+
+def _attach_guard_metadata(svc, metrics: dict) -> dict:
+    """Leakage-guard + model-family metadata ekler (3 run() workflow ortak)."""
+    metrics = svc._attach_leakage_guard_metadata(metrics)
+    return svc._attach_model_family_metadata(metrics)
+
+
 class SingleSplitEvaluationWorkflow(_OwnerBackedService):
     def run(self, trained_models: dict):
         print("\n" + "=" * 60)
@@ -104,15 +116,13 @@ class SingleSplitEvaluationWorkflow(_OwnerBackedService):
             if name in metrics:
                 q_metrics = compute_quantile_metrics(self.y_true_aligned, q_preds)
                 metrics[name].update({key: round(value, 6) for key, value in q_metrics.items()})
-        metrics = self._attach_composite_scores(metrics)
-        metrics = self._attach_model_scope_metadata(metrics)
+        metrics = _attach_score_metadata(self, metrics)
         metrics = self._filter_reportable_models(metrics, metrics)
         self.predictions = self._filter_reportable_models(self.predictions, metrics)
         self.prediction_targets = self._filter_reportable_models(self.prediction_targets, metrics)
         self.quantile_predictions = self._filter_reportable_models(self.quantile_predictions, metrics)
         self.single_backtest_inputs = self._filter_reportable_models(self.single_backtest_inputs, metrics)
-        metrics = self._attach_leakage_guard_metadata(metrics)
-        metrics = self._attach_model_family_metadata(metrics)
+        metrics = _attach_guard_metadata(self, metrics)
         backtest_results = self._run_backtests(
             self.single_backtest_inputs,
             suffix="latest",
@@ -213,8 +223,7 @@ class WalkForwardEvaluationWorkflow(_OwnerBackedService):
         print("=" * 60)
 
         self._add_walk_forward_ensembles(wf_results, wf_predictions, wf_y_true, wf_backtest_inputs)
-        wf_results = self._attach_composite_scores(wf_results)
-        wf_results = self._attach_model_scope_metadata(wf_results)
+        wf_results = _attach_score_metadata(self, wf_results)
         wf_results = self._filter_reportable_models(wf_results, wf_results)
         wf_predictions = self._filter_reportable_models(wf_predictions, wf_results)
         wf_backtest_inputs = self._filter_reportable_models(wf_backtest_inputs or {}, wf_results)
@@ -236,8 +245,7 @@ class WalkForwardEvaluationWorkflow(_OwnerBackedService):
             signal_split_metadata,
             wf_results,
         )
-        wf_results = self._attach_leakage_guard_metadata(wf_results)
-        wf_results = self._attach_model_family_metadata(wf_results)
+        wf_results = _attach_guard_metadata(self, wf_results)
         best_model_name = self._select_best_model(wf_results)
         if best_model_name:
             print(f"\n  [INFO] Walk-forward secim modeli: {best_model_name}")
@@ -414,10 +422,8 @@ class FinalHoldoutEvaluationWorkflow(_OwnerBackedService):
         if quantile_price is not None:
             q_metrics = compute_quantile_metrics(y_true_price, quantile_price)
             metrics[model_name].update({key: round(value, 6) for key, value in q_metrics.items()})
-        metrics = self._attach_composite_scores(metrics)
-        metrics = self._attach_model_scope_metadata(metrics)
-        metrics = self._attach_leakage_guard_metadata(metrics)
-        metrics = self._attach_model_family_metadata(metrics)
+        metrics = _attach_score_metadata(self, metrics)
+        metrics = _attach_guard_metadata(self, metrics)
         metrics[model_name]["Selection_Source"] = "walk_forward_composite_score"
         metrics[model_name]["Evaluation_Set_Name"] = "untouched_final_holdout"
 

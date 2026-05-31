@@ -1,3 +1,18 @@
+## [2026-05-31] Refactor | Tier 1 E2 DRY birlestirmeleri
+
+- **Ikiz ensemble builder:** prediction_engine `_add_single_split_ensembles`
+  (CXTY 51->17) + `_add_walk_forward_ensembles` (CXTY 58->21); ~140 satir kopya
+  cekirdek `_compute_ensemble_blends`'e cikarildi, ortak payload dilimleme
+  `_slice_template_payload`'a alindi. Cash-gate length-guard ortaklasti.
+- **Tree tune_and_train:** yeni `src/models/_tuning.py` (`run_optuna_study` +
+  `stability_adjusted_cv_objective`). XGBoost + Random Forest ortak cekirdegi
+  kullanir; ~50 satir x2 kopya silindi.
+- **3x run() workflow:** guclu ikiz OLMADIGI tespit edildi; zorla template-method
+  KASITLI uygulanmadi (B1 kozmetik-SRP tuzagi). Yalniz metadata-attach ciftleri
+  `_attach_score_metadata`/`_attach_guard_metadata`'ya alindi.
+- Davranis korundu (leakage/determinizm/Optuna warm-start). py_compile + 114 test
+  + tune_and_train fonksiyonel smoke yesil. Sirada Tier 2 (dosya bolme).
+
 ## [2026-05-31] Refactor | Tier 0 fonksiyon parcalama (davranis-koruyan)
 
 - `refactor-plan.md` Tier 0 uygulandi: 7 yuksek-karmasiklik fonksiyon helper'lara

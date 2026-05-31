@@ -98,12 +98,175 @@ class _PredictionEngineMixin:
         return out
 
     @staticmethod
+    def _slice_template_payload(template: Dict[str, Any], k: int) -> Dict[str, Any]:
+        """Backtest input template'ini son ``k`` örneğe dilimleyerek kopyalar.
+
+        Dizi olmayan / k'dan kısa değerler olduğu gibi bırakılır. Single-split ve
+        walk-forward ensemble tüketim döngülerinin paylaştığı yardımcı (DRY).
+        """
+        payload: Dict[str, Any] = {}
+        for key, value in template.items():
+            arr = np.asarray(value)
+            payload[key] = arr[-k:] if arr.ndim > 0 and len(arr) >= k else value
+        return payload
+
+    @staticmethod
     def _base_predictions_for_ensemble(predictions: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
         return {
             name: np.asarray(preds, dtype=float).ravel()
             for name, preds in predictions.items()
             if not name.startswith("Ensemble ") and len(np.asarray(preds).ravel()) > 0
         }
+
+    # Ensemble katman adları (single-split + walk-forward ortak).
+    _ENSEMBLE_NAMES = (
+        "Ensemble Equal Weight",
+        "Ensemble Inverse RMSE",
+        "Ensemble Sharpe-Weighted",
+        "Ensemble Risk-Parity",
+        "Ensemble Hierarchical",
+        "Ensemble Meta-Stacker",
+        "Ensemble Cash-Gated",
+    )
+
+    def _compute_ensemble_blends(
+        self,
+        base_preds: Dict[str, np.ndarray],
+        base_targets: Dict[str, np.ndarray],
+        *,
+        y_true_inverse: Any,
+        y_true_target: Any,
+        cg_prev_close: Any,
+    ) -> list:
+        """7 ensemble ağırlığını + (name, price_preds, target_preds) tuple listesini üretir.
+
+        Single-split ve walk-forward yollarının paylaştığı çekirdek (DRY): ağırlık
+        optimizasyonu (equal/inverse-RMSE/Sharpe/risk-parity/hierarchical/meta-stacker)
+        + Sharpe-Weighted'ı miras alan cash-gate + seq-attention alt-ensemble'ları.
+        Ağırlıklar `self.ensemble_weights`'e yazılır. `cg_prev_close` cash-gate fiyat
+        geri-dönüşümü içindir; uzunluğu yetersizse cash-gate Sharpe-Weighted'a düşer.
+
+        Args:
+            base_preds: Ensemble'a girecek temel model fiyat tahminleri.
+            base_targets: Aynı modellerin hedef-uzayı tahminleri (target blend için).
+            y_true_inverse: inverse-RMSE ağırlığı için gerçek fiyat serisi.
+            y_true_target: Sharpe/risk-parity/stacker için gerçek hedef serisi.
+            cg_prev_close: Cash-gate hedef→fiyat dönüşümü için prev_close serisi.
+
+        Returns:
+            (name, price_preds, target_preds) üçlülerinin listesi.
+        """
+        n = len(base_preds)
+        (equal_name, inv_name, sharpe_name, rp_name, hier_name, stk_name, cg_name) = self._ENSEMBLE_NAMES
+
+        equal_preds = EnsembleModel().combine(base_preds)
+        inverse_weights = EnsembleModel.optimize_inverse_rmse(np.asarray(y_true_inverse), base_preds)
+        inverse_preds = EnsembleModel(inverse_weights).combine(base_preds)
+
+        y_true_target = np.asarray(y_true_target, dtype=float).ravel()
+        has_target = bool(len(y_true_target) and base_targets)
+
+        # Faz 5 Katman 1: Sharpe-weighted blend (target-space).
+        sharpe_weights = (
+            EnsembleModel.optimize_by_sharpe(y_true_target, base_targets)
+            if has_target
+            else {name: 1.0 / n for name in base_preds}
+        )
+        sharpe_preds = EnsembleModel(sharpe_weights).combine(base_preds)
+        # Faz 5 Katman 2: Risk-parity (inverse-volatility) blend.
+        if has_target:
+            pnl_vols = EnsembleModel.compute_pnl_volatilities(y_true_target, base_targets)
+            rp_weights = EnsembleModel.optimize_by_risk_parity(pnl_vols)
+        else:
+            rp_weights = {name: 1.0 / n for name in base_preds}
+        rp_preds = EnsembleModel(rp_weights).combine(base_preds)
+        # Faz 5 Katman 3: Kategori-gated hierarchical blend.
+        categories = self._resolve_categories(list(base_preds))
+        hier_weights = EnsembleModel.optimize_hierarchical_by_category(base_preds, categories)
+        hier_preds = EnsembleModel(hier_weights).combine(base_preds)
+        # Faz 5 Katman 4: Ridge meta-stacker (target-space).
+        if has_target:
+            stk_weights = EnsembleModel.optimize_by_ridge_stacker(y_true_target, base_targets, alpha=1.0)
+        else:
+            stk_weights = {name: 1.0 / n for name in base_preds}
+        stk_preds = EnsembleModel(stk_weights).combine(base_preds)
+
+        self.ensemble_weights[equal_name] = {name: round(1.0 / n, 6) for name in base_preds}
+        self.ensemble_weights[inv_name] = inverse_weights
+        self.ensemble_weights[sharpe_name] = sharpe_weights
+        self.ensemble_weights[rp_name] = rp_weights
+        self.ensemble_weights[hier_name] = hier_weights
+        self.ensemble_weights[stk_name] = stk_weights
+        # Cash-Gated, Sharpe-Weighted ağırlıklarını miras alır (gate transformasyondur, blend değil).
+        self.ensemble_weights[cg_name] = dict(sharpe_weights)
+
+        def _target(weights):
+            return self._weighted_average(base_targets, weights) if len(base_targets) >= 2 else None
+
+        equal_target = EnsembleModel().combine(base_targets) if len(base_targets) >= 2 else None
+        inverse_target = _target(inverse_weights)
+        sharpe_target = _target(sharpe_weights)
+        rp_target = _target(rp_weights)
+        hier_target = _target(hier_weights)
+        stk_target = _target(stk_weights)
+        # Faz 5 Katman 5: Cash gate (Sharpe-Weighted hedef üzerinde, agreement >= 0.6).
+        cg_target = None
+        cg_preds = sharpe_preds
+        if sharpe_target is not None and base_targets:
+            try:
+                cg_target = EnsembleModel.apply_cash_gate(
+                    sharpe_target, base_targets, magnitude_threshold=0.0, agreement_threshold=0.6
+                )
+                cg_prev = np.asarray(cg_prev_close, dtype=float).ravel()
+                if len(cg_prev) >= len(cg_target):
+                    cg_preds = self._target_to_price(cg_target, cg_prev[-len(cg_target):])
+                else:
+                    cg_target = None
+                    cg_preds = sharpe_preds
+            except AttributeError:
+                cg_target = None
+                cg_preds = sharpe_preds
+
+        ensemble_tuples = [
+            (equal_name, equal_preds, equal_target),
+            (inv_name, inverse_preds, inverse_target),
+            (sharpe_name, sharpe_preds, sharpe_target),
+            (rp_name, rp_preds, rp_target),
+            (hier_name, hier_preds, hier_target),
+            (stk_name, stk_preds, stk_target),
+            (cg_name, cg_preds, cg_target),
+        ]
+
+        # Seq-Attention alt-ensemble'lari
+        seq_attn_models = {"LSTM", "LSTM Lite", "AttentionLSTM v2"}
+        seq_attn_preds = {name: preds for name, preds in base_preds.items() if name in seq_attn_models}
+        if len(seq_attn_preds) >= 2:
+            seq_equal_name = "Ensemble Seq-Attention Equal"
+            seq_inv_name = "Ensemble Seq-Attention Inverse RMSE"
+
+            seq_equal_preds = EnsembleModel().combine(seq_attn_preds)
+            seq_inv_weights = EnsembleModel.optimize_inverse_rmse(np.asarray(y_true_inverse), seq_attn_preds)
+            seq_inv_preds = EnsembleModel(seq_inv_weights).combine(seq_attn_preds)
+
+            self.ensemble_weights[seq_equal_name] = {
+                name: round(1.0 / len(seq_attn_preds), 6) for name in seq_attn_preds
+            }
+            self.ensemble_weights[seq_inv_name] = seq_inv_weights
+
+            seq_base_targets = {name: base_targets[name] for name in seq_attn_preds if name in base_targets}
+            seq_equal_target = (
+                EnsembleModel().combine(seq_base_targets) if len(seq_base_targets) >= 2 else None
+            )
+            seq_inv_target = (
+                self._weighted_average(seq_base_targets, seq_inv_weights)
+                if len(seq_base_targets) >= 2
+                else None
+            )
+
+            ensemble_tuples.append((seq_equal_name, seq_equal_preds, seq_equal_target))
+            ensemble_tuples.append((seq_inv_name, seq_inv_preds, seq_inv_target))
+
+        return ensemble_tuples
 
     def _add_single_split_ensembles(self) -> None:
         # Sprint 0 (2026-05-25): Bu metot ensemble agirliklarini test setinin
@@ -126,143 +289,24 @@ class _PredictionEngineMixin:
         if len(base_preds) < 2 or self.y_true_aligned is None:
             return
 
-        equal_name = "Ensemble Equal Weight"
-        inv_name = "Ensemble Inverse RMSE"
-        sharpe_name = "Ensemble Sharpe-Weighted"
-        rp_name = "Ensemble Risk-Parity"
-        hier_name = "Ensemble Hierarchical"
-        stk_name = "Ensemble Meta-Stacker"
-        cg_name = "Ensemble Cash-Gated"
-        equal_preds = EnsembleModel().combine(base_preds)
-        inverse_weights = EnsembleModel.optimize_inverse_rmse(
-            np.asarray(self.y_true_aligned), base_preds
-        )
-        inverse_preds = EnsembleModel(inverse_weights).combine(base_preds)
-        # Faz 5 Katman 1: Sharpe-weighted blend.
         base_targets = {
             name: self.prediction_targets[name]
             for name in base_preds
             if name in self.prediction_targets
         }
-        y_true_target = np.asarray(getattr(self, "y_true_target_aligned", []), dtype=float).ravel()
-        sharpe_weights = (
-            EnsembleModel.optimize_by_sharpe(y_true_target, base_targets)
-            if len(y_true_target) and base_targets
-            else {name: 1.0 / len(base_preds) for name in base_preds}
+        ensemble_tuples = self._compute_ensemble_blends(
+            base_preds,
+            base_targets,
+            y_true_inverse=self.y_true_aligned,
+            y_true_target=getattr(self, "y_true_target_aligned", []),
+            cg_prev_close=self.prev_close_aligned,
         )
-        sharpe_preds = EnsembleModel(sharpe_weights).combine(base_preds)
-        # Faz 5 Katman 2: Risk-parity (inverse-volatility) blend.
-        if len(y_true_target) and base_targets:
-            pnl_vols = EnsembleModel.compute_pnl_volatilities(y_true_target, base_targets)
-            rp_weights = EnsembleModel.optimize_by_risk_parity(pnl_vols)
-        else:
-            rp_weights = {name: 1.0 / len(base_preds) for name in base_preds}
-        rp_preds = EnsembleModel(rp_weights).combine(base_preds)
-        # Faz 5 Katman 3: Kategori-gated hierarchical blend.
-        categories = self._resolve_categories(list(base_preds))
-        hier_weights = EnsembleModel.optimize_hierarchical_by_category(base_preds, categories)
-        hier_preds = EnsembleModel(hier_weights).combine(base_preds)
-        # Faz 5 Katman 4: Ridge meta-stacker (target-space).
-        if len(y_true_target) and base_targets:
-            stk_weights = EnsembleModel.optimize_by_ridge_stacker(
-                y_true_target, base_targets, alpha=1.0
-            )
-        else:
-            stk_weights = {name: 1.0 / len(base_preds) for name in base_preds}
-        stk_preds = EnsembleModel(stk_weights).combine(base_preds)
-        self.ensemble_weights[equal_name] = {
-            name: round(1.0 / len(base_preds), 6) for name in base_preds
-        }
-        self.ensemble_weights[inv_name] = inverse_weights
-        self.ensemble_weights[sharpe_name] = sharpe_weights
-        self.ensemble_weights[rp_name] = rp_weights
-        self.ensemble_weights[hier_name] = hier_weights
-        self.ensemble_weights[stk_name] = stk_weights
-        # Cash-Gated, Sharpe-Weighted ağırlıklarını miras alır (gate transformasyondur, blend değil).
-        self.ensemble_weights[cg_name] = dict(sharpe_weights)
-        # Sprint 0 (2026-05-25): leakage flag metadata
+
+        # Sprint 0 (2026-05-25): leakage flag metadata (sadece ana 7 ensemble).
         if not hasattr(self, "ensemble_weight_scope"):
             self.ensemble_weight_scope: Dict[str, str] = {}
-        for _name in (equal_name, inv_name, sharpe_name, rp_name, hier_name, stk_name, cg_name):
+        for _name in self._ENSEMBLE_NAMES:
             self.ensemble_weight_scope[_name] = "in_sample_test_set_research_only"
-
-        equal_target = EnsembleModel().combine(base_targets) if len(base_targets) >= 2 else None
-        inverse_target = (
-            self._weighted_average(base_targets, inverse_weights)
-            if len(base_targets) >= 2
-            else None
-        )
-        sharpe_target = (
-            self._weighted_average(base_targets, sharpe_weights) if len(base_targets) >= 2 else None
-        )
-        rp_target = (
-            self._weighted_average(base_targets, rp_weights) if len(base_targets) >= 2 else None
-        )
-        hier_target = (
-            self._weighted_average(base_targets, hier_weights) if len(base_targets) >= 2 else None
-        )
-        stk_target = (
-            self._weighted_average(base_targets, stk_weights) if len(base_targets) >= 2 else None
-        )
-        # Faz 5 Katman 5: Cash gate (Sharpe-Weighted hedef üzerinde, agreement >= 0.6).
-        cg_target = None
-        cg_preds = sharpe_preds
-        if sharpe_target is not None and base_targets:
-            try:
-                cg_target = EnsembleModel.apply_cash_gate(
-                    sharpe_target, base_targets, magnitude_threshold=0.0, agreement_threshold=0.6
-                )
-                cg_preds = self._target_to_price(
-                    cg_target, self.prev_close_aligned[-len(cg_target) :]
-                )
-            except AttributeError:
-                cg_target = None
-                cg_preds = sharpe_preds
-
-        ensemble_tuples = [
-            (equal_name, equal_preds, equal_target),
-            (inv_name, inverse_preds, inverse_target),
-            (sharpe_name, sharpe_preds, sharpe_target),
-            (rp_name, rp_preds, rp_target),
-            (hier_name, hier_preds, hier_target),
-            (stk_name, stk_preds, stk_target),
-            (cg_name, cg_preds, cg_target),
-        ]
-
-        # Seq-Attention ensembles
-        seq_attn_models = {"LSTM", "LSTM Lite", "AttentionLSTM v2"}
-        seq_attn_preds = {
-            name: preds for name, preds in base_preds.items() if name in seq_attn_models
-        }
-        if len(seq_attn_preds) >= 2:
-            seq_equal_name = "Ensemble Seq-Attention Equal"
-            seq_inv_name = "Ensemble Seq-Attention Inverse RMSE"
-
-            seq_equal_preds = EnsembleModel().combine(seq_attn_preds)
-            seq_inv_weights = EnsembleModel.optimize_inverse_rmse(
-                np.asarray(self.y_true_aligned), seq_attn_preds
-            )
-            seq_inv_preds = EnsembleModel(seq_inv_weights).combine(seq_attn_preds)
-
-            self.ensemble_weights[seq_equal_name] = {
-                name: round(1.0 / len(seq_attn_preds), 6) for name in seq_attn_preds
-            }
-            self.ensemble_weights[seq_inv_name] = seq_inv_weights
-
-            seq_base_targets = {
-                name: base_targets[name] for name in seq_attn_preds if name in base_targets
-            }
-            seq_equal_target = (
-                EnsembleModel().combine(seq_base_targets) if len(seq_base_targets) >= 2 else None
-            )
-            seq_inv_target = (
-                self._weighted_average(seq_base_targets, seq_inv_weights)
-                if len(seq_base_targets) >= 2
-                else None
-            )
-
-            ensemble_tuples.append((seq_equal_name, seq_equal_preds, seq_equal_target))
-            ensemble_tuples.append((seq_inv_name, seq_inv_preds, seq_inv_target))
 
         for name, pred_price, pred_target in ensemble_tuples:
             k = min(len(pred_price), len(self.y_true_aligned), len(self.prev_close_aligned))
@@ -271,10 +315,7 @@ class _PredictionEngineMixin:
                 self.prediction_targets[name] = np.asarray(pred_target)[-k:]
             template = next(iter(self.single_backtest_inputs.values()), None)
             if template:
-                payload = {}
-                for key, value in template.items():
-                    arr = np.asarray(value)
-                    payload[key] = arr[-k:] if arr.ndim > 0 and len(arr) >= k else value
+                payload = self._slice_template_payload(template, k)
                 payload["pred_price"] = self.predictions[name]
                 payload["pred_target"] = self.prediction_targets.get(name)
                 self.single_backtest_inputs[name] = payload
@@ -301,17 +342,6 @@ class _PredictionEngineMixin:
         if len(base_preds) < 2:
             return
 
-        equal_name = "Ensemble Equal Weight"
-        inv_name = "Ensemble Inverse RMSE"
-        sharpe_name = "Ensemble Sharpe-Weighted"
-        rp_name = "Ensemble Risk-Parity"
-        hier_name = "Ensemble Hierarchical"
-        stk_name = "Ensemble Meta-Stacker"
-        cg_name = "Ensemble Cash-Gated"
-        equal_preds = EnsembleModel().combine(base_preds)
-        inverse_weights = EnsembleModel.optimize_inverse_rmse(np.asarray(wf_y_true), base_preds)
-        inverse_preds = EnsembleModel(inverse_weights).combine(base_preds)
-
         bt_inputs = wf_backtest_inputs or {}
         template = next(iter(bt_inputs.values()), None)
         base_targets = {
@@ -319,131 +349,23 @@ class _PredictionEngineMixin:
             for name in base_preds
             if name in bt_inputs and "pred_target" in bt_inputs[name]
         }
-        # Faz 5 Katman 1: Sharpe-weighted blend (target-space).
-        y_true_target = (
+        y_true_target_tpl = (
             np.asarray(template.get("y_true_target", []), dtype=float).ravel()
             if template
             else np.asarray([])
         )
-        sharpe_weights = (
-            EnsembleModel.optimize_by_sharpe(y_true_target, base_targets)
-            if len(y_true_target) and base_targets
-            else {name: 1.0 / len(base_preds) for name in base_preds}
+        prev_close_tpl = (
+            np.asarray(template.get("prev_close", []), dtype=float).ravel()
+            if template
+            else np.array([])
         )
-        sharpe_preds = EnsembleModel(sharpe_weights).combine(base_preds)
-        # Faz 5 Katman 2: Risk-parity blend (target-space PnL).
-        if len(y_true_target) and base_targets:
-            pnl_vols = EnsembleModel.compute_pnl_volatilities(y_true_target, base_targets)
-            rp_weights = EnsembleModel.optimize_by_risk_parity(pnl_vols)
-        else:
-            rp_weights = {name: 1.0 / len(base_preds) for name in base_preds}
-        rp_preds = EnsembleModel(rp_weights).combine(base_preds)
-        # Faz 5 Katman 3: Kategori-gated hierarchical blend.
-        categories = self._resolve_categories(list(base_preds))
-        hier_weights = EnsembleModel.optimize_hierarchical_by_category(base_preds, categories)
-        hier_preds = EnsembleModel(hier_weights).combine(base_preds)
-        # Faz 5 Katman 4: Ridge meta-stacker (OOF — WF y_true zaten fold birleşimi).
-        if len(y_true_target) and base_targets:
-            stk_weights = EnsembleModel.optimize_by_ridge_stacker(
-                y_true_target, base_targets, alpha=1.0
-            )
-        else:
-            stk_weights = {name: 1.0 / len(base_preds) for name in base_preds}
-        stk_preds = EnsembleModel(stk_weights).combine(base_preds)
-        self.ensemble_weights[equal_name] = {
-            name: round(1.0 / len(base_preds), 6) for name in base_preds
-        }
-        self.ensemble_weights[inv_name] = inverse_weights
-        self.ensemble_weights[sharpe_name] = sharpe_weights
-        self.ensemble_weights[rp_name] = rp_weights
-        self.ensemble_weights[hier_name] = hier_weights
-        self.ensemble_weights[stk_name] = stk_weights
-        self.ensemble_weights[cg_name] = dict(sharpe_weights)
-
-        equal_target = EnsembleModel().combine(base_targets) if len(base_targets) >= 2 else None
-        inverse_target = (
-            self._weighted_average(base_targets, inverse_weights)
-            if len(base_targets) >= 2
-            else None
+        ensemble_tuples = self._compute_ensemble_blends(
+            base_preds,
+            base_targets,
+            y_true_inverse=wf_y_true,
+            y_true_target=y_true_target_tpl,
+            cg_prev_close=prev_close_tpl,
         )
-        sharpe_target = (
-            self._weighted_average(base_targets, sharpe_weights) if len(base_targets) >= 2 else None
-        )
-        rp_target = (
-            self._weighted_average(base_targets, rp_weights) if len(base_targets) >= 2 else None
-        )
-        hier_target = (
-            self._weighted_average(base_targets, hier_weights) if len(base_targets) >= 2 else None
-        )
-        stk_target = (
-            self._weighted_average(base_targets, stk_weights) if len(base_targets) >= 2 else None
-        )
-        # Faz 5 Katman 5: Cash gate (Sharpe-Weighted hedef üzerinde).
-        cg_target = None
-        cg_preds = sharpe_preds
-        if sharpe_target is not None and base_targets:
-            try:
-                cg_target = EnsembleModel.apply_cash_gate(
-                    sharpe_target, base_targets, magnitude_threshold=0.0, agreement_threshold=0.6
-                )
-                prev_close_tpl = (
-                    np.asarray(template.get("prev_close", []), dtype=float).ravel()
-                    if template
-                    else np.array([])
-                )
-                if len(prev_close_tpl) >= len(cg_target):
-                    cg_preds = self._target_to_price(cg_target, prev_close_tpl[-len(cg_target) :])
-                else:
-                    cg_target = None
-                    cg_preds = sharpe_preds
-            except AttributeError:
-                cg_target = None
-                cg_preds = sharpe_preds
-
-        ensemble_tuples = [
-            (equal_name, equal_preds, equal_target),
-            (inv_name, inverse_preds, inverse_target),
-            (sharpe_name, sharpe_preds, sharpe_target),
-            (rp_name, rp_preds, rp_target),
-            (hier_name, hier_preds, hier_target),
-            (stk_name, stk_preds, stk_target),
-            (cg_name, cg_preds, cg_target),
-        ]
-
-        # Seq-Attention ensembles
-        seq_attn_models = {"LSTM", "LSTM Lite", "AttentionLSTM v2"}
-        seq_attn_preds = {
-            name: preds for name, preds in base_preds.items() if name in seq_attn_models
-        }
-        if len(seq_attn_preds) >= 2:
-            seq_equal_name = "Ensemble Seq-Attention Equal"
-            seq_inv_name = "Ensemble Seq-Attention Inverse RMSE"
-
-            seq_equal_preds = EnsembleModel().combine(seq_attn_preds)
-            seq_inv_weights = EnsembleModel.optimize_inverse_rmse(
-                np.asarray(wf_y_true), seq_attn_preds
-            )
-            seq_inv_preds = EnsembleModel(seq_inv_weights).combine(seq_attn_preds)
-
-            self.ensemble_weights[seq_equal_name] = {
-                name: round(1.0 / len(seq_attn_preds), 6) for name in seq_attn_preds
-            }
-            self.ensemble_weights[seq_inv_name] = seq_inv_weights
-
-            seq_base_targets = {
-                name: base_targets[name] for name in seq_attn_preds if name in base_targets
-            }
-            seq_equal_target = (
-                EnsembleModel().combine(seq_base_targets) if len(seq_base_targets) >= 2 else None
-            )
-            seq_inv_target = (
-                self._weighted_average(seq_base_targets, seq_inv_weights)
-                if len(seq_base_targets) >= 2
-                else None
-            )
-
-            ensemble_tuples.append((seq_equal_name, seq_equal_preds, seq_equal_target))
-            ensemble_tuples.append((seq_inv_name, seq_inv_preds, seq_inv_target))
 
         for name, pred_price, pred_target in ensemble_tuples:
             k = min(len(pred_price), len(np.asarray(wf_y_true).ravel()))
@@ -466,10 +388,7 @@ class _PredictionEngineMixin:
                 target_mode=self.dataset_metadata.get("target_mode", "log_return"),
             )
             if template:
-                payload = {}
-                for key, value in template.items():
-                    arr = np.asarray(value)
-                    payload[key] = arr[-k:] if arr.ndim > 0 and len(arr) >= k else value
+                payload = self._slice_template_payload(template, k)
                 payload["y_true_price"] = y_true_price
                 payload["pred_price"] = wf_predictions[name]
                 payload["pred_target"] = (
