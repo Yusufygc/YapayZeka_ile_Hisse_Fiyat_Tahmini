@@ -24,10 +24,9 @@ from __future__ import annotations
 
 import os
 import sys
-import uuid
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 # Proje kökünü path'e ekle (uvicorn proje kökünden çalıştırılırsa gerekli)
 _API_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -38,7 +37,6 @@ if _PROJECT_ROOT not in sys.path:
 try:
     from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
     from fastapi.middleware.cors import CORSMiddleware
-    from pydantic import BaseModel as PydanticModel
 except ImportError as exc:
     raise ImportError(
         "FastAPI yüklü değil. Kurmak için:\n"
@@ -50,6 +48,12 @@ except ImportError as exc:
 from src.database.stock_model_db import StockModelDB
 from src.api.routers.analysis import router as analysis_router
 from src.api.runtime_config import get_cors_settings
+from src.api.services.pipeline_jobs import (
+    RunRequest,
+    get_job,
+    known_job_ids,
+    start_pipeline_job,
+)
 from src.api.services.rate_limit import (
     get_default_limiter,
     rate_limit_middleware_factory,
@@ -112,34 +116,7 @@ def _parse_payload_json(job: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Pydantic şemaları
-# ─────────────────────────────────────────────────────────────────────────────
-
-class RunRequest(PydanticModel):
-    mode: str = "walk_forward"
-    models: Optional[List[str]] = None
-    data_dir: str = "data"
-    auto_update_data: bool = True
-
-
-class RunStatus(PydanticModel):
-    job_id: str
-    symbol: str
-    status: str
-    started_at: str
-    finished_at: Optional[str] = None
-    error: Optional[str] = None
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# In-memory job tracker (production'da Redis kullanılır)
-# ─────────────────────────────────────────────────────────────────────────────
-
-_jobs: Dict[str, Dict[str, Any]] = {}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Endpoint'ler
+# Endpoint'ler  (RunRequest şeması + job tracker: src/api/services/pipeline_jobs.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["Sistem"])
@@ -317,54 +294,7 @@ def trigger_pipeline(
     Paralel çalıştırmak için `python -m src.cli.batch` kullanın.
     """
     symbol = symbol.upper()
-    job_id = str(uuid.uuid4())[:8]
-
-    job: Dict[str, Any] = {
-        "job_id": job_id,
-        "symbol": symbol,
-        "status": "queued",
-        "started_at": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
-        "finished_at": None,
-        "error": None,
-    }
-    _jobs[job_id] = job
-
-    def _bg_run() -> None:
-        _jobs[job_id]["status"] = "running"
-        try:
-            data_file = os.path.join(_PROJECT_ROOT, request.data_dir, f"{symbol}.csv")
-            if not os.path.exists(data_file):
-                raise FileNotFoundError(f"Veri dosyası bulunamadı: {data_file}")
-
-            from src.pipeline.config import (
-                DataConfig,
-                ExecutionConfig,
-                ModelConfig,
-                PipelineConfig,
-                ValidationConfig,
-            )
-            from src.pipeline.orchestrator import ForecastingPipeline
-
-            pipeline = ForecastingPipeline(cfg=PipelineConfig(
-                data=DataConfig(
-                    data_file=data_file,
-                    auto_update_data=bool(request.auto_update_data),
-                    auto_update_interactive=False,
-                ),
-                validation=ValidationConfig(validation_mode=request.mode),
-                models=ModelConfig(selected_models=request.models),
-                execution=ExecutionConfig(),
-            ))
-            pipeline.run_all()
-            _jobs[job_id]["status"] = "completed"
-        except Exception as exc:
-            _jobs[job_id]["status"] = "error"
-            _jobs[job_id]["error"] = str(exc)
-        finally:
-            _jobs[job_id]["finished_at"] = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
-
-    background_tasks.add_task(_bg_run)
-
+    job_id = start_pipeline_job(symbol, request, _PROJECT_ROOT, background_tasks)
     return {
         "job_id": job_id,
         "symbol": symbol,
@@ -380,11 +310,11 @@ def get_run_status(job_id: str) -> Dict[str, Any]:
 
     - **job_id**: `/run/{symbol}` endpoint'inden dönen job_id
     """
-    job = _jobs.get(job_id)
+    job = get_job(job_id)
     if job is None:
         raise HTTPException(
             status_code=404,
-            detail=f"Job '{job_id}' bulunamadı. Geçerli job listesi: {list(_jobs.keys())}",
+            detail=f"Job '{job_id}' bulunamadı. Geçerli job listesi: {known_job_ids()}",
         )
     return job
 
