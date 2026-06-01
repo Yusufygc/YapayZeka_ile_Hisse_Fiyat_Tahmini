@@ -8,7 +8,11 @@ import numpy as np
 import pandas as pd
 
 from src.forecasting.workflows import LatestTargetPredictionWorkflow
-from src.pipeline.evaluation_services import PredictionService
+from src.pipeline.evaluation_services import (
+    EvaluationContext,
+    EvaluationState,
+    PredictionService,
+)
 
 
 class _DateAwareModel:
@@ -22,19 +26,11 @@ class _DateAwareModel:
         return np.full(len(x), 0.05)
 
 
-def _prediction_owner():
-    return SimpleNamespace(
-        dataset_metadata={"target_mode": "price"},
-        ensemble_enabled=False,
-        predictions={},
-        prediction_targets={},
-        quantile_predictions={},
-        single_backtest_inputs={},
-        latest_tensors={},
-        y_true_aligned=None,
-        y_true_target_aligned=None,
-        prev_close_aligned=None,
-    )
+def _prediction_ctx_state():
+    # Faz 3: PredictionService artık owner-forward yerine (ctx, state) DI alır.
+    ctx = EvaluationContext(dataset_metadata={"target_mode": "price"}, ensemble_enabled=False)
+    state = EvaluationState()
+    return ctx, state
 
 
 def _tensors():
@@ -50,8 +46,8 @@ def _tensors():
 
 
 def test_prophet_hybrid_single_model_prediction_receives_dates_test():
-    owner = _prediction_owner()
-    service = PredictionService(owner)
+    ctx, state = _prediction_ctx_state()
+    service = PredictionService(ctx, state)
     model = _DateAwareModel()
 
     service._predict_single_model("Prophet-ML/DL Hybrid", model, _tensors())
@@ -60,14 +56,14 @@ def test_prophet_hybrid_single_model_prediction_receives_dates_test():
 
 
 def test_prophet_hybrid_batch_prediction_receives_dates_test():
-    owner = _prediction_owner()
-    service = PredictionService(owner)
+    ctx, state = _prediction_ctx_state()
+    service = PredictionService(ctx, state)
     model = _DateAwareModel()
 
     service.generate_predictions({"Prophet-ML/DL Hybrid": model}, _tensors())
 
     assert model.seen_dates == list(_tensors()["dates_test"])
-    assert "Prophet-ML/DL Hybrid" in owner.predictions
+    assert "Prophet-ML/DL Hybrid" in state.predictions
 
 
 def test_latest_target_prediction_uses_date_aware_path_for_prophet_hybrid():

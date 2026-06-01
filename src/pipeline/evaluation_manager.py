@@ -475,7 +475,7 @@ class EvaluationManager:
         self.state.signal_threshold_calibration_summary = value
 
     def _init_services(self) -> None:
-        self.prediction_service = PredictionService(self)
+        self.prediction_service = PredictionService(self.context, self.state)
         self.backtest_service = BacktestService(self)
         self.signal_calibration_service = SignalCalibrationService(self)
         self.metrics_reporting_service = MetricsReportingService(self)

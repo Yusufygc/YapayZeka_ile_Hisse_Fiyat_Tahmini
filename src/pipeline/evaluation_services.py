@@ -145,8 +145,18 @@ class _OwnerBackedService:
         setattr(owner, name, value)
 
 
-class PredictionService(_OwnerBackedService, _PredictionEngineMixin):
-    """Prediction, inverse-target conversion and ensemble coordination."""
+class PredictionService(_PredictionEngineMixin):
+    """Prediction, inverse-target conversion and ensemble coordination.
+
+    Faz 3 (E1 owner-forward epiği): owner-forward kaldırıldı. Bağımlılıklar
+    açıkça enjekte edilir — READ-ONLY config/identity ``ctx`` (EvaluationContext),
+    mutable runtime çıktı ``state`` (EvaluationState). Mixin gövdesi artık
+    ``self.ctx.X`` / ``self.state.X`` kullanır (``self._owner`` forward yok).
+    """
+
+    def __init__(self, ctx: EvaluationContext, state: EvaluationState) -> None:
+        self.ctx = ctx
+        self.state = state
 
 
 class BacktestService(_OwnerBackedService, _BacktestRunnerMixin):

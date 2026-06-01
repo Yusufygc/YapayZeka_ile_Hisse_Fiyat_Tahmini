@@ -1,3 +1,28 @@
+## [2026-06-01] Faz 3.1 | E1 owner-forward: PredictionService DI'ya gecti
+
+- **Faz 3 servis #1 tamamlandi** (`refactor/e1-owner-forward-di`). `PredictionService`
+  artik `_OwnerBackedService`'ten MIRAS ALMIYOR; ctor `(ctx, state)` DI alir
+  (`src/pipeline/evaluation_services.py`). `__getattr__`/`__setattr__` owner-forward
+  yolu bu servis icin devre disi.
+- `src/pipeline/prediction_engine.py` (`_PredictionEngineMixin`): owner-forward
+  edilen tum attribute erisimleri acik hale getirildi — READ-ONLY config/identity
+  `self.ctx.X` (`dataset_metadata`, `ensemble_enabled`, `selected_models`), mutable
+  runtime cikti `self.state.X` (`predictions`, `prediction_targets`,
+  `quantile_predictions`, `single_backtest_inputs`, `latest_tensors`,
+  `ensemble_weights`, `ensemble_weight_scope`, `y_true_aligned`,
+  `y_true_target_aligned`, `prev_close_aligned`). `getattr(self, "...")` defensive
+  formlar ve gereksiz `ensemble_weight_scope` hasattr guard'i kaldirildi (state
+  alani `default_factory` ile her zaman dict).
+- `src/pipeline/evaluation_manager.py`: `_init_services` artik
+  `PredictionService(self.context, self.state)` enjekte ediyor (digerleri hala
+  owner-backed). Servis ctx/state nesnelerini cache'ler; init sonrasi
+  `manager.state`/`manager.context` yeniden atanmadigi dogrulandi (sadece
+  `_init_context_and_state`, servislerden once).
+- `tests/test_prediction_date_aware.py` yeni DI ctor'a uyarlandi (SimpleNamespace
+  owner -> `EvaluationContext`+`EvaluationState`); golden contract testleri
+  (`test_owner_forward_contract.py`) DEGISMEDI ve gecti.
+- Tam suite **561 passed**. Sonraki: Faz 3.2 (BacktestService).
+
 ## [2026-06-01] Faz 2 | E1 owner-forward: EvaluationContext tam tasima
 
 - **Faz 2 tamamlandi** (`refactor/e1-owner-forward-di`). Servislerin owner'dan

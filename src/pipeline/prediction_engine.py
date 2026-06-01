@@ -42,14 +42,20 @@ _DATE_AWARE_MODELS = {"Prophet", "Prophet-ML/DL Hybrid"}
 
 
 class _PredictionEngineMixin:
-    """Mixin: tahmin uretimi ve ensemble koordinasyonu."""
+    """Mixin: tahmin uretimi ve ensemble koordinasyonu.
+
+    Faz 3 (E1 owner-forward epigi): owner-forward kaldirildi. READ-ONLY config/
+    identity ``self.ctx`` (EvaluationContext), mutable runtime cikti ``self.state``
+    (EvaluationState) uzerinden okunur/yazilir. Servis ctor'u bu iki nesneyi
+    enjekte eder (bkz. PredictionService.__init__).
+    """
 
     # ------------------------------------------------------------------ #
     #  Inverse transform: target -> price                                  #
     # ------------------------------------------------------------------ #
 
     def _target_to_price(self, preds_target: np.ndarray, prev_close: np.ndarray) -> np.ndarray:
-        target_mode = self.dataset_metadata.get("target_mode", "log_return")
+        target_mode = self.ctx.dataset_metadata.get("target_mode", "log_return")
         preds_target = np.asarray(preds_target).ravel()
         prev_close = np.asarray(prev_close).ravel()
 
@@ -143,7 +149,7 @@ class _PredictionEngineMixin:
         Single-split ve walk-forward yollarının paylaştığı çekirdek (DRY): ağırlık
         optimizasyonu (equal/inverse-RMSE/Sharpe/risk-parity/hierarchical/meta-stacker)
         + Sharpe-Weighted'ı miras alan cash-gate + seq-attention alt-ensemble'ları.
-        Ağırlıklar `self.ensemble_weights`'e yazılır. `cg_prev_close` cash-gate fiyat
+        Ağırlıklar `self.state.ensemble_weights`'e yazılır. `cg_prev_close` cash-gate fiyat
         geri-dönüşümü içindir; uzunluğu yetersizse cash-gate Sharpe-Weighted'a düşer.
 
         Args:
@@ -191,14 +197,14 @@ class _PredictionEngineMixin:
             stk_weights = {name: 1.0 / n for name in base_preds}
         stk_preds = EnsembleModel(stk_weights).combine(base_preds)
 
-        self.ensemble_weights[equal_name] = {name: round(1.0 / n, 6) for name in base_preds}
-        self.ensemble_weights[inv_name] = inverse_weights
-        self.ensemble_weights[sharpe_name] = sharpe_weights
-        self.ensemble_weights[rp_name] = rp_weights
-        self.ensemble_weights[hier_name] = hier_weights
-        self.ensemble_weights[stk_name] = stk_weights
+        self.state.ensemble_weights[equal_name] = {name: round(1.0 / n, 6) for name in base_preds}
+        self.state.ensemble_weights[inv_name] = inverse_weights
+        self.state.ensemble_weights[sharpe_name] = sharpe_weights
+        self.state.ensemble_weights[rp_name] = rp_weights
+        self.state.ensemble_weights[hier_name] = hier_weights
+        self.state.ensemble_weights[stk_name] = stk_weights
         # Cash-Gated, Sharpe-Weighted ağırlıklarını miras alır (gate transformasyondur, blend değil).
-        self.ensemble_weights[cg_name] = dict(sharpe_weights)
+        self.state.ensemble_weights[cg_name] = dict(sharpe_weights)
 
         def _target(weights):
             return self._weighted_average(base_targets, weights) if len(base_targets) >= 2 else None
@@ -248,10 +254,10 @@ class _PredictionEngineMixin:
             seq_inv_weights = EnsembleModel.optimize_inverse_rmse(np.asarray(y_true_inverse), seq_attn_preds)
             seq_inv_preds = EnsembleModel(seq_inv_weights).combine(seq_attn_preds)
 
-            self.ensemble_weights[seq_equal_name] = {
+            self.state.ensemble_weights[seq_equal_name] = {
                 name: round(1.0 / len(seq_attn_preds), 6) for name in seq_attn_preds
             }
-            self.ensemble_weights[seq_inv_name] = seq_inv_weights
+            self.state.ensemble_weights[seq_inv_name] = seq_inv_weights
 
             seq_base_targets = {name: base_targets[name] for name in seq_attn_preds if name in base_targets}
             seq_equal_target = (
@@ -277,48 +283,47 @@ class _PredictionEngineMixin:
         # Gercek train-tail validation slice fix'i Sprint 4 (probabilistic
         # forecasting + multi-horizon target) ile gelecek; o sprintte
         # TensorPreparationService train-tail slice ayirmasi yapilacak.
-        if not self.ensemble_enabled:
+        if not self.ctx.ensemble_enabled:
             return
-        metadata = getattr(self, "dataset_metadata", {}) or {}
+        metadata = self.ctx.dataset_metadata or {}
         candidates = set(metadata.get("candidate_models") or [])
         base_preds = {
             name: preds
-            for name, preds in self._base_predictions_for_ensemble(self.predictions).items()
+            for name, preds in self._base_predictions_for_ensemble(self.state.predictions).items()
             if not candidates or name in candidates
         }
-        if len(base_preds) < 2 or self.y_true_aligned is None:
+        if len(base_preds) < 2 or self.state.y_true_aligned is None:
             return
 
         base_targets = {
-            name: self.prediction_targets[name]
+            name: self.state.prediction_targets[name]
             for name in base_preds
-            if name in self.prediction_targets
+            if name in self.state.prediction_targets
         }
         ensemble_tuples = self._compute_ensemble_blends(
             base_preds,
             base_targets,
-            y_true_inverse=self.y_true_aligned,
-            y_true_target=getattr(self, "y_true_target_aligned", []),
-            cg_prev_close=self.prev_close_aligned,
+            y_true_inverse=self.state.y_true_aligned,
+            y_true_target=self.state.y_true_target_aligned,
+            cg_prev_close=self.state.prev_close_aligned,
         )
 
         # Sprint 0 (2026-05-25): leakage flag metadata (sadece ana 7 ensemble).
-        if not hasattr(self, "ensemble_weight_scope"):
-            self.ensemble_weight_scope: Dict[str, str] = {}
+        # EvaluationState.ensemble_weight_scope her zaman dict (default_factory).
         for _name in self._ENSEMBLE_NAMES:
-            self.ensemble_weight_scope[_name] = "in_sample_test_set_research_only"
+            self.state.ensemble_weight_scope[_name] = "in_sample_test_set_research_only"
 
         for name, pred_price, pred_target in ensemble_tuples:
-            k = min(len(pred_price), len(self.y_true_aligned), len(self.prev_close_aligned))
-            self.predictions[name] = np.asarray(pred_price)[-k:]
+            k = min(len(pred_price), len(self.state.y_true_aligned), len(self.state.prev_close_aligned))
+            self.state.predictions[name] = np.asarray(pred_price)[-k:]
             if pred_target is not None:
-                self.prediction_targets[name] = np.asarray(pred_target)[-k:]
-            template = next(iter(self.single_backtest_inputs.values()), None)
+                self.state.prediction_targets[name] = np.asarray(pred_target)[-k:]
+            template = next(iter(self.state.single_backtest_inputs.values()), None)
             if template:
                 payload = self._slice_template_payload(template, k)
-                payload["pred_price"] = self.predictions[name]
-                payload["pred_target"] = self.prediction_targets.get(name)
-                self.single_backtest_inputs[name] = payload
+                payload["pred_price"] = self.state.predictions[name]
+                payload["pred_target"] = self.state.prediction_targets.get(name)
+                self.state.single_backtest_inputs[name] = payload
         print(
             "  [OK] Ensemble tahminleri eklendi: Equal Weight, Inverse RMSE, Sharpe-Weighted, Risk-Parity, Hierarchical, Meta-Stacker, Cash-Gated"
         )
@@ -330,9 +335,9 @@ class _PredictionEngineMixin:
         wf_y_true: Any,
         wf_backtest_inputs: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> None:
-        if not self.ensemble_enabled or wf_y_true is None:
+        if not self.ctx.ensemble_enabled or wf_y_true is None:
             return
-        metadata = getattr(self, "dataset_metadata", {}) or {}
+        metadata = self.ctx.dataset_metadata or {}
         candidates = set(metadata.get("candidate_models") or [])
         base_preds = {
             name: preds
@@ -385,7 +390,7 @@ class _PredictionEngineMixin:
                 y_true_target=y_true_target,
                 y_pred_target=np.asarray(pred_target)[-k:] if pred_target is not None else None,
                 prev_close=prev_close,
-                target_mode=self.dataset_metadata.get("target_mode", "log_return"),
+                target_mode=self.ctx.dataset_metadata.get("target_mode", "log_return"),
             )
             if template:
                 payload = self._slice_template_payload(template, k)
@@ -435,10 +440,10 @@ class _PredictionEngineMixin:
         save_path: str,
         title: str,
     ) -> None:
-        if not self.selected_models:
+        if not self.ctx.selected_models:
             return
         selected_predictions = {
-            name: preds for name, preds in predictions.items() if name in self.selected_models
+            name: preds for name, preds in predictions.items() if name in self.ctx.selected_models
         }
         if not selected_predictions:
             return
@@ -479,7 +484,7 @@ class _PredictionEngineMixin:
         if model_name in _DATE_AWARE_MODELS:
             preds_target = model.predict(tensors["X_test"], dates_test=tensors["dates_test"])
             if model_name == "Prophet":
-                self.dataset_metadata["prophet_regressors_used"] = getattr(
+                self.ctx.dataset_metadata["prophet_regressors_used"] = getattr(
                     model, "regressors_used", []
                 )
         elif model_name in _TREE_MODELS:
@@ -564,7 +569,7 @@ class _PredictionEngineMixin:
         raw_preds: Dict[str, np.ndarray] = {}
         raw_pred_targets: Dict[str, np.ndarray] = {}
         raw_quantiles: Dict[str, np.ndarray] = {}
-        self.latest_tensors = tensors
+        self.state.latest_tensors = tensors
 
         for name, model in trained_models.items():
             try:
@@ -641,7 +646,7 @@ class _PredictionEngineMixin:
                         ]
                     )
 
-                self.single_backtest_inputs[name] = {
+                self.state.single_backtest_inputs[name] = {
                     "dates": dates_aligned,
                     "prediction_dates": prediction_dates_aligned,
                     "market_regime": market_regime_aligned,
@@ -652,7 +657,7 @@ class _PredictionEngineMixin:
                     "y_true_target": y_true_target_aligned,
                 }
                 if name == "Prophet":
-                    self.dataset_metadata["prophet_regressors_used"] = getattr(
+                    self.ctx.dataset_metadata["prophet_regressors_used"] = getattr(
                         model, "regressors_used", []
                     )
                 print(f"  [OK] {name} tahmini uretildi - {len(raw_preds[name])} adim")
@@ -663,14 +668,14 @@ class _PredictionEngineMixin:
             raise RuntimeError("Hicbir model tahmin uretemedi. Egitim adimini kontrol edin.")
 
         min_len = min(len(v) for v in raw_preds.values())
-        self.predictions = {name: preds[-min_len:] for name, preds in raw_preds.items()}
-        self.prediction_targets = {
+        self.state.predictions = {name: preds[-min_len:] for name, preds in raw_preds.items()}
+        self.state.prediction_targets = {
             name: preds[-min_len:] for name, preds in raw_pred_targets.items()
         }
-        self.quantile_predictions = {
+        self.state.quantile_predictions = {
             name: preds[-min_len:] for name, preds in raw_quantiles.items()
         }
-        self.y_true_aligned = y_test_price[-min_len:]
-        self.y_true_target_aligned = y_test_target[-min_len:]
-        self.prev_close_aligned = prev_close_test[-min_len:]
+        self.state.y_true_aligned = y_test_price[-min_len:]
+        self.state.y_true_target_aligned = y_test_target[-min_len:]
+        self.state.prev_close_aligned = prev_close_test[-min_len:]
         self._add_single_split_ensembles()

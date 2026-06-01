@@ -210,6 +210,19 @@ Owner-forward sınıflarının `self.<attr>` oku/yaz sınıflandırması:
 
 ## Durum
 
+- 2026-06-01 (Faz 3.1 ✅): `PredictionService` DI'ya geçti (Faz 3 servis #1/4).
+  `_OwnerBackedService` mirası kaldırıldı; ctor `(ctx, state)` enjekte alır
+  (`evaluation_services.py`). `_PredictionEngineMixin` gövdesindeki tüm owner-forward
+  attribute erişimleri açık hale getirildi: READ-ONLY `self.ctx.X`
+  (`dataset_metadata`/`ensemble_enabled`/`selected_models`), mutable `self.state.X`
+  (`predictions`/`prediction_targets`/`quantile_predictions`/`single_backtest_inputs`/
+  `latest_tensors`/`ensemble_weights`/`ensemble_weight_scope`/`y_true_aligned`/
+  `y_true_target_aligned`/`prev_close_aligned`). Defensive `getattr(self, ...)` formları
+  ve `ensemble_weight_scope` hasattr guard'ı kaldırıldı (state alanı default_factory).
+  `_init_services` `PredictionService(self.context, self.state)` enjekte ediyor;
+  diğer 3 servis hâlâ owner-backed. `test_prediction_date_aware.py` DI ctor'a uyarlandı;
+  golden'lar (`test_owner_forward_contract.py`) değişmeden geçti. Tam suite **561 passed**.
+  Sonraki: Faz 3.2 (BacktestService → SignalCalibration → MetricsReporting).
 - 2026-06-01 (Faz 2 ✅): `EvaluationContext` tam taşıma. `EvaluationContext` tüm
   alanları default'lu hale getirildi (lazy/`__new__` desteği) + 9 türetilmiş
   READ-ONLY alan eklendi (`ensemble_enabled`, `selected_models`, `backtest_enabled`,
