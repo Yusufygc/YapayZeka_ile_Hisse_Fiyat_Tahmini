@@ -1,3 +1,21 @@
+## [2026-06-01] Refactor (E1 Faz 3.4) | MetricsReportingService owner-forward'dan DI'ya
+
+- `MetricsReportingService` `_OwnerBackedService` mirasindan `(ctx, state)` DI'ya
+  cevrildi (Faz 3 servis #4/4 — son servis). `_MetricsReporterMixin` govdesi
+  self.ctx.X (config: dataset_metadata, commission/slippage_bps, stock_symbol,
+  feature_names, xai_dir, write_xai_tables, write_markdown_reports) / self.state.X
+  (mutable: predictions, prediction_targets, quantile_predictions, y_true_aligned,
+  ensemble_weights, latest_backtest_results) kullanir.
+- `EvaluationContext`'e 2 XAI-yazim flag eklendi (write_xai_tables=False,
+  write_markdown_reports=True; default'lar eski getattr fallback'leriyle esit).
+  Manager'da 2 yeni context-backed property.
+- `tests/test_xai_routing.py` `_StubReporter` DI sekline (ctx/state) guncellendi.
+- 4 evaluation servisinin tamami artik DI. `_OwnerBackedService` yalnizca
+  workflow + `DataManager` servisleri tarafindan kullaniliyor (Faz 7 temizligi).
+- Davranis degismedi: golden (12) sabit, tam suite **561 passed**. Commit `398c82f`.
+- Guncellenen sayfalar: `e1-owner-forward-epic.md` (Durum Faz 3.4), `architecture.md`
+  (migration status), `index.md` (DI durum maddesi).
+
 ## [2026-06-01] Refactor (E1 Faz 3.3) | SignalCalibrationService owner-forward'dan DI'ya
 
 - `SignalCalibrationService` `_OwnerBackedService` mirasindan `(ctx, state)` DI'ya

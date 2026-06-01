@@ -210,6 +210,22 @@ Owner-forward sınıflarının `self.<attr>` oku/yaz sınıflandırması:
 
 ## Durum
 
+- 2026-06-01 (Faz 3.4 ✅): `MetricsReportingService` DI'ya geçti (Faz 3 servis #4/4 —
+  son servis). `_OwnerBackedService` mirası kalktı, ctor `(ctx, state)`.
+  `_MetricsReporterMixin` forward erişimleri açık: READ-ONLY `self.ctx.X`
+  (`dataset_metadata`, `commission_bps`/`slippage_bps`, `stock_symbol`,
+  `feature_names`, `xai_dir`, `write_xai_tables`, `write_markdown_reports`),
+  mutable `self.state.X` (`predictions`, `prediction_targets`, `quantile_predictions`,
+  `y_true_aligned`, `ensemble_weights`, `latest_backtest_results`).
+  `EvaluationContext`'e XAI-yazım 2 flag eklendi (`write_xai_tables`=False,
+  `write_markdown_reports`=True) — default'lar eski getattr fallback'leriyle aynı.
+  Manager'da 2 yeni context-backed property; `_init_services`
+  `MetricsReportingService(self.context, self.state)`.
+  `tests/test_xai_routing.py` `_StubReporter` DI şekline (ctx/state) güncellendi.
+  **4 evaluation servisinin tamamı artık DI.** `_OwnerBackedService` yalnızca
+  evaluation/training workflow'ları + `DataManager` servis aileleri tarafından
+  kullanılıyor (kaldırma Faz 7). Tam suite **561 passed**, golden değişmedi.
+  Commit `398c82f`. Sonraki: Faz 4 (ince orchestrator).
 - 2026-06-01 (Faz 3.3 ✅): `SignalCalibrationService` DI'ya geçti (Faz 3 servis #3/4).
   `_OwnerBackedService` mirası kalktı, ctor `(ctx, state)`. `_SignalCalibratorMixin`
   forward erişimleri açık: READ-ONLY `self.ctx.X` (commission/slippage/initial_capital/
