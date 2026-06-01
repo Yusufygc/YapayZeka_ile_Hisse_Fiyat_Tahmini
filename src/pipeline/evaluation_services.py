@@ -61,7 +61,26 @@ class _OwnerBackedService:
     The mixin methods read/write attributes such as predictions, signal_config
     and dataset_metadata. Forwarding those operations to the owner keeps public
     behavior stable while EvaluationManager no longer inherits the mixins.
+
+    Writes are fail-loud: a forwarded assignment must either target an attribute
+    that already exists on the owner (every owner pre-initializes its own state
+    in ``__init__``) or be one of the few attributes that are legitimately
+    lazy-created on first use (``_LAZY_FORWARDED_WRITES``). This closes the
+    silent-typo encapsulation hole of the old blanket ``__setattr__`` (a mistyped
+    attribute used to create a new owner attribute silently) while keeping the
+    shared base usable across every service family (evaluation, training/eval
+    workflows, data-manager services), each of which forwards to a different
+    owner with a different state surface.
     """
+
+    # Attributes that may be created on the owner on first write because they are
+    # intentionally lazy-initialized rather than set in the owner's __init__.
+    _LAZY_FORWARDED_WRITES = frozenset({"ensemble_weight_scope"})
+
+    # Opt-in fail-loud guard. Enabled for the evaluation services and workflows
+    # (the E1/B1 owner-forward god-object). DataManager service families keep the
+    # permissive forwarding until their owner state surface is hardened too.
+    _FAIL_LOUD = True
 
     def __init__(self, owner: Any) -> None:
         object.__setattr__(self, "_owner", owner)
@@ -73,7 +92,21 @@ class _OwnerBackedService:
         if name == "_owner":
             object.__setattr__(self, name, value)
             return
-        setattr(self._owner, name, value)
+        owner = object.__getattribute__(self, "_owner")
+        if (
+            self._FAIL_LOUD
+            and not hasattr(owner, name)
+            and name not in self._LAZY_FORWARDED_WRITES
+        ):
+            raise AttributeError(
+                f"{type(self).__name__} tried to set unknown owner attribute "
+                f"'{name}'. Owner-forwarded writes must target an attribute the "
+                f"owner initialized (or a declared lazy attribute); this guards "
+                f"against silent typos. Initialize it in the owner's __init__ or "
+                f"add it to _OwnerBackedService._LAZY_FORWARDED_WRITES if the "
+                f"write is intentional."
+            )
+        setattr(owner, name, value)
 
 
 class PredictionService(_OwnerBackedService, _PredictionEngineMixin):

@@ -151,6 +151,9 @@ class EvaluationManager:
         self.latest_backtest_metrics: Dict[str, Any] = {}
         self.latest_model_metrics: Dict[str, Any] = {}
         self.ensemble_weights: Dict[str, Dict[str, float]] = {}
+        # Pre-initialized for clarity; PredictionService also lazy-creates it via
+        # the allowlisted owner-forward (_OwnerBackedService._FORWARDED_WRITES).
+        self.ensemble_weight_scope: Dict[str, str] = {}
 
     def _init_context_and_state(self, **kwargs: Any) -> None:
         self.context = EvaluationContext(**kwargs)

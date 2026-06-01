@@ -23,6 +23,9 @@ from src.utils.data_splitter import TimeSeriesSplitter
 
 
 class DataIngestionService(_OwnerBackedService):
+    # DataManager owner state surface not yet hardened; keep permissive forwarding.
+    _FAIL_LOUD = False
+
     def run(self) -> None:
         print("\n" + "=" * 60)
         print("  ADIM 1 | Veri Yükleme & Özellik Mühendisliği (DataManager)")
@@ -299,6 +302,9 @@ class DataIngestionService(_OwnerBackedService):
 
 
 class TensorPreparationService(_OwnerBackedService):
+    # DataManager owner state surface not yet hardened; keep permissive forwarding.
+    _FAIL_LOUD = False
+
     def build_target_series(self, close_values: np.ndarray) -> np.ndarray:
         self._ensure_config_objects()
         if self.data_cfg.target_mode == "log_return":
@@ -532,6 +538,9 @@ class TensorPreparationService(_OwnerBackedService):
 
 
 class ValidationSplitService(_OwnerBackedService):
+    # DataManager owner state surface not yet hardened; keep permissive forwarding.
+    _FAIL_LOUD = False
+
     def split_data(self, validation_mode: str) -> None:
         self._ensure_config_objects()
         splitter = importlib.import_module("src.pipeline.data_manager").TimeSeriesSplitter
@@ -678,6 +687,9 @@ class ValidationSplitService(_OwnerBackedService):
 
 
 class DataQualityReportingService(_OwnerBackedService):
+    # DataManager owner state surface not yet hardened; keep permissive forwarding.
+    _FAIL_LOUD = False
+
     def check_survivorship_bias(self) -> dict:
         if self.df is None or self.df.empty:
             return {"survivorship_bias_warning": True, "status": "empty_dataset"}
