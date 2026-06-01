@@ -2,7 +2,7 @@
 title: Architecture
 type: concept
 status: active
-last_updated: 2026-05-20
+last_updated: 2026-06-01
 owner: llm
 source_count: 14
 ---
@@ -66,6 +66,28 @@ facades still own state and preserve existing method names such as
 `ingest_and_engineer`, `split_data`, `prepare_tensors`, `train_*`, and
 `evaluate_*`. This keeps compatibility while reducing the complexity of the
 three largest pipeline files.
+
+### Evaluation Services: Owner-Forward → Explicit DI (E1 epic, in progress)
+
+The original evaluation services (`PredictionService`, `BacktestService`,
+`SignalCalibrationService`, `MetricsReportingService`) were *owner-backed*:
+they inherited `_OwnerBackedService`, whose `__getattr__`/`__setattr__` forwarded
+every attribute access to the owning `EvaluationManager`. The
+[E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md) replaces that "magic"
+with explicit dependency injection: each service takes `(ctx, state)` in its
+constructor, where `EvaluationContext` is the read-only config/identity bag and
+`EvaluationState` is the mutable runtime-output bag (both in
+`evaluation_services.py`). The mixin bodies now read/write `self.ctx.X` /
+`self.state.X` instead of forwarding to the owner.
+
+Migration status (2026-06-01): `PredictionService` (Faz 3.1) and
+`BacktestService` (Faz 3.2) are converted to DI and no longer inherit
+`_OwnerBackedService`. `SignalCalibrationService` and `MetricsReportingService`
+are still owner-backed pending Faz 3.3/3.4. `EvaluationManager` exposes
+`manager.X ⇄ manager.context.X` / `manager.state.X` property forwards so the
+remaining owner-backed services and all workflows keep reading the same
+context/state. Behavior is unchanged and locked by characterization golden tests
+(`tests/test_owner_forward_contract.py`).
 
 ## Operational Hardening Phase
 
@@ -210,4 +232,5 @@ The run id includes timestamp, symbol, validation mode, and a compact selected-m
 - [Validation and Backtesting](validation-and-backtesting.md)
 - [Persistence and API](persistence-and-api.md)
 - [Testing and Quality](testing-and-quality.md)
+- [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md)
 

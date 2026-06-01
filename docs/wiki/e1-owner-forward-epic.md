@@ -19,8 +19,8 @@ açık bağımlılık enjeksiyonlu (DI) davranış-sahibi nesnelere çevrilir.
 **Çalışma dalı:** `refactor/e1-owner-forward-di` (yeni session bu dalda çalışır).
 
 **Temel ilke:** Davranış DEĞİŞMEZ. Her adım önce karakterizasyon testiyle
-kilitlenir, sonra refactor edilir, suite (549 test) her commit'te yeşil kalır.
-Kaynak doğruluk sırası kod > test > wiki.
+kilitlenir, sonra refactor edilir, suite (epik başında 549, güncelde 561 test)
+her commit'te yeşil kalır. Kaynak doğruluk sırası kod > test > wiki.
 
 ---
 

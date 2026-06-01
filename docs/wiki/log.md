@@ -1,3 +1,21 @@
+## [2026-06-01] Wiki bakim | E1 ilerlemesi tum sayfalara yansitildi
+
+- Kullanici istegi uzerine tum wiki tam kontrol edildi; E1 owner-forward
+  ilerlemesi (Faz 3.1/3.2 DI'ya gecti) bayat kalan sayfalara islendi.
+  `graphify`'a dokunulmadi.
+- `architecture.md`: "Evaluation Services: Owner-Forward -> Explicit DI (E1 epic,
+  in progress)" alt-bolumu eklendi; eski "owner-backed servisler" anlatimi guncel
+  duruma baglandi (Prediction/Backtest DI, Signal/Metrics hala owner-backed).
+  `last_updated` 2026-06-01; Related Pages'e epik linki.
+- `index.md`: Current Project State'e E1 DI gecis durumu maddesi + epik cross-link;
+  `last_updated` 2026-06-01.
+- `refactor-plan.md`: "Hala acik" maddesi "Ilerlemede" olarak guncellendi (Faz 0-3.2
+  tamam, kalan fazlar listelendi), epik cross-link; `last_updated` 2026-06-01.
+- `code-quality-audit.md`: B1 bulgusuna ileri-isaret notu (snapshot korundu,
+  aksiyon E1 epiginde yuruyor).
+- `e1-owner-forward-epic.md`: temel ilkedeki stale "549 test" -> "epik basinda 549,
+  guncelde 561".
+
 ## [2026-06-01] Faz 3.2 | E1 owner-forward: BacktestService DI'ya gecti
 
 - **Faz 3 servis #2 tamamlandi** (`refactor/e1-owner-forward-di`). `BacktestService`

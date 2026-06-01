@@ -2,7 +2,7 @@
 title: Staged Refactor Plan (2026-05-31)
 type: plan
 status: active
-last_updated: 2026-05-31
+last_updated: 2026-06-01
 owner: llm
 source_count: 8
 ---
@@ -287,11 +287,15 @@ en son.
     DataIngestion/TensorPreparation/ValidationSplit/DataQualityReporting)
     `_FAIL_LOUD=False` ile permissive bırakıldı (owner state yüzeyi — `selection_df`,
     `final_holdout_df`, `tensors`, `wf_splits` lazy — henüz sertleştirilmedi).
-  - **Hâlâ açık (Tier 3 kalan epik):** tam owner-forward kaldırma — mixin'leri
-    `__getattr__`/`__setattr__` magic'ten kurtarıp davranış-sahibi DI servislerine
-    (`EvaluationContext`/`EvaluationState` üzerinden açık state) çevirmek (~4500 satır
-    mixin, leakage/sözleşme riski); `forecasting/workflows`'un ayrı
-    `_OwnerBackedForecastService` base'i; DataManager servislerinin guard'a alınması.
-    Karakterizasyon testi şart; kendi odaklı session'ını hak ediyor.
+  - **İlerlemede (Tier 3 kalan epik → kendi odaklı session'ı):** tam owner-forward
+    kaldırma artık [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md) altında
+    `refactor/e1-owner-forward-di` dalında yürüyor. Durum (2026-06-01): Faz 0
+    (karakterizasyon golden'ları + envanter) → Faz 1 (`EvaluationState` tam taşıma)
+    → Faz 2 (`EvaluationContext` tam taşıma) → Faz 3.1 (`PredictionService` DI) →
+    Faz 3.2 (`BacktestService` DI) **tamamlandı**; her commit'te suite yeşil (561) +
+    golden sabit. Kalan: Faz 3.3 (`SignalCalibrationService`), Faz 3.4
+    (`MetricsReportingService`) DI'ya çevrilecek, sonra ince orkestratör (Faz 4),
+    `ForecastRunner` DI (`_OwnerBackedForecastService` kaldırma, Faz 5), DataManager
+    servislerinin guard'a alınması (Faz 6), temizlik (Faz 7).
   - Doğrulama: tüm suite yeşil (549) + guard fonksiyonel smoke (typo yakalandı,
     legit/allowlist yazımlar geçti, opt-out aile permissive).

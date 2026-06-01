@@ -2,7 +2,7 @@
 title: Wiki Index
 type: index
 status: active
-last_updated: 2026-05-25
+last_updated: 2026-06-01
 owner: llm
 ---
 
@@ -44,6 +44,14 @@ linked pages below.
 - The active orchestration facade is `ForecastingPipeline` in `src/pipeline/orchestrator.py`.
 - Main orchestration responsibilities are split across `DataManager`, `ModelTrainer`, and `EvaluationManager`.
 - Evaluation logic is now service-composed via `PredictionService`, `BacktestService`, `SignalCalibrationService`, and `MetricsReportingService`.
+- **Owner-forward removal (E1 epic, in progress on `refactor/e1-owner-forward-di`):**
+  evaluation services are being converted from `_OwnerBackedService`
+  (`__getattr__`/`__setattr__` forwarding) to explicit `(ctx, state)` dependency
+  injection (`EvaluationContext` read-only config + `EvaluationState` mutable
+  runtime). As of 2026-06-01, `PredictionService` and `BacktestService` are DI;
+  `SignalCalibrationService` and `MetricsReportingService` remain owner-backed.
+  Behavior is locked by golden tests in `tests/test_owner_forward_contract.py`.
+  See [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md).
 - The default production candidate set is defined in `src/pipeline/model_scope.py`
   and the model registry; in the current source tree `TFT` is not registered and
   `src/models/tft_v2/` is absent.
