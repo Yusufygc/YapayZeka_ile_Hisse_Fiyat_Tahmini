@@ -1,3 +1,13 @@
+## [2026-06-01] Ekle | E1 owner-forward kaldirma epik plani + yeni dal
+
+- `docs/wiki/e1-owner-forward-epic.md` olusturuldu: tam owner-forward kaldirma
+  (mixin -> EvaluationContext/EvaluationState DI), 2 taban + 3 owner state yuzeyi
+  envanteri, korunacak invariantlar (leakage/determinizm/monkeypatch namespace),
+  karakterizasyon testi stratejisi (test_owner_forward_contract.py), 7 fazli plan,
+  kabul kriterleri + rollback.
+- Yeni dal `refactor/e1-owner-forward-di` acildi (yeni session burada Faz 0'dan
+  baslar). index.md link tablosu guncellendi.
+
 ## [2026-06-01] Refactor | Tier 3 mimari (E3 god ctor + E1 owner-forward guard)
 
 - **E3 god constructor** (commit 1e5c4be): `ForecastingPipeline.__init__` ve
