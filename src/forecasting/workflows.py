@@ -253,6 +253,31 @@ class BestModelResolver:
         """
         best = self.ctx.db.get_best_model(symbol)
         if force_model_name:
+            # Once zorlanan modele ait, artifact dosyasi diskte mevcut olan en guncel
+            # deneyi ara. Bulunursa forecast dogrudan o artifact'i yukler (model_path
+            # dolu) ve egitim konfigurasyonu (target/feature/scaling/dataset_hash) o
+            # deneyden gelir. Aksi halde eski davranis korunur: best metadata ile devam
+            # edilir, model_path bos kalir (artifact'i olmayan model zorlanmissa cagiran
+            # taraf net hata verir).
+            member = self.latest_member_experiment(symbol, force_model_name)
+            if member is not None:
+                return {
+                    "model_name": force_model_name,
+                    "source_experiment_id": member.get("id"),
+                    "target_mode": member.get("target_mode", "log_return"),
+                    "feature_mode": member.get(
+                        "feature_mode",
+                        self.ctx.model_config.model_settings.get(
+                            "feature_mode", "stationary_features"
+                        ),
+                    ),
+                    "scaling_mode": member.get(
+                        "scaling_mode", "robust_x_standard_y_clip"
+                    ),
+                    "model_path": member.get("model_path", ""),
+                    "dataset_hash": member.get("dataset_hash"),
+                    "ensemble_metadata": None,
+                }
             return {
                 "model_name": force_model_name,
                 "source_experiment_id": None if best is None else best.get("experiment_id"),

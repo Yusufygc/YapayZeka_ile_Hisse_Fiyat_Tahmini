@@ -180,6 +180,14 @@ python -m src.cli.forecast --stocks TUPRS --resolve
 Forward forecast behavior:
 
 - Reads best model from SQLite unless `--model` forces one.
+- `--model NAME` (forced): `BestModelResolver.resolve` looks up the latest
+  experiment for that model whose artifact file exists on disk
+  (`latest_member_experiment`) and uses its `model_path` + training config
+  (target/feature/scaling/dataset_hash). If no saved artifact exists for the
+  forced model, it falls back to the best model's metadata with an empty path.
+  (2026-06-02 fix: previously the forced branch returned no `model_path`, so
+  `ProductionTrainingWorkflow` tried to load an empty artifact path and raised
+  `artifact model file not found`.)
 - Avoids baseline production models by finding a trainable replacement.
 - Loads saved production model/scaler/metadata sidecars from the selected
   experiment's model path.

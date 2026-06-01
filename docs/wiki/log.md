@@ -1,3 +1,27 @@
+## [2026-06-02] Bugfix | Macro feature-cache zehirlenmesi + forced --model bos model_path
+
+E1 manuel testinde (EREGL forecast smoke) yuzeye cikan iki bagimsiz, E1-disi bug
+duzeltildi. Davranis-koruyan, her biri kendi testiyle kilitli.
+
+- **Bug 1 (macro -> feature-cache poisoning):** `macro_pipeline.py` runtime print'lerindeki
+  `→` karakteri Windows cp1252 stdout'a yazilirken `UnicodeEncodeError` firlatiyor;
+  `DataIngestionService._fetch_macro` bunu yutup bos df donuyor -> makrosuz frame
+  `use_macro=True` cache anahtari altina yaziliyor -> sonraki saglikli kosular cache
+  hit'te makrosuz frame aliyor. Fix: (1a) `→` -> `->` (macro prints); (1b)
+  `_engineer_features_cached`'e write-guard (makro istendi ama yoksa degraded frame
+  cache'lenmez) + read-side self-heal (`_has_macro_features` ile makro-yoksun zehirli
+  kayit evict edilir). Test: `tests/test_data_services.py` (2 yeni).
+- **Bug 2 (forced --model bos model_path):** `BestModelResolver.resolve(force_model_name)`
+  `model_path` dondurmuyordu -> `ProductionTrainingWorkflow.train` bos path'le artifact
+  yuklemeye calisip `artifact model file not found` firlatiyordu. Fix: force branch artik
+  `latest_member_experiment` ile artifact'i diskte mevcut en guncel deneyi bulup
+  `model_path` + egitim config'ini doldurur; artifact yoksa eski best-metadata fallback'i
+  korunur (geriye uyumlu, mevcut test gecer). Test: `tests/test_forecast_workflows.py` (1 yeni).
+- Canli dogrulama: forced LightGBM forecast green (run_id=108); cache temiz + `--use-macro`
+  (PYTHONUTF8 olmadan) RF forecast green (run_id=107) -> macro artik dusmuyor.
+- Tam suite **564 passed** (+3 yeni test). Guncellenen wiki: data-pipeline.md (cache guard),
+  persistence-and-api.md (forced --model), log.md.
+
 ## [2026-06-01] Refactor (E1 Faz 7) | Temizlik & dokumantasyon — E1 EPIGI KAPANDI
 
 - Gecici AST envanter script'i tools/owner_forward_inventory.py silindi (hic commit
