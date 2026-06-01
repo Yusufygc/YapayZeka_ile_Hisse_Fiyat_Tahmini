@@ -1,3 +1,18 @@
+## [2026-06-01] Refactor (E1 Faz 4) | EvaluationManager ince orkestrator - olu delegasyonlar silindi
+
+- `EvaluationManager`'dan hicbir yerden cagrilmayan 10 olu servis delegasyonu
+  silindi (workflow/src/test = 0 referans; davranis degismez): _save_selected_models_plot,
+  _diagnostic_numeric, _diagnostic_float, _count_decision, _payload_expected_return,
+  _write_signal_gate_diagnostics, _write_shadow_backtest_reports, _signal_calibration_sort_key,
+  _write_signal_calibration_reports, _get_signal_calibration_decision_md.
+- Mixin ici self.X cagrilari ilgili servisin kendi metoduna cozuluyordu; manager
+  delegasyonu kullanilmiyordu. _filter_backtest_inputs_by_folds korundu (manager
+  _split_walk_forward_signal_sets dahili kullanir). Workflow forward (wf=1) ve
+  test-erisimli delegasyonlara dokunulmadi.
+- EvaluationManager 1035 -> 979 satir. Tam suite 561 passed, golden degismedi.
+  Commit 6d142ff. Sonraki: Faz 5 (ForecastRunner DI).
+- Guncellenen wiki: e1-owner-forward-epic.md (Durum), index.md (durum), log.md.
+
 ## [2026-06-01] Refactor (E1 Faz 3.4) | MetricsReportingService owner-forward'dan DI'ya
 
 - `MetricsReportingService` `_OwnerBackedService` mirasindan `(ctx, state)` DI'ya

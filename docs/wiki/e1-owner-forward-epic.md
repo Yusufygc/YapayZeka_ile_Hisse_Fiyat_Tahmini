@@ -210,6 +210,21 @@ Owner-forward sınıflarının `self.<attr>` oku/yaz sınıflandırması:
 
 ## Durum
 
+- 2026-06-01 (Faz 4 ✅): `EvaluationManager` ince orkestratör sadeleştirmesi.
+  Geriye-uyumlu servis delegasyon yüzeyinden **hiçbir yerden çağrılmayan 10 ölü
+  delegasyon** silindi (workflow forward, src, test — hepsi 0 referans; davranış
+  değişmez, sadece ölü kod): `_save_selected_models_plot`, `_diagnostic_numeric`,
+  `_diagnostic_float`, `_count_decision`, `_payload_expected_return`,
+  `_write_signal_gate_diagnostics`, `_write_shadow_backtest_reports`,
+  `_signal_calibration_sort_key`, `_write_signal_calibration_reports`,
+  `_get_signal_calibration_decision_md`. Bu metotların mixin içi (`backtest_runner`/
+  `signal_calibrator`/`prediction_engine`) `self.X` çağrıları ilgili servisin
+  kendi metoduna çözülüyordu; manager delegasyonu artık gereksizdi.
+  `_filter_backtest_inputs_by_folds` **korundu** (manager `_split_walk_forward_signal_sets`
+  dahili kullanıyor). Workflow'ların forward ile okuduğu (wf=1) ve testlerin
+  eriştiği delegasyonlara dokunulmadı (mekanik churn + risk için bekletildi).
+  `EvaluationManager` 1035 → 979 satır. Tam suite **561 passed**, golden değişmedi.
+  Commit `6d142ff`. Sonraki: Faz 5 (`ForecastRunner` DI).
 - 2026-06-01 (Faz 3.4 ✅): `MetricsReportingService` DI'ya geçti (Faz 3 servis #4/4 —
   son servis). `_OwnerBackedService` mirası kalktı, ctor `(ctx, state)`.
   `_MetricsReporterMixin` forward erişimleri açık: READ-ONLY `self.ctx.X`
