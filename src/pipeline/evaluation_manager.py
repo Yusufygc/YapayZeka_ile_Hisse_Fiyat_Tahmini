@@ -76,12 +76,9 @@ class EvaluationManager:
         self.model_cfg = model_cfg
         self.stock_db = stock_db
 
-        self._init_model_attrs()
-        self._init_execution_attrs()
-        # signal threshold metadata triggers an early service init (uses
-        # signal_calibration_service); call order preserved intentionally.
-        self._init_signal_calibration_state()
-        self._init_mutable_state()
+        # Faz 1: context + (boş) state ÖNCE kurulur; mutable evaluation state
+        # artık EvaluationState'te yaşar ve manager property'leri ona forward eder.
+        # Bu yüzden state'e yazan _init_* metotlarından önce gelmeli.
         self._init_context_and_state(
             stock_symbol=stock_symbol,
             outputs_dir=outputs_dir,
@@ -94,6 +91,12 @@ class EvaluationManager:
             model_cfg=model_cfg,
             stock_db=stock_db,
         )
+        self._init_model_attrs()
+        self._init_execution_attrs()
+        # signal threshold metadata triggers an early service init (uses
+        # signal_calibration_service); call order preserved intentionally.
+        self._init_signal_calibration_state()
+        self._init_mutable_state()
         self._init_services()
 
     def _init_model_attrs(self) -> None:
@@ -138,36 +141,169 @@ class EvaluationManager:
         self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
 
     def _init_mutable_state(self) -> None:
-        self.predictions: Dict[str, np.ndarray] = {}
-        self.prediction_targets: Dict[str, np.ndarray] = {}
-        self.quantile_predictions: Dict[str, np.ndarray] = {}
-        self.single_backtest_inputs: Dict[str, Dict[str, Any]] = {}
-        self.y_true_aligned: Optional[np.ndarray] = None
-        self.y_true_target_aligned: Optional[np.ndarray] = None
-        self.prev_close_aligned: Optional[np.ndarray] = None
+        # Faz 1: predictions/prediction_targets/.../ensemble_weight_scope ve
+        # y_true_* hizalamaları artik EvaluationState varsayilanlarinda durur
+        # (bkz. _init_context_and_state). Burada yalnizca state-disi türetilmiş
+        # attribute'lar kalir. xai_dir READ-ONLY (Faz 2'de EvaluationContext'e gider).
         self.xai_dir = os.path.join(self.outputs_dir, "xai")
-        self.latest_tensors: Dict[str, Any] = {}
-        self.latest_backtest_results: Dict[str, Any] = {}
-        self.latest_backtest_metrics: Dict[str, Any] = {}
-        self.latest_model_metrics: Dict[str, Any] = {}
-        self.ensemble_weights: Dict[str, Dict[str, float]] = {}
-        # Pre-initialized for clarity; PredictionService also lazy-creates it via
-        # the allowlisted owner-forward (_OwnerBackedService._FORWARDED_WRITES).
-        self.ensemble_weight_scope: Dict[str, str] = {}
 
     def _init_context_and_state(self, **kwargs: Any) -> None:
         self.context = EvaluationContext(**kwargs)
-        self.state = EvaluationState(
-            predictions=self.predictions,
-            prediction_targets=self.prediction_targets,
-            quantile_predictions=self.quantile_predictions,
-            single_backtest_inputs=self.single_backtest_inputs,
-            latest_tensors=self.latest_tensors,
-            latest_backtest_results=self.latest_backtest_results,
-            latest_backtest_metrics=self.latest_backtest_metrics,
-            latest_model_metrics=self.latest_model_metrics,
-            ensemble_weights=self.ensemble_weights,
-        )
+        # Bos state; tüm mutable alanlar dataclass varsayilanlarindan gelir ve
+        # manager property'leri (asagida) bu nesneye forward eder.
+        self.state = EvaluationState()
+
+    # ------------------------------------------------------------------ #
+    #  Mutable state property forward'lari (Faz 1)                        #
+    #                                                                     #
+    #  manager.X  <->  manager.state.X. Owner-forward servisleri/         #
+    #  workflow'lari `setattr(owner, X, ...)` ile yazar; bu setter'lar    #
+    #  yazımı state'e yönlendirir, böylece state tek mutable kaynaktir.   #
+    #  Faz 3'te servisler dogrudan self.state.X kullanacak.               #
+    # ------------------------------------------------------------------ #
+
+    @property
+    def state(self) -> EvaluationState:
+        # Lazy: __init__'i atlayan (`__new__`) manuel kurulumlar veya erken
+        # erişim için bir EvaluationState garanti eder. Gerçek __init__ zaten
+        # _init_context_and_state'te explicit kurar (setter), lazy yol tetiklenmez.
+        st = self.__dict__.get("_state")
+        if st is None:
+            st = EvaluationState()
+            self.__dict__["_state"] = st
+        return st
+
+    @state.setter
+    def state(self, value: EvaluationState) -> None:
+        self.__dict__["_state"] = value
+
+    @property
+    def predictions(self) -> Dict[str, np.ndarray]:
+        return self.state.predictions
+
+    @predictions.setter
+    def predictions(self, value: Dict[str, np.ndarray]) -> None:
+        self.state.predictions = value
+
+    @property
+    def prediction_targets(self) -> Dict[str, np.ndarray]:
+        return self.state.prediction_targets
+
+    @prediction_targets.setter
+    def prediction_targets(self, value: Dict[str, np.ndarray]) -> None:
+        self.state.prediction_targets = value
+
+    @property
+    def quantile_predictions(self) -> Dict[str, np.ndarray]:
+        return self.state.quantile_predictions
+
+    @quantile_predictions.setter
+    def quantile_predictions(self, value: Dict[str, np.ndarray]) -> None:
+        self.state.quantile_predictions = value
+
+    @property
+    def single_backtest_inputs(self) -> Dict[str, Dict[str, Any]]:
+        return self.state.single_backtest_inputs
+
+    @single_backtest_inputs.setter
+    def single_backtest_inputs(self, value: Dict[str, Dict[str, Any]]) -> None:
+        self.state.single_backtest_inputs = value
+
+    @property
+    def latest_tensors(self) -> Dict[str, Any]:
+        return self.state.latest_tensors
+
+    @latest_tensors.setter
+    def latest_tensors(self, value: Dict[str, Any]) -> None:
+        self.state.latest_tensors = value
+
+    @property
+    def latest_backtest_results(self) -> Dict[str, Any]:
+        return self.state.latest_backtest_results
+
+    @latest_backtest_results.setter
+    def latest_backtest_results(self, value: Dict[str, Any]) -> None:
+        self.state.latest_backtest_results = value
+
+    @property
+    def latest_backtest_metrics(self) -> Dict[str, Any]:
+        return self.state.latest_backtest_metrics
+
+    @latest_backtest_metrics.setter
+    def latest_backtest_metrics(self, value: Dict[str, Any]) -> None:
+        self.state.latest_backtest_metrics = value
+
+    @property
+    def latest_model_metrics(self) -> Dict[str, Any]:
+        return self.state.latest_model_metrics
+
+    @latest_model_metrics.setter
+    def latest_model_metrics(self, value: Dict[str, Any]) -> None:
+        self.state.latest_model_metrics = value
+
+    @property
+    def ensemble_weights(self) -> Dict[str, Dict[str, float]]:
+        return self.state.ensemble_weights
+
+    @ensemble_weights.setter
+    def ensemble_weights(self, value: Dict[str, Dict[str, float]]) -> None:
+        self.state.ensemble_weights = value
+
+    @property
+    def ensemble_weight_scope(self) -> Dict[str, str]:
+        return self.state.ensemble_weight_scope
+
+    @ensemble_weight_scope.setter
+    def ensemble_weight_scope(self, value: Dict[str, str]) -> None:
+        self.state.ensemble_weight_scope = value
+
+    @property
+    def y_true_aligned(self) -> Optional[np.ndarray]:
+        return self.state.y_true_aligned
+
+    @y_true_aligned.setter
+    def y_true_aligned(self, value: Optional[np.ndarray]) -> None:
+        self.state.y_true_aligned = value
+
+    @property
+    def y_true_target_aligned(self) -> Optional[np.ndarray]:
+        return self.state.y_true_target_aligned
+
+    @y_true_target_aligned.setter
+    def y_true_target_aligned(self, value: Optional[np.ndarray]) -> None:
+        self.state.y_true_target_aligned = value
+
+    @property
+    def prev_close_aligned(self) -> Optional[np.ndarray]:
+        return self.state.prev_close_aligned
+
+    @prev_close_aligned.setter
+    def prev_close_aligned(self, value: Optional[np.ndarray]) -> None:
+        self.state.prev_close_aligned = value
+
+    @property
+    def signal_config(self) -> Any:
+        return self.state.signal_config
+
+    @signal_config.setter
+    def signal_config(self, value: Any) -> None:
+        self.state.signal_config = value
+
+    @property
+    def signal_threshold_source(self) -> str:
+        return self.state.signal_threshold_source
+
+    @signal_threshold_source.setter
+    def signal_threshold_source(self, value: str) -> None:
+        self.state.signal_threshold_source = value
+
+    @property
+    def signal_threshold_calibration_summary(self) -> Dict[str, Any]:
+        return self.state.signal_threshold_calibration_summary
+
+    @signal_threshold_calibration_summary.setter
+    def signal_threshold_calibration_summary(self, value: Dict[str, Any]) -> None:
+        self.state.signal_threshold_calibration_summary = value
 
     def _init_services(self) -> None:
         self.prediction_service = PredictionService(self)

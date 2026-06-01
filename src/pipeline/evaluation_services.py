@@ -41,7 +41,13 @@ class EvaluationContext:
 
 @dataclass
 class EvaluationState:
-    """Runtime outputs preserved for backward-compatible manager attributes."""
+    """Runtime outputs preserved for backward-compatible manager attributes.
+
+    Faz 1 (E1 owner-forward epiği): EvaluationManager'in tüm mutable evaluation
+    state'i artık burada tutulur. Manager bu alanları property forward ile
+    (`manager.X` <-> `manager.state.X`) açar; servisler/workflow'lar owner-forward
+    üzerinden aynı state'e yazar/okur. Faz 3'te servisler `self.state.X`'e geçer.
+    """
 
     predictions: Dict[str, np.ndarray] = field(default_factory=dict)
     prediction_targets: Dict[str, np.ndarray] = field(default_factory=dict)
@@ -52,6 +58,15 @@ class EvaluationState:
     latest_backtest_metrics: Dict[str, Any] = field(default_factory=dict)
     latest_model_metrics: Dict[str, Any] = field(default_factory=dict)
     ensemble_weights: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    ensemble_weight_scope: Dict[str, str] = field(default_factory=dict)
+    # Hizalanmis tahmin/gerçek diziler (None = henüz üretilmedi).
+    y_true_aligned: Optional[np.ndarray] = None
+    y_true_target_aligned: Optional[np.ndarray] = None
+    prev_close_aligned: Optional[np.ndarray] = None
+    # Sinyal eşik kalibrasyon durumu (WF kalibrasyonunda mutasyona uğrar).
+    signal_config: Any = None
+    signal_threshold_source: str = "default_config"
+    signal_threshold_calibration_summary: Dict[str, Any] = field(default_factory=dict)
 
 
 class _OwnerBackedService:

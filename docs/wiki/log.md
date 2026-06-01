@@ -1,3 +1,45 @@
+## [2026-06-01] Faz 1 | E1 owner-forward: EvaluationState tam tasima
+
+- **Faz 1 tamamlandi** (`refactor/e1-owner-forward-di`). EvaluationManager'in tum
+  mutable evaluation state'i artik `EvaluationState`'te yasiyor.
+  `src/pipeline/evaluation_services.py`: `EvaluationState` 7 alanla genisletildi
+  (`ensemble_weight_scope`, `y_true_aligned`, `y_true_target_aligned`,
+  `prev_close_aligned`, `signal_config`, `signal_threshold_source`,
+  `signal_threshold_calibration_summary`).
+- `src/pipeline/evaluation_manager.py`: 16 mutable attribute state-backed
+  **property**'ye cevrildi (`manager.X` <-> `manager.state.X`). Owner-forward
+  servisler/workflow'lar `setattr(owner, X, ...)` ile yazdiginda yazim property
+  setter'i uzerinden state'e gider — mixin govdesine DOKUNULMADI (Faz 3'te
+  `self.state.X`'e gececek). `__init__` yeniden siralandi: `_init_context_and_state`
+  artik ONCE calisir (bos `EvaluationState()` kurar), state'e yazan `_init_*`'ler
+  sonra. Eski "state init'ten dict referanslari kopyalama" kaldirildi.
+- `state` lazy property: `__new__` ile `__init__`'i atlayan mekanizma testleri
+  (`test_reporting_metrics`, `test_phase8_acceptance`, ...) icin ilk eriste
+  otomatik `EvaluationState()` kurar; gercek `__init__` zaten explicit kurar.
+  Bu sayede mekanizma testlerine dokunulmadan suite yesil kaldi.
+- Davranis korundu: karakterizasyon golden'lari (`test_owner_forward_contract.py`,
+  12 test) degismeden gecti. Tam suite **561 passed**. Sonraki: Faz 2
+  (`EvaluationContext` tam tasima — READ-ONLY config/identity attribute'lari).
+
+## [2026-06-01] Faz 0 | E1 owner-forward karakterizasyon + envanter
+
+- **Faz 0 tamamlandi** (`refactor/e1-owner-forward-di`). Karakterizasyon golden'lari
+  `tests/test_owner_forward_contract.py` (12 test): davranis-seviyesi, mekanizma
+  degil — owner-forward servisler DI'ya cevrilirken DEGISMEZ referans. Kapsam:
+  kurulus state golden'i, `manager` <-> `manager.state` alias kimligi, paylasilan
+  mutable state iki-yonlu mutasyon, servis-kompozisyonu uzerinden saf hesaplamalar
+  (`_target_to_price`/`_weighted_average`/`_base_predictions_for_ensemble`),
+  determinizm.
+- Owner read/write envanteri `tools/owner_forward_inventory.py` (gecici AST araci,
+  Faz 7'de silinir) ile cikarildi; MUTABLE -> `EvaluationState`, READ-ONLY ->
+  `EvaluationContext` siniflandirmasi `e1-owner-forward-epic.md` §8'e islendi.
+  Faz 1'de state'e tasinacak yeni alanlar: `y_true_aligned`,
+  `y_true_target_aligned`, `prev_close_aligned`, `ensemble_weight_scope`,
+  `signal_config`, `signal_threshold_source`, `signal_threshold_calibration_summary`.
+- Tam suite **561 passed** (temiz `--basetemp`). NOT: `.codex_tmp/pytest` baska
+  process'e kilitliyken `tmp_path` kullanan testlerde 46 ERROR (WinError 5) cevresel
+  — koddan degil; `--basetemp` override ile temiz gecer.
+
 ## [2026-06-01] Ekle | E1 owner-forward kaldirma epik plani + yeni dal
 
 - `docs/wiki/e1-owner-forward-epic.md` olusturuldu: tam owner-forward kaldirma

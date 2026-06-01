@@ -171,9 +171,66 @@ Her faz ayrı commit. Bir faz golden'ı bozarsa `git revert <faz-commit>` ile
 izole geri alınır; önceki fazlar etkilenmez. Dal birleştirilmeden önce tam
 suite + `python -m src.cli.forecast` smoke koşulur.
 
+## 8. Faz 0 envanter sonucu (AST taraması)
+
+`tools/owner_forward_inventory.py` (geçici, Faz 7'de silinir) ile çıkarıldı.
+Owner-forward sınıflarının `self.<attr>` oku/yaz sınıflandırması:
+
+**Evaluation owner state — MUTABLE (EvaluationState hedefi):** `predictions`,
+`prediction_targets`, `quantile_predictions`, `single_backtest_inputs`,
+`latest_tensors`, `latest_backtest_results`, `latest_backtest_metrics`,
+`latest_model_metrics`, `ensemble_weights` (bunlar zaten `EvaluationState`'te) +
+**henüz state'te OLMAYAN, Faz 1'de taşınacak:** `y_true_aligned`,
+`y_true_target_aligned`, `prev_close_aligned`, `ensemble_weight_scope`,
+`signal_config`, `signal_threshold_source`,
+`signal_threshold_calibration_summary`. Training tarafı: `wf_y_true`,
+`final_holdout_model`, `final_holdout_model_name` (B1 kapsamı, bu epikte değil).
+
+**Evaluation owner state — READ-ONLY (EvaluationContext hedefi):**
+`stock_symbol`, `outputs_dir`, `models_dir`, `tracker`, `feature_names`,
+`dataset_hash`, `dataset_metadata`, `stock_db`, `ensemble_enabled`,
+`selected_models`, `backtest_enabled`, `commission_bps`, `slippage_bps`,
+`initial_capital`, `signal_mode`, `default_signal_config`, `xai_dir`.
+
+**DataManager owner state (Faz 6):** MUTABLE `df`, `dataset_hash`,
+`dataset_metadata`, `feature_names`, `feature_groups`, `*_report`,
+`selection_df`, `final_holdout_df`, `tensors`, `wf_splits`, `_wf_mode`,
+`_prepare_tensors_call_idx`; READ-ONLY `data_cfg`, `validation_config`,
+`project_root`, `macro_cache_dir`, `models_dir`, `scaling_reports`,
+`universe_file`, `stock_symbol`.
+
+**ForecastRunner owner state (Faz 5, yalnız-get):** READ-ONLY `db`,
+`model_config`, `project_root`, `rules`, `persistence` + servis referansları
+(`model_resolver`, `data_preparation_service`, `production_training_workflow`,
+`forecast_point_generator`, `latest_target_prediction_workflow`).
+
+> NOT: Workflow'ların okuduğu `self._method` çağrıları (`_baseline_specs`,
+> `_make_lstm`, `_skip`, `_split_walk_forward_signal_sets`, ...) attribute değil
+> davranış-delegasyonudur; DI'da bunlar dar protokol/servis bağımlılığına döner.
+
 ## Durum
 
+- 2026-06-01 (Faz 1 ✅): `EvaluationState` tam taşıma. `EvaluationState` 7 alanla
+  genişletildi (`ensemble_weight_scope`, `y_true_aligned`, `y_true_target_aligned`,
+  `prev_close_aligned`, `signal_config`, `signal_threshold_source`,
+  `signal_threshold_calibration_summary`). `EvaluationManager`'da 16 mutable
+  attribute state-backed **property**'ye dönüştü (`manager.X` ⇄ `manager.state.X`);
+  owner-forward servisler/workflow'lar `setattr(owner, X, ...)` ile yazdığında
+  property setter state'e yönlendirir, böylece mixin gövdesine **dokunulmadı**
+  (Faz 3'te `self.state.X`). `__init__` yeniden sıralandı: `_init_context_and_state`
+  artık önce gelir (boş state kurar). `state` lazy property → `__new__` ile kurulan
+  mekanizma testleri ilk erişimde otomatik state alır (testlere dokunulmadı). Tam
+  suite **561 passed**, golden'lar değişmeden geçti. Sonraki: Faz 2 (`EvaluationContext`).
+- 2026-06-01 (Faz 0 ✅): Karakterizasyon golden'ları `tests/test_owner_forward_contract.py`
+  yazıldı (12 test): kuruluş state golden'ı, `manager` ↔ `manager.state` alias
+  kimliği, paylaşılan-state iki-yönlü mutasyon, servis-kompozisyonu üzerinden saf
+  hesaplama golden'ları (`_target_to_price` 3 mod + invalid, `_weighted_average`,
+  `_base_predictions_for_ensemble`), determinizm. Forecast uçtan-uca golden'ı
+  `tests/test_forecasting.py` + `test_forecast_workflows.py`'de (duplike yok).
+  Owner read/write envanteri `tools/owner_forward_inventory.py` ile çıkarıldı
+  (yukarı §8). Tam suite **561 passed** (temiz `--basetemp` ile; `.codex_tmp`
+  kilitli olduğunda 46 ERROR çıkması çevreseldir, koddan değil). Sonraki: Faz 1
+  (`EvaluationState` tam taşıma).
 - 2026-06-01: Epik planı oluşturuldu; `refactor/e1-owner-forward-di` dalı açıldı.
   Ön koşul (E3 + fail-loud guard) `ModelUpdate`'te tamamlandı (commit 1e5c4be,
-  a541a10). Henüz hiçbir faz başlamadı — yeni session Faz 0 (karakterizasyon
-  testleri) ile başlamalı.
+  a541a10).
