@@ -58,6 +58,13 @@ class EvaluationContext:
     signal_mode: str = "legacy"
     default_signal_config: Any = None
     xai_dir: str = ""
+    # Faz 3.2: BacktestService'in okuduğu exe_cfg flag'leri (READ-ONLY).
+    write_trade_logs: bool = False
+    signal_calibration_min_trades: int = 6
+    signal_calibration_reject_behavior: str = "no_trade"
+    auto_signal_diagnostics: bool = True
+    enable_gate_diagnostics: bool = False
+    enable_shadow_backtests: bool = False
 
 
 @dataclass
@@ -159,8 +166,17 @@ class PredictionService(_PredictionEngineMixin):
         self.state = state
 
 
-class BacktestService(_OwnerBackedService, _BacktestRunnerMixin):
-    """Backtest execution, gate diagnostics and shadow scenarios."""
+class BacktestService(_BacktestRunnerMixin):
+    """Backtest execution, gate diagnostics and shadow scenarios.
+
+    Faz 3.2 (E1 owner-forward epiği): owner-forward kaldırıldı; ctor `(ctx, state)`
+    enjekte alır. Mixin gövdesi `self.ctx.X` (READ-ONLY config) / `self.state.X`
+    (mutable runtime) kullanır.
+    """
+
+    def __init__(self, ctx: EvaluationContext, state: EvaluationState) -> None:
+        self.ctx = ctx
+        self.state = state
 
 
 class SignalCalibrationService(_OwnerBackedService, _SignalCalibratorMixin):

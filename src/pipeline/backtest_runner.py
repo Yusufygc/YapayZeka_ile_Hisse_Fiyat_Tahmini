@@ -28,7 +28,16 @@ from src.backtesting.reporting import (
 
 
 class _BacktestRunnerMixin:
-    """Mixin: backtest yurutme ve diagnostik raporlama."""
+    """Mixin: backtest yurutme ve diagnostik raporlama.
+
+    Faz 3.2 (E1 owner-forward epigi): owner-forward kaldirildi. READ-ONLY config
+    `self.ctx.X` (commission_bps, slippage_bps, initial_capital, backtest_enabled,
+    signal_mode, dataset_metadata, outputs_dir, stock_symbol, write_trade_logs,
+    signal_calibration_min_trades, signal_calibration_reject_behavior,
+    auto_signal_diagnostics, enable_gate_diagnostics, enable_shadow_backtests),
+    mutable runtime `self.state.X` (signal_config, signal_threshold_source,
+    latest_backtest_results, latest_backtest_metrics).
+    """
 
     # ------------------------------------------------------------------ #
     #  Low-level helpers                                                   #
@@ -81,12 +90,12 @@ class _BacktestRunnerMixin:
             return {}
 
         scenarios = []
-        if str(getattr(self, "signal_mode", "professional")).lower() == "simple":
-            scenarios.append(("simple_current", "simple", self.signal_config, False))
+        if str(self.ctx.signal_mode).lower() == "simple":
+            scenarios.append(("simple_current", "simple", self.state.signal_config, False))
         scenarios.extend([
-            ("professional_current", "professional", replace(self.signal_config, quality_gate_mode="hard"), True),
-            ("professional_soft_gate", "professional", replace(self.signal_config, quality_gate_mode="soft"), True),
-            ("legacy_directional", "legacy", self.signal_config, False),
+            ("professional_current", "professional", replace(self.state.signal_config, quality_gate_mode="hard"), True),
+            ("professional_soft_gate", "professional", replace(self.state.signal_config, quality_gate_mode="soft"), True),
+            ("legacy_directional", "legacy", self.state.signal_config, False),
         ])
 
         rows = []
@@ -106,15 +115,15 @@ class _BacktestRunnerMixin:
                         model_name=model_name,
                         validation_mode=f"{suffix}_{shadow_mode}",
                         target_mode=target_mode,
-                        commission_bps=self.commission_bps,
-                        slippage_bps=self.slippage_bps,
+                        commission_bps=self.ctx.commission_bps,
+                        slippage_bps=self.ctx.slippage_bps,
                         signal_mode=signal_mode,
                         signal_config=scenario_config,
                         model_metrics=model_metrics_by_model.get(model_name, {}) if use_model_metrics else {},
                     )
                     summary = summarize_backtest(
                         result,
-                        initial_capital=self.initial_capital,
+                        initial_capital=self.ctx.initial_capital,
                         trial_count=max(1, len(backtest_inputs)),
                     )
                     curve = result.get("equity_curve", pd.DataFrame())
@@ -218,12 +227,12 @@ class _BacktestRunnerMixin:
             rmse_vs_benchmark = self._diagnostic_float(model_metrics.get("RMSE_vs_benchmark"))
             composite_score = self._diagnostic_float(model_metrics.get("Composite_Score"))
 
-            probe_signal_mode = str(getattr(self, "signal_mode", "professional")).lower()
+            probe_signal_mode = str(self.ctx.signal_mode).lower()
             if probe_signal_mode not in {"simple", "legacy", "professional"}:
                 probe_signal_mode = "professional"
             probe_status = "skipped_benchmark_only"
             probe_curve = pd.DataFrame()
-            if probe_signal_mode != "professional" or model_name not in self.signal_config.benchmark_only_models:
+            if probe_signal_mode != "professional" or model_name not in self.state.signal_config.benchmark_only_models:
                 try:
                     probe_result = run_backtest(
                         dates=payload.get("dates"),
@@ -237,10 +246,10 @@ class _BacktestRunnerMixin:
                         model_name=model_name,
                         validation_mode=f"{suffix}_gate_probe",
                         target_mode=target_mode,
-                        commission_bps=self.commission_bps,
-                        slippage_bps=self.slippage_bps,
+                        commission_bps=self.ctx.commission_bps,
+                        slippage_bps=self.ctx.slippage_bps,
                         signal_mode=probe_signal_mode,
-                        signal_config=self.signal_config,
+                        signal_config=self.state.signal_config,
                         model_metrics={},
                     )
                     probe_curve = probe_result.get("equity_curve", pd.DataFrame())
@@ -261,15 +270,15 @@ class _BacktestRunnerMixin:
             rows.append({
                 "Model": model_name,
                 "Validation_Suffix": suffix,
-                "Gate_Mode": f"{self.signal_mode}_current",
+                "Gate_Mode": f"{self.ctx.signal_mode}_current",
                 "Probe_Status": probe_status,
                 "Dir_Acc": dir_acc,
                 "RMSE_vs_benchmark": rmse_vs_benchmark,
                 "Composite_Score": composite_score,
                 "Would_Buy_Count": self._count_decision(probe_curve, "BUY"),
-                "Blocked_By_DirAcc": n_bars if np.isfinite(dir_acc) and dir_acc < self.signal_config.min_directional_accuracy else 0,
-                "Blocked_By_RMSE": n_bars if np.isfinite(rmse_vs_benchmark) and rmse_vs_benchmark > self.signal_config.max_rmse_vs_benchmark else 0,
-                "Blocked_By_Composite": n_bars if np.isfinite(composite_score) and composite_score < self.signal_config.min_composite_score else 0,
+                "Blocked_By_DirAcc": n_bars if np.isfinite(dir_acc) and dir_acc < self.state.signal_config.min_directional_accuracy else 0,
+                "Blocked_By_RMSE": n_bars if np.isfinite(rmse_vs_benchmark) and rmse_vs_benchmark > self.state.signal_config.max_rmse_vs_benchmark else 0,
+                "Blocked_By_Composite": n_bars if np.isfinite(composite_score) and composite_score < self.state.signal_config.min_composite_score else 0,
                 "Primary_Blocked_By_DirAcc": int((current_states == "quality_dir_acc").sum()),
                 "Primary_Blocked_By_RMSE": int((current_states == "quality_rmse").sum()),
                 "Primary_Blocked_By_Composite": int((current_states == "quality_composite").sum()),
@@ -286,17 +295,17 @@ class _BacktestRunnerMixin:
                 "Mean_Abs_Predicted_Return": float(np.nanmean(np.abs(expected_return))) if expected_return.size else np.nan,
                 "Median_Entry_Threshold": float(np.nanmedian(entry_threshold)) if entry_threshold.size else np.nan,
                 "Pct_Pred_Above_Threshold": float(np.nanmean(above_entry) * 100.0) if above_entry.size else np.nan,
-                "Min_Directional_Accuracy_Config": self.signal_config.min_directional_accuracy,
-                "Max_RMSE_vs_Benchmark_Config": self.signal_config.max_rmse_vs_benchmark,
-                "Min_Composite_Score_Config": self.signal_config.min_composite_score,
-                "Entry_Cost_Multiplier": self.signal_config.entry_cost_multiplier,
-                "Volatility_Multiplier": self.signal_config.volatility_multiplier,
+                "Min_Directional_Accuracy_Config": self.state.signal_config.min_directional_accuracy,
+                "Max_RMSE_vs_Benchmark_Config": self.state.signal_config.max_rmse_vs_benchmark,
+                "Min_Composite_Score_Config": self.state.signal_config.min_composite_score,
+                "Entry_Cost_Multiplier": self.state.signal_config.entry_cost_multiplier,
+                "Volatility_Multiplier": self.state.signal_config.volatility_multiplier,
             })
 
         return pd.DataFrame(rows)
 
     def _write_signal_gate_diagnostics(self, diagnostics: pd.DataFrame, suffix: str) -> None:
-        outputs_dir = getattr(self, "outputs_dir", "")
+        outputs_dir = self.ctx.outputs_dir
         if not outputs_dir or not isinstance(diagnostics, pd.DataFrame):
             return
         try:
@@ -308,7 +317,7 @@ class _BacktestRunnerMixin:
             print(f"  [WARN] Signal gate diagnostik raporu kaydedilemedi: {exc}")
 
     def _write_shadow_backtest_reports(self, shadow_results: Dict[str, Any], suffix: str) -> None:
-        outputs_dir = getattr(self, "outputs_dir", "")
+        outputs_dir = self.ctx.outputs_dir
         if not outputs_dir or not shadow_results:
             return
         try:
@@ -320,7 +329,7 @@ class _BacktestRunnerMixin:
             if isinstance(comparison_df, pd.DataFrame):
                 comparison_df.to_csv(comparison_path, index=False)
                 print(f"  [OK] Shadow backtest karsilastirma raporu kaydedildi -> {comparison_path}")
-            if isinstance(trades_df, pd.DataFrame) and bool(getattr(self, "write_trade_logs", False)):
+            if isinstance(trades_df, pd.DataFrame) and bool(self.ctx.write_trade_logs):
                 trades_df.to_csv(trades_path, index=False)
                 print(f"  [OK] Shadow backtest islem raporu kaydedildi -> {trades_path}")
         except Exception as exc:
@@ -333,7 +342,7 @@ class _BacktestRunnerMixin:
         shadow_results: Dict[str, Any],
     ) -> None:
         comparison_df = shadow_results.get("comparison_df") if isinstance(shadow_results, dict) else None
-        min_trades = int(getattr(self, "signal_calibration_min_trades", 6) or 6)
+        min_trades = int(self.ctx.signal_calibration_min_trades or 6)
         for model_name, metrics in metrics_by_model.items():
             labels = []
             net_return = self._diagnostic_float(metrics.get("Net_Return"))
@@ -347,7 +356,7 @@ class _BacktestRunnerMixin:
                 labels.append("insufficient_trades")
             if np.isfinite(sharpe) and sharpe <= 0.0:
                 labels.append("model_signal_weak")
-            if getattr(self, "signal_threshold_source", "") == "walk_forward_signal_rejected":
+            if self.state.signal_threshold_source == "walk_forward_signal_rejected":
                 labels.append("rejected_no_trade")
 
             if isinstance(comparison_df, pd.DataFrame) and not comparison_df.empty:
@@ -403,10 +412,10 @@ class _BacktestRunnerMixin:
                     model_name=model_name,
                     validation_mode=suffix,
                     target_mode=target_mode,
-                    commission_bps=self.commission_bps,
-                    slippage_bps=self.slippage_bps,
+                    commission_bps=self.ctx.commission_bps,
+                    slippage_bps=self.ctx.slippage_bps,
                     signal_mode=self._effective_signal_mode(),
-                    signal_config=self.signal_config,
+                    signal_config=self.state.signal_config,
                     model_metrics=model_metrics_by_model.get(model_name, {}),
                 )
             except Exception as exc:
@@ -422,11 +431,11 @@ class _BacktestRunnerMixin:
 
     def _effective_signal_mode(self) -> str:
         if (
-            getattr(self, "signal_threshold_source", "") == "walk_forward_signal_rejected"
-            and str(getattr(self, "signal_calibration_reject_behavior", "no_trade")).lower() == "no_trade"
+            self.state.signal_threshold_source == "walk_forward_signal_rejected"
+            and str(self.ctx.signal_calibration_reject_behavior).lower() == "no_trade"
         ):
             return "rejected_no_trade"
-        return self.signal_mode
+        return self.ctx.signal_mode
 
     def _summarize_backtest_result(
         self,
@@ -435,16 +444,16 @@ class _BacktestRunnerMixin:
     ) -> Dict[str, Any]:
         summary = summarize_backtest(
             result,
-            initial_capital=self.initial_capital,
+            initial_capital=self.ctx.initial_capital,
             trial_count=max(1, backtest_count),
         )
         summary.update({
-            "Target_Semantics": self.dataset_metadata.get("target_semantics", ""),
-            "Execution_Lag": self.dataset_metadata.get("execution_lag", ""),
-            "Macro_Release_Lag": str(self.dataset_metadata.get("macro_release_lag", {})),
-            "Transaction_Costs": f"commission_bps={self.commission_bps}; slippage_bps={self.slippage_bps}",
-            "Validation_Protocol": str(self.dataset_metadata.get("validation_config", {})),
-            "Threshold_Config": str(self.dataset_metadata.get("signal_threshold_config", {})),
+            "Target_Semantics": self.ctx.dataset_metadata.get("target_semantics", ""),
+            "Execution_Lag": self.ctx.dataset_metadata.get("execution_lag", ""),
+            "Macro_Release_Lag": str(self.ctx.dataset_metadata.get("macro_release_lag", {})),
+            "Transaction_Costs": f"commission_bps={self.ctx.commission_bps}; slippage_bps={self.ctx.slippage_bps}",
+            "Validation_Protocol": str(self.ctx.dataset_metadata.get("validation_config", {})),
+            "Threshold_Config": str(self.ctx.dataset_metadata.get("signal_threshold_config", {})),
         })
         return summary
 
@@ -458,9 +467,9 @@ class _BacktestRunnerMixin:
         suffix: str,
         target_mode: str,
     ) -> tuple[pd.DataFrame | Dict[str, str], Dict[str, Any]]:
-        auto_diagnostics = bool(getattr(self, "auto_signal_diagnostics", True)) and suffix in {"wf", "final_holdout"}
+        auto_diagnostics = bool(self.ctx.auto_signal_diagnostics) and suffix in {"wf", "final_holdout"}
 
-        if bool(getattr(self, "enable_gate_diagnostics", False)) or auto_diagnostics:
+        if bool(self.ctx.enable_gate_diagnostics) or auto_diagnostics:
             gate_diagnostics = self._get_signal_gate_diagnostics(
                 backtest_inputs=backtest_inputs,
                 backtest_results=results,
@@ -473,7 +482,7 @@ class _BacktestRunnerMixin:
         else:
             gate_diagnostics = {"status": "disabled"}
 
-        if bool(getattr(self, "enable_shadow_backtests", False)) or auto_diagnostics:
+        if bool(self.ctx.enable_shadow_backtests) or auto_diagnostics:
             shadow_results = self._get_shadow_backtests(
                 backtest_inputs=backtest_inputs,
                 model_metrics_by_model=model_metrics_by_model,
@@ -505,7 +514,7 @@ class _BacktestRunnerMixin:
                 equity_curves,
                 save_path=os.path.join(outputs_dir, f"backtest_orders_{suffix}.csv"),
             )
-        if trades_by_model and bool(getattr(self, "write_trade_logs", False)):
+        if trades_by_model and bool(self.ctx.write_trade_logs):
             save_trade_logs(
                 trades_by_model,
                 save_path=os.path.join(outputs_dir, f"backtest_trades_{suffix}.csv"),
@@ -521,10 +530,10 @@ class _BacktestRunnerMixin:
         suffix: str,
         model_metrics_by_model: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        if not self.backtest_enabled or not backtest_inputs:
+        if not self.ctx.backtest_enabled or not backtest_inputs:
             return {}
 
-        target_mode = self.dataset_metadata.get("target_mode", "log_return")
+        target_mode = self.ctx.dataset_metadata.get("target_mode", "log_return")
         results, metrics_by_model, trades_by_model, equity_curves = self._execute_backtest_batch(
             backtest_inputs=backtest_inputs,
             suffix=suffix,
@@ -535,8 +544,8 @@ class _BacktestRunnerMixin:
         if not metrics_by_model:
             return {}
 
-        self.latest_backtest_results[suffix] = results
-        self.latest_backtest_metrics[suffix] = metrics_by_model
+        self.state.latest_backtest_results[suffix] = results
+        self.state.latest_backtest_metrics[suffix] = metrics_by_model
         gate_diagnostics, shadow_results = self._run_backtest_diagnostics(
             backtest_inputs=backtest_inputs,
             results=results,
@@ -549,13 +558,13 @@ class _BacktestRunnerMixin:
 
         # ── Grafik ve rapor kayıtları ──────────────────────────────
         try:
-            _out = getattr(self, "outputs_dir", "")
+            _out = self.ctx.outputs_dir
             if _out and equity_curves:
                 try:
                     plot_equity_curves(
                         equity_curves,
                         save_path=os.path.join(_out, f'backtest_equity_{suffix}.png'),
-                        title=f'{getattr(self, "stock_symbol", "")} Equity Curves ({suffix})',
+                        title=f'{self.ctx.stock_symbol} Equity Curves ({suffix})',
                         selected_models=set(metrics_by_model),
                     )
                 except Exception as _plot_exc:

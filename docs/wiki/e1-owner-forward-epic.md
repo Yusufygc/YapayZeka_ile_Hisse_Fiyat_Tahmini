@@ -210,6 +210,19 @@ Owner-forward sınıflarının `self.<attr>` oku/yaz sınıflandırması:
 
 ## Durum
 
+- 2026-06-01 (Faz 3.2 ✅): `BacktestService` DI'ya geçti (Faz 3 servis #2/4).
+  `_OwnerBackedService` mirası kalktı, ctor `(ctx, state)`. `_BacktestRunnerMixin`
+  forward erişimleri açık: READ-ONLY `self.ctx.X` (commission/slippage/initial_capital/
+  backtest_enabled/signal_mode/dataset_metadata/outputs_dir/stock_symbol + 6 yeni
+  exe_cfg flag), mutable `self.state.X` (signal_config/signal_threshold_source/
+  latest_backtest_results/latest_backtest_metrics). `EvaluationContext`'e
+  BacktestService'in okuduğu 6 exe_cfg flag eklendi (`write_trade_logs`,
+  `signal_calibration_min_trades`, `signal_calibration_reject_behavior`,
+  `auto_signal_diagnostics`, `enable_gate_diagnostics`, `enable_shadow_backtests`)
+  — default'lar eski getattr fallback'leriyle birebir aynı. Manager'da 6 yeni
+  context-backed property; `_init_services` `BacktestService(self.context, self.state)`.
+  Kalan 2 servis (SignalCalibration, MetricsReporting) hâlâ owner-backed. Tam suite
+  **561 passed**, golden değişmedi. Sonraki: Faz 3.3 (SignalCalibrationService).
 - 2026-06-01 (Faz 3.1 ✅): `PredictionService` DI'ya geçti (Faz 3 servis #1/4).
   `_OwnerBackedService` mirası kaldırıldı; ctor `(ctx, state)` enjekte alır
   (`evaluation_services.py`). `_PredictionEngineMixin` gövdesindeki tüm owner-forward

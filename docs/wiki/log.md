@@ -1,3 +1,25 @@
+## [2026-06-01] Faz 3.2 | E1 owner-forward: BacktestService DI'ya gecti
+
+- **Faz 3 servis #2 tamamlandi** (`refactor/e1-owner-forward-di`). `BacktestService`
+  artik `_OwnerBackedService`'ten MIRAS ALMIYOR; ctor `(ctx, state)` DI alir.
+- `src/pipeline/backtest_runner.py` (`_BacktestRunnerMixin`): owner-forward erisimleri
+  acik hale getirildi — READ-ONLY `self.ctx.X` (commission_bps, slippage_bps,
+  initial_capital, backtest_enabled, signal_mode, dataset_metadata, outputs_dir,
+  stock_symbol + 6 yeni exe_cfg flag), mutable `self.state.X` (signal_config,
+  signal_threshold_source, latest_backtest_results, latest_backtest_metrics). Tum
+  defensive `getattr(self, "...")` formlari kaldirildi.
+- `src/pipeline/evaluation_services.py`: `EvaluationContext`'e BacktestService'in
+  okudugu 6 exe_cfg flag eklendi (READ-ONLY): `write_trade_logs`,
+  `signal_calibration_min_trades`, `signal_calibration_reject_behavior`,
+  `auto_signal_diagnostics`, `enable_gate_diagnostics`, `enable_shadow_backtests`.
+  Default'lar eski getattr fallback'leriyle birebir ayni (davranis korunur).
+- `src/pipeline/evaluation_manager.py`: bu 6 flag context-backed property'ye cevrildi
+  (`_init_execution_attrs`'taki mevcut atamalar setter uzerinden context'e akar);
+  `_init_services` `BacktestService(self.context, self.state)` enjekte ediyor
+  (kalan 2 servis hala owner-backed).
+- Tam suite **561 passed**, golden'lar degismeden gecti. Sonraki: Faz 3.3
+  (SignalCalibrationService).
+
 ## [2026-06-01] Faz 3.1 | E1 owner-forward: PredictionService DI'ya gecti
 
 - **Faz 3 servis #1 tamamlandi** (`refactor/e1-owner-forward-di`). `PredictionService`

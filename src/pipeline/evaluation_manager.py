@@ -322,6 +322,55 @@ class EvaluationManager:
     def xai_dir(self, value: str) -> None:
         self.context.xai_dir = value
 
+    # Faz 3.2: BacktestService'in okudugu exe_cfg flag'leri context'e tasindi.
+    @property
+    def write_trade_logs(self) -> bool:
+        return self.context.write_trade_logs
+
+    @write_trade_logs.setter
+    def write_trade_logs(self, value: bool) -> None:
+        self.context.write_trade_logs = value
+
+    @property
+    def signal_calibration_min_trades(self) -> int:
+        return self.context.signal_calibration_min_trades
+
+    @signal_calibration_min_trades.setter
+    def signal_calibration_min_trades(self, value: int) -> None:
+        self.context.signal_calibration_min_trades = value
+
+    @property
+    def signal_calibration_reject_behavior(self) -> str:
+        return self.context.signal_calibration_reject_behavior
+
+    @signal_calibration_reject_behavior.setter
+    def signal_calibration_reject_behavior(self, value: str) -> None:
+        self.context.signal_calibration_reject_behavior = value
+
+    @property
+    def auto_signal_diagnostics(self) -> bool:
+        return self.context.auto_signal_diagnostics
+
+    @auto_signal_diagnostics.setter
+    def auto_signal_diagnostics(self, value: bool) -> None:
+        self.context.auto_signal_diagnostics = value
+
+    @property
+    def enable_gate_diagnostics(self) -> bool:
+        return self.context.enable_gate_diagnostics
+
+    @enable_gate_diagnostics.setter
+    def enable_gate_diagnostics(self, value: bool) -> None:
+        self.context.enable_gate_diagnostics = value
+
+    @property
+    def enable_shadow_backtests(self) -> bool:
+        return self.context.enable_shadow_backtests
+
+    @enable_shadow_backtests.setter
+    def enable_shadow_backtests(self, value: bool) -> None:
+        self.context.enable_shadow_backtests = value
+
     # ------------------------------------------------------------------ #
     #  Mutable state property forward'lari (Faz 1)                        #
     #                                                                     #
@@ -476,7 +525,7 @@ class EvaluationManager:
 
     def _init_services(self) -> None:
         self.prediction_service = PredictionService(self.context, self.state)
-        self.backtest_service = BacktestService(self)
+        self.backtest_service = BacktestService(self.context, self.state)
         self.signal_calibration_service = SignalCalibrationService(self)
         self.metrics_reporting_service = MetricsReportingService(self)
         self.single_split_workflow = SingleSplitEvaluationWorkflow(self)
