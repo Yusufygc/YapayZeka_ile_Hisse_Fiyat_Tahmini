@@ -71,17 +71,29 @@ class DataIngestionService(_OwnerBackedService):
         _cache_key = _cache.make_key(self.data_cfg.data_file, self.data_cfg)
         _cache_hit = _cache.get(_cache_key)
 
+        macro_expected = bool(self.data_cfg.use_macro)
+        macro_available = macro_df is not None and not macro_df.empty
+
         if _cache_hit is not None:
-            self.df, _meta = _cache_hit
-            self.feature_names = _meta["feature_names"]
-            self.feature_groups = _meta.get("feature_groups", {})
-            self.feature_pruning_report = _meta.get("feature_pruning_report", {})
-            self.sector_mapping_report = _meta.get(
-                "sector_mapping_report",
-                self.sector_mapping_report,
-            )
-            print("  [CACHE] Ozellik muhendisligi cache'den yuklendi.")
-            return
+            cached_df, _meta = _cache_hit
+            cached_names = _meta.get("feature_names", [])
+            # Self-heal: makro istendigi halde cache makro-yoksun bir frame iceriyorsa
+            # (gecmiste makro cekimi basarisiz olup degraded sonuc yazilmis olabilir),
+            # cache'i gecersiz say ve asagida yeniden uret. Bu, gecmiste zehirlenmis
+            # cache girdilerinden otomatik kurtulmayi saglar.
+            if macro_expected and not self._has_macro_features(cached_names):
+                _cache._evict(_cache_key)
+            else:
+                self.df = cached_df
+                self.feature_names = _meta["feature_names"]
+                self.feature_groups = _meta.get("feature_groups", {})
+                self.feature_pruning_report = _meta.get("feature_pruning_report", {})
+                self.sector_mapping_report = _meta.get(
+                    "sector_mapping_report",
+                    self.sector_mapping_report,
+                )
+                print("  [CACHE] Ozellik muhendisligi cache'den yuklendi.")
+                return
 
         feature_pipeline = FeaturePipeline(
             feature_mode=self.data_cfg.feature_mode,
@@ -106,16 +118,28 @@ class DataIngestionService(_OwnerBackedService):
         self.feature_groups = feature_pipeline.feature_groups
         self.feature_pruning_report = feature_pipeline.pruning_report
         self.sector_mapping_report = feature_pipeline.sector_mapping_report
-        _cache.put(
-            _cache_key,
-            self.df,
-            {
-                "feature_names": self.feature_names,
-                "feature_groups": self.feature_groups,
-                "feature_pruning_report": self.feature_pruning_report,
-                "sector_mapping_report": self.sector_mapping_report,
-            },
-        )
+        if macro_expected and not macro_available:
+            # Makro istendi fakat alinamadi: degraded (makro-yoksun) frame'i cache'leme.
+            # Aksi halde gecici bir makro cekim hatasi cache'i zehirler ve sonraki
+            # kosular ayni anahtarla makrosuz frame'i geri okur.
+            print("  [CACHE] Makro istendi fakat alinamadi; degraded frame cache'lenmedi.")
+        else:
+            _cache.put(
+                _cache_key,
+                self.df,
+                {
+                    "feature_names": self.feature_names,
+                    "feature_groups": self.feature_groups,
+                    "feature_pruning_report": self.feature_pruning_report,
+                    "sector_mapping_report": self.sector_mapping_report,
+                },
+            )
+
+    @staticmethod
+    def _has_macro_features(feature_names) -> bool:
+        """feature_names icinde en az bir makro ozellik var mi? (cache self-heal icin)."""
+        macro_names = set(MacroPipeline.macro_feature_names(include_rates=True))
+        return any(name in macro_names for name in (feature_names or []))
 
     def _print_ingestion_summary(self, macro_df) -> None:
         """Veri boyutu, teknik/makro özellik sayıları, kurumsal aksiyon, pruning

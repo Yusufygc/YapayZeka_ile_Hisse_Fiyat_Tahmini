@@ -248,7 +248,7 @@ class MacroPipeline:
             fetch_start = (existing["Date"].max() + timedelta(days=1)).strftime("%Y-%m-%d")
 
         fetch_end = (datetime.today() + timedelta(days=1)).strftime("%Y-%m-%d")
-        print(f"  [MACRO] {key} güncelleniyor: {fetch_start} → bugün ...")
+        print(f"  [MACRO] {key} güncelleniyor: {fetch_start} -> bugün ...")
 
         new_data = self._download_yfinance(ticker, fetch_start, fetch_end, value_name=key)
         if new_data is not None and not new_data.empty:
@@ -282,7 +282,7 @@ class MacroPipeline:
             df["Date"] = pd.to_datetime(df["Date"]).dt.normalize()
             return df
         except ImportError:
-            print("  [MACRO] pandas_datareader yüklü değil → pip install pandas-datareader")
+            print("  [MACRO] pandas_datareader yüklü değil -> pip install pandas-datareader")
             return None
         except Exception as exc:
             print(f"  [MACRO] FRED {series_id}: {exc}")

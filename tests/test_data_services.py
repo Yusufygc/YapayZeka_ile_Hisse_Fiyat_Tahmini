@@ -107,3 +107,94 @@ def test_walk_forward_split_excludes_final_holdout_from_selection(monkeypatch, t
     assert len(manager.final_holdout_df) == 4
     assert not protocol["Final_Holdout_Used_For_Selection"].any()
     assert "final_holdout" in set(protocol["Split"])
+
+
+# --------------------------------------------------------------------------- #
+#  Feature-cache makro zehirlenmesi (regresyon)                               #
+# --------------------------------------------------------------------------- #
+
+
+class _StubFeaturePipeline:
+    """macro_df doluysa makro ozellik (Rate_Level) ekleyen sahte FeaturePipeline."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        self.feature_names = []
+        self.feature_groups = {}
+        self.pruning_report = {}
+        self.sector_mapping_report = {}
+
+    def engineer_features(self, raw_df, macro_df=None, symbol=None,
+                          sector_mapping=None, prune_fit_tail=0):
+        out = raw_df.copy()
+        if macro_df is not None and not macro_df.empty:
+            out["Rate_Level"] = 0.0
+            self.feature_names = ["Feature_A", "Rate_Level"]
+        else:
+            self.feature_names = ["Feature_A"]
+        return out
+
+
+def _macro_manager(tmp_path) -> DataManager:
+    manager = DataManager(
+        data_cfg=DataConfig(
+            data_file=os.path.join(str(tmp_path), "TEST.csv"),
+            use_macro=True,
+            time_steps=3,
+            prune_correlated_features=False,
+        ),
+        val_cfg=ValidationConfig(),
+        models_dir=os.path.join(str(tmp_path), "models"),
+    )
+    manager.project_root = str(tmp_path)
+    return manager
+
+
+def _cache_pkls(tmp_path) -> list:
+    cache_dir = os.path.join(str(tmp_path), "data", "feature_cache")
+    if not os.path.isdir(cache_dir):
+        return []
+    return [f for f in os.listdir(cache_dir) if f.endswith(".pkl")]
+
+
+def test_degraded_macro_frame_not_cached(tmp_path, monkeypatch):
+    """use_macro=True ama makro alinamadiysa makrosuz frame cache'lenmemeli."""
+    import src.pipeline.data_services as ds
+
+    monkeypatch.setattr(ds, "FeaturePipeline", _StubFeaturePipeline)
+    manager = _macro_manager(tmp_path)
+    svc = manager.data_ingestion_service
+
+    svc._engineer_features_cached(_frame(30), pd.DataFrame(), {})
+
+    assert "Feature_A" in manager.feature_names
+    assert "Rate_Level" not in manager.feature_names
+    assert _cache_pkls(tmp_path) == []  # degraded -> cache yok
+
+
+def test_macro_frame_cached_and_poisoned_entry_self_heals(tmp_path, monkeypatch):
+    """Makro mevcutsa cache yazilir; eski makrosuz (zehirli) kayit self-heal edilir."""
+    import src.pipeline.data_services as ds
+    from src.features.feature_cache import FeatureCache
+
+    monkeypatch.setattr(ds, "FeaturePipeline", _StubFeaturePipeline)
+    manager = _macro_manager(tmp_path)
+    svc = manager.data_ingestion_service
+    raw = _frame(30)
+
+    # Zehirli (makrosuz) kaydi dogrudan use_macro=True anahtari altina yaz.
+    cache_dir = os.path.join(str(tmp_path), "data", "feature_cache")
+    cache = FeatureCache(cache_dir=cache_dir)
+    key = cache.make_key(manager.data_cfg.data_file, manager.data_cfg)
+    cache.put(key, raw.copy(), {
+        "feature_names": ["Feature_A"],
+        "feature_groups": {},
+        "feature_pruning_report": {},
+        "sector_mapping_report": {},
+    })
+
+    macro_df = pd.DataFrame({"Date": raw["Date"], "Rate_Level": 0.0})
+    svc._engineer_features_cached(raw, macro_df, {})
+
+    # Stale kayit yerine makrolu frame uretildi + cache'e yazildi.
+    assert "Rate_Level" in manager.feature_names
+    assert len(_cache_pkls(tmp_path)) == 1
