@@ -25,18 +25,39 @@ from src.pipeline.signal_calibrator import _SignalCalibratorMixin
 
 @dataclass
 class EvaluationContext:
-    """Immutable-ish dependency bag for evaluation services."""
+    """Salt-okunur bağımlılık/kimlik torbası (evaluation servisleri için).
 
-    stock_symbol: str
-    outputs_dir: str
-    models_dir: str
-    tracker: ExperimentTracker
-    feature_names: list
-    dataset_hash: str
-    dataset_metadata: Dict[str, Any]
-    exe_cfg: ExecutionConfig
-    model_cfg: ModelConfig
+    Faz 2 (E1 owner-forward epiği): servislerin owner'dan OKUDUĞU tüm config/
+    identity attribute'ları burada toplanır. EvaluationManager bu alanları
+    property forward ile (`manager.X` <-> `manager.context.X`) açar; owner-forward
+    servisler/workflow'lar getattr üzerinden aynı context'ten okur. Faz 3'te
+    servisler doğrudan `self.ctx.X` kullanacak.
+
+    Tüm alanlar default'ludur: `__init__`'i atlayan (`__new__`) mekanizma testleri
+    için boş `EvaluationContext()` kurulabilir olmalı (bkz. `manager.context` lazy
+    property). Gerçek `__init__` zaten tüm alanları explicit kurar.
+    """
+
+    stock_symbol: str = ""
+    outputs_dir: str = ""
+    models_dir: str = ""
+    tracker: Optional[ExperimentTracker] = None
+    feature_names: list = field(default_factory=list)
+    dataset_hash: str = ""
+    dataset_metadata: Dict[str, Any] = field(default_factory=dict)
+    exe_cfg: Optional[ExecutionConfig] = None
+    model_cfg: Optional[ModelConfig] = None
     stock_db: Optional[StockModelDB] = None
+    # Faz 2: exe_cfg/model_cfg/outputs_dir'den türetilen config/identity (READ-ONLY).
+    ensemble_enabled: bool = False
+    selected_models: Optional[set] = None
+    backtest_enabled: bool = False
+    commission_bps: float = 0.0
+    slippage_bps: float = 0.0
+    initial_capital: float = 0.0
+    signal_mode: str = "legacy"
+    default_signal_config: Any = None
+    xai_dir: str = ""
 
 
 @dataclass

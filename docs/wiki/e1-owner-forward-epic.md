@@ -210,6 +210,21 @@ Owner-forward sınıflarının `self.<attr>` oku/yaz sınıflandırması:
 
 ## Durum
 
+- 2026-06-01 (Faz 2 ✅): `EvaluationContext` tam taşıma. `EvaluationContext` tüm
+  alanları default'lu hale getirildi (lazy/`__new__` desteği) + 9 türetilmiş
+  READ-ONLY alan eklendi (`ensemble_enabled`, `selected_models`, `backtest_enabled`,
+  `commission_bps`, `slippage_bps`, `initial_capital`, `signal_mode`,
+  `default_signal_config`, `xai_dir`). `EvaluationManager`'da 19 config/identity
+  attribute (10 base + 9 türetilmiş) context-backed **property**'ye dönüştü
+  (`manager.X` ⇄ `manager.context.X`); owner-forward servisler/workflow'lar getattr
+  ile aynı context'ten okur. `__init__`'teki düz `self.stock_symbol = ...` atamaları
+  kaldırıldı (base'ler context constructor'a, türevler `_init_*` setter'larına gitti);
+  mixin gövdesine yine **dokunulmadı** (Faz 3'te `self.ctx.X`). `context` lazy property
+  → `__new__` mekanizma testleri (`test_phase8_acceptance` doğrudan `outputs_dir`/
+  `commission_bps`/`signal_mode` set'leri) ilk erişimde boş `EvaluationContext()` alır
+  (testlere dokunulmadı). Mixin/workflow'da bu attr'lara yazım yok (doğrulandı) —
+  gerçekten READ-ONLY. Tam suite **561 passed**, golden'lar değişmeden geçti.
+  Sonraki: Faz 3 (mixin → davranış-sahibi servis, en riskli).
 - 2026-06-01 (Faz 1 ✅): `EvaluationState` tam taşıma. `EvaluationState` 7 alanla
   genişletildi (`ensemble_weight_scope`, `y_true_aligned`, `y_true_target_aligned`,
   `prev_close_aligned`, `signal_config`, `signal_threshold_source`,

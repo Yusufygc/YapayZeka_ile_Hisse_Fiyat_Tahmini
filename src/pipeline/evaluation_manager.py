@@ -64,21 +64,11 @@ class EvaluationManager:
         model_cfg: ModelConfig,
         stock_db: Optional[StockModelDB] = None,
     ):
-        self.stock_symbol = stock_symbol
-        self.outputs_dir = outputs_dir
-        self.models_dir = models_dir
-        self.tracker = tracker
-        self.feature_names = feature_names
-        self.dataset_hash = dataset_hash
-        self.dataset_metadata = dataset_metadata
-
-        self.exe_cfg = exe_cfg
-        self.model_cfg = model_cfg
-        self.stock_db = stock_db
-
-        # Faz 1: context + (boş) state ÖNCE kurulur; mutable evaluation state
-        # artık EvaluationState'te yaşar ve manager property'leri ona forward eder.
-        # Bu yüzden state'e yazan _init_* metotlarından önce gelmeli.
+        # Faz 1+2: context + (boş) state ÖNCE kurulur. READ-ONLY config/identity
+        # artık EvaluationContext'te, mutable runtime state EvaluationState'te yaşar;
+        # manager property'leri bunlara forward eder. Bu yüzden context/state'e yazan
+        # _init_* metotlarından önce gelmeli. (Eskiden burada yapılan düz
+        # self.stock_symbol = ... atamaları context constructor'a taşındı.)
         self._init_context_and_state(
             stock_symbol=stock_symbol,
             outputs_dir=outputs_dir,
@@ -141,17 +131,196 @@ class EvaluationManager:
         self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
 
     def _init_mutable_state(self) -> None:
-        # Faz 1: predictions/prediction_targets/.../ensemble_weight_scope ve
-        # y_true_* hizalamaları artik EvaluationState varsayilanlarinda durur
-        # (bkz. _init_context_and_state). Burada yalnizca state-disi türetilmiş
-        # attribute'lar kalir. xai_dir READ-ONLY (Faz 2'de EvaluationContext'e gider).
+        # Faz 1: predictions/.../y_true_* artik EvaluationState varsayilanlarinda.
+        # Faz 2: xai_dir READ-ONLY olarak EvaluationContext'e gider; bu atama
+        # context-backed property setter uzerinden context'e yazilir.
         self.xai_dir = os.path.join(self.outputs_dir, "xai")
 
     def _init_context_and_state(self, **kwargs: Any) -> None:
+        # Context yalnizca base identity/cfg kwarg'lariyla kurulur; turetilmis
+        # READ-ONLY alanlar (selected_models, ensemble_enabled, backtest_enabled,
+        # commission_bps, slippage_bps, initial_capital, signal_mode,
+        # default_signal_config, xai_dir) asagidaki _init_* metotlarinda
+        # context-backed property setter'lari uzerinden context'e yazilir.
         self.context = EvaluationContext(**kwargs)
         # Bos state; tüm mutable alanlar dataclass varsayilanlarindan gelir ve
         # manager property'leri (asagida) bu nesneye forward eder.
         self.state = EvaluationState()
+
+    # ------------------------------------------------------------------ #
+    #  READ-ONLY config/identity property forward'lari (Faz 2)            #
+    #                                                                     #
+    #  manager.X  <->  manager.context.X. Owner-forward servisleri/       #
+    #  workflow'lari getattr ile okur; bu getter'lar okumayı context'e    #
+    #  yönlendirir, böylece context tek READ-ONLY config kaynaktir.       #
+    #  Faz 3'te servisler dogrudan self.ctx.X kullanacak.                 #
+    # ------------------------------------------------------------------ #
+
+    @property
+    def context(self) -> EvaluationContext:
+        # Lazy: state ile ayni gerekce — __new__ ile kurulan mekanizma testleri
+        # ilk erisimde bos EvaluationContext alir. Gercek __init__ explicit kurar.
+        ctx = self.__dict__.get("_context")
+        if ctx is None:
+            ctx = EvaluationContext()
+            self.__dict__["_context"] = ctx
+        return ctx
+
+    @context.setter
+    def context(self, value: EvaluationContext) -> None:
+        self.__dict__["_context"] = value
+
+    @property
+    def stock_symbol(self) -> str:
+        return self.context.stock_symbol
+
+    @stock_symbol.setter
+    def stock_symbol(self, value: str) -> None:
+        self.context.stock_symbol = value
+
+    @property
+    def outputs_dir(self) -> str:
+        return self.context.outputs_dir
+
+    @outputs_dir.setter
+    def outputs_dir(self, value: str) -> None:
+        self.context.outputs_dir = value
+
+    @property
+    def models_dir(self) -> str:
+        return self.context.models_dir
+
+    @models_dir.setter
+    def models_dir(self, value: str) -> None:
+        self.context.models_dir = value
+
+    @property
+    def tracker(self) -> Any:
+        return self.context.tracker
+
+    @tracker.setter
+    def tracker(self, value: Any) -> None:
+        self.context.tracker = value
+
+    @property
+    def feature_names(self) -> list:
+        return self.context.feature_names
+
+    @feature_names.setter
+    def feature_names(self, value: list) -> None:
+        self.context.feature_names = value
+
+    @property
+    def dataset_hash(self) -> str:
+        return self.context.dataset_hash
+
+    @dataset_hash.setter
+    def dataset_hash(self, value: str) -> None:
+        self.context.dataset_hash = value
+
+    @property
+    def dataset_metadata(self) -> Dict[str, Any]:
+        return self.context.dataset_metadata
+
+    @dataset_metadata.setter
+    def dataset_metadata(self, value: Dict[str, Any]) -> None:
+        self.context.dataset_metadata = value
+
+    @property
+    def exe_cfg(self) -> Any:
+        return self.context.exe_cfg
+
+    @exe_cfg.setter
+    def exe_cfg(self, value: Any) -> None:
+        self.context.exe_cfg = value
+
+    @property
+    def model_cfg(self) -> Any:
+        return self.context.model_cfg
+
+    @model_cfg.setter
+    def model_cfg(self, value: Any) -> None:
+        self.context.model_cfg = value
+
+    @property
+    def stock_db(self) -> Any:
+        return self.context.stock_db
+
+    @stock_db.setter
+    def stock_db(self, value: Any) -> None:
+        self.context.stock_db = value
+
+    @property
+    def ensemble_enabled(self) -> bool:
+        return self.context.ensemble_enabled
+
+    @ensemble_enabled.setter
+    def ensemble_enabled(self, value: bool) -> None:
+        self.context.ensemble_enabled = value
+
+    @property
+    def selected_models(self) -> Optional[set]:
+        return self.context.selected_models
+
+    @selected_models.setter
+    def selected_models(self, value: Optional[set]) -> None:
+        self.context.selected_models = value
+
+    @property
+    def backtest_enabled(self) -> bool:
+        return self.context.backtest_enabled
+
+    @backtest_enabled.setter
+    def backtest_enabled(self, value: bool) -> None:
+        self.context.backtest_enabled = value
+
+    @property
+    def commission_bps(self) -> float:
+        return self.context.commission_bps
+
+    @commission_bps.setter
+    def commission_bps(self, value: float) -> None:
+        self.context.commission_bps = value
+
+    @property
+    def slippage_bps(self) -> float:
+        return self.context.slippage_bps
+
+    @slippage_bps.setter
+    def slippage_bps(self, value: float) -> None:
+        self.context.slippage_bps = value
+
+    @property
+    def initial_capital(self) -> float:
+        return self.context.initial_capital
+
+    @initial_capital.setter
+    def initial_capital(self, value: float) -> None:
+        self.context.initial_capital = value
+
+    @property
+    def signal_mode(self) -> str:
+        return self.context.signal_mode
+
+    @signal_mode.setter
+    def signal_mode(self, value: str) -> None:
+        self.context.signal_mode = value
+
+    @property
+    def default_signal_config(self) -> Any:
+        return self.context.default_signal_config
+
+    @default_signal_config.setter
+    def default_signal_config(self, value: Any) -> None:
+        self.context.default_signal_config = value
+
+    @property
+    def xai_dir(self) -> str:
+        return self.context.xai_dir
+
+    @xai_dir.setter
+    def xai_dir(self, value: str) -> None:
+        self.context.xai_dir = value
 
     # ------------------------------------------------------------------ #
     #  Mutable state property forward'lari (Faz 1)                        #

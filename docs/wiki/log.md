@@ -1,3 +1,30 @@
+## [2026-06-01] Faz 2 | E1 owner-forward: EvaluationContext tam tasima
+
+- **Faz 2 tamamlandi** (`refactor/e1-owner-forward-di`). Servislerin owner'dan
+  OKUDUGU tum READ-ONLY config/identity attribute'lari artik `EvaluationContext`'te
+  yasiyor. `src/pipeline/evaluation_services.py`: `EvaluationContext` tum alanlari
+  default'lu hale getirildi (lazy/`__new__` icin) + 9 turetilmis READ-ONLY alan
+  eklendi (`ensemble_enabled`, `selected_models`, `backtest_enabled`,
+  `commission_bps`, `slippage_bps`, `initial_capital`, `signal_mode`,
+  `default_signal_config`, `xai_dir`).
+- `src/pipeline/evaluation_manager.py`: 19 config/identity attribute (10 base +
+  9 turetilmis) context-backed **property**'ye cevrildi
+  (`manager.X` <-> `manager.context.X`). `__init__`'teki duz `self.stock_symbol = ...`
+  atamalari kaldirildi; base alanlar context constructor'da, turetilmis alanlar
+  `_init_model_attrs`/`_init_execution_attrs`/`_init_signal_calibration_state`/
+  `_init_mutable_state` icindeki mevcut atamalar uzerinden (property setter ile)
+  context'e yazilir — mixin govdesine yine DOKUNULMADI (Faz 3'te `self.ctx.X`).
+- `context` lazy property: `state` ile ayni gerekce; `__new__` ile kurulan
+  mekanizma testleri (`test_phase8_acceptance` `manager.outputs_dir = ...`,
+  `commission_bps = ...` vb.) ilk eriste bos `EvaluationContext()` alir; testlere
+  dokunulmadi.
+- Mixin/workflow tarafinda bu attribute'lara YAZIM yok (AST + grep dogrulandi) —
+  gercekten READ-ONLY; context'e tasima davranisi degistirmez.
+- Davranis korundu: tam suite **561 passed**, karakterizasyon golden'lari
+  (`test_owner_forward_contract.py`, ozellikle `test_initial_signal_state_golden`:
+  `default_signal_config == signal_config`, `xai_dir == outputs_dir/xai`)
+  degismeden gecti. Sonraki: Faz 3 (mixin -> davranis-sahibi servis, en riskli).
+
 ## [2026-06-01] Faz 1 | E1 owner-forward: EvaluationState tam tasima
 
 - **Faz 1 tamamlandi** (`refactor/e1-owner-forward-di`). EvaluationManager'in tum
