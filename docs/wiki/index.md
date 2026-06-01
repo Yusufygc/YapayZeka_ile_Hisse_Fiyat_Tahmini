@@ -53,9 +53,13 @@ linked pages below.
   DI. Faz 4 (2026-06-01) trimmed `EvaluationManager` to a thinner orchestrator by
   deleting 10 dead service delegations (no workflow/src/test caller; 1035 → 979
   lines). Faz 5 (2026-06-01) converted `ForecastRunner`'s 6 forecast services to
-  `ForecastContext` DI and deleted `_OwnerBackedForecastService`. The only
-  remaining owner-forward base is the evaluation `_OwnerBackedService`, now backing
-  just the evaluation/training workflows + `DataManager` services (removal in Faz 7).
+  `ForecastContext` DI and deleted `_OwnerBackedForecastService`. Faz 6
+  (2026-06-01) removed the `_FAIL_LOUD = False` opt-out from the 4 `DataManager`
+  services so every owner-forward family is now fail-loud; the full mutable state
+  surface is pre-init in `__init__` (and in `_ensure_config_objects` for
+  `__new__`-built legacy objects). The only remaining owner-forward base is
+  `_OwnerBackedService`, now backing just the evaluation/training workflows +
+  `DataManager` services (base removal in Faz 7).
   Behavior is locked by golden tests in `tests/test_owner_forward_contract.py`.
   See [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md).
 - The default production candidate set is defined in `src/pipeline/model_scope.py`

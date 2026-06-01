@@ -1,3 +1,20 @@
+## [2026-06-01] Refactor (E1 Faz 6) | DataManager servisleri fail-loud guard'a alindi
+
+- 4 DataManager owner-forward servisinden (DataIngestionService,
+  TensorPreparationService, ValidationSplitService, DataQualityReportingService)
+  `_FAIL_LOUD = False` opt-out kaldirildi; artik ortak `_OwnerBackedService`
+  varsayilani (`_FAIL_LOUD = True`) gecerli — bilinmeyen owner attribute'una
+  forward yazim sessizce yaratmak yerine AttributeError firlatir.
+- Hardening: tum mutable runtime state `__init__`'te zaten pre-init; `__new__` ile
+  kurulan legacy test objeleri icin `_ensure_config_objects`'e mutable state
+  pre-init blogu eklendi (df, feature_names, tensors, wf_splits, selection_df,
+  final_holdout_df, dataset_metadata, dataset_hash, *_report; hasattr-guard).
+- `_OwnerBackedService` docstring/yorum guncellendi (DataManager artik hardened).
+- Davranis degismez. Tam suite 561 passed. Commit d4f9297. Kalan owner-forward:
+  yalniz `_OwnerBackedService` base + tukettigi evaluation/training workflow +
+  DataManager servis aileleri (taban kaldirma Faz 7'de degerlendirilir).
+- Guncellenen wiki: e1-owner-forward-epic.md (Durum), index.md (durum), log.md.
+
 ## [2026-06-01] Refactor (E1 Faz 5) | ForecastRunner owner-forward'dan DI'ya (ForecastContext)
 
 - `_OwnerBackedForecastService` base sinifi silindi (read-only __getattr__ forward).

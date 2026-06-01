@@ -210,6 +210,25 @@ Owner-forward sınıflarının `self.<attr>` oku/yaz sınıflandırması:
 
 ## Durum
 
+- 2026-06-01 (Faz 6 ✅): DataManager servisleri fail-loud guard'a alındı. 4 servisten
+  (`DataIngestionService`, `TensorPreparationService`, `ValidationSplitService`,
+  `DataQualityReportingService`) `_FAIL_LOUD = False` opt-out **kaldırıldı**; artık
+  ortak `_OwnerBackedService` varsayılanı (`_FAIL_LOUD = True`) geçerli — owner'a
+  forward edilen yazım, `__init__`'te init edilmemiş bir attribute'a giderse (yazım
+  hatası) sessizce yeni attribute yaratmak yerine `AttributeError` fırlatır.
+  Hardening doğrulaması: tüm forward-write hedefleri (`df`, `feature_names`, `tensors`,
+  `wf_splits`, `selection_df`, `final_holdout_df`, `dataset_metadata`, `dataset_hash`,
+  `corporate_action_report`, `feature_groups`, `feature_pruning_report`,
+  `sector_mapping_report`, `survivorship_bias_report`, `training_window_report`,
+  `_wf_mode`, `_prepare_tensors_call_idx`, `scaling_reports`) üretim yolunda (`__init__`)
+  zaten pre-init ediliyordu. `__new__` ile kurulan legacy test objeleri için
+  (`test_phase7/8_acceptance`) `_ensure_config_objects`'e mutable runtime state
+  pre-init bloğu eklendi (hasattr-guard, testin set ettiği değerleri ezmez) — böylece
+  `split_data` gibi forward-yazan yollar her kuruluş biçiminde güvenli. `_OwnerBackedService`
+  docstring/yorum güncellendi. Monkeypatch namespace'i korundu (paket-split yok). Tam
+  suite **561 passed**, golden değişmedi. Commit `d4f9297`. **Kalan owner-forward: yalnız
+  `_OwnerBackedService` base** + tükettiği evaluation/training workflow + DataManager
+  servis aileleri. Sonraki: Faz 7 (temizlik & taban kaldırma değerlendirmesi).
 - 2026-06-01 (Faz 5 ✅): `ForecastRunner` DI'ya geçti. `_OwnerBackedForecastService`
   base sınıfı **silindi** (read-only `__getattr__` forward'du). Yeni `ForecastContext`
   dataclass (`forecasting/workflows.py`): READ-ONLY config (`project_root`, `db`,
