@@ -1,3 +1,24 @@
+## [2026-06-01] Refactor | Tier 3 mimari (E3 god ctor + E1 owner-forward guard)
+
+- **E3 god constructor** (commit 1e5c4be): `ForecastingPipeline.__init__` ve
+  `EvaluationManager.__init__` attribute-grup yardimcilarina bolundu
+  (`_init_config_attrs`/`_init_run_identity`/`_init_collaborators`;
+  `_init_model_attrs`/`_init_execution_attrs`/`_init_signal_calibration_state`/
+  `_init_mutable_state`/`_init_context_and_state`). Davranis + cagri sirasi
+  (signal_threshold_metadata erken servis init dahil) birebir korundu.
+- **E1 owner-forward fail-loud** (commit a541a10): `_OwnerBackedService.__setattr__`
+  artik var-olan-owner-attribute (veya bildirilmis lazy `ensemble_weight_scope`)
+  disindaki yazimda AttributeError firlatir -> B1 sessiz-typo encapsulation acigi
+  kapandi. Guard opt-in (`_FAIL_LOUD`): evaluation servisleri + workflow'larda
+  aktif; DataManager servis ailesi (4 sinif) permissive birakildi (owner state
+  yuzeyi henuz sertlestirilmedi). `ensemble_weight_scope` EvaluationManager'da
+  pre-init edildi.
+- **Ertelendi:** tam owner-forward kaldirma (mixin -> davranis-sahibi DI servis,
+  ~4500 satir, leakage/sozlesme riski) ve `forecasting/workflows`'un ayri
+  `_OwnerBackedForecastService` base'i. Bagimsiz buyuk epik; karakterizasyon
+  testi sart.
+- Test: tum suite yesil (549). Guard fonksiyonel dogrulandi (typo yakalandi).
+
 ## [2026-05-31] Refactor | Tier 2 dosya/sorumluluk bolme (5 commit)
 
 - `analysis_service.build`: iki refresh dali `_try_refresh_and_rebuild`'e DRY.

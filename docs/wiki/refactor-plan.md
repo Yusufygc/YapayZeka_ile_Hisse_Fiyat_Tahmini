@@ -269,5 +269,29 @@ en son.
 - **Genel ilke (Tier 2):** "büyük dosya" her zaman "kötü dosya" değildir.
   macro_pipeline + signal_calibrator zaten iyi-faktörlü; gerçek borç owner-forward
   mimari (E1). Kozmetik LOC-azaltma için zorla bölme yapılmadı.
-- **Sıradaki:** Tier 3 (mimari — E1 owner-forward kaldırma + E3 god constructor).
-  Karakterizasyon testi gerektiren ayrı epik; en yüksek risk.
+- 2026-06-01: **Tier 3 (mimari) — kısmi tamamlandı (E3 tam, E1 güvenli dilim).**
+  - **E3 god constructor (tam, commit 1e5c4be):** iki dev `__init__` davranış-koruyan
+    attribute-grup helper'larına bölündü.
+
+    | Constructor | Helper'lar | Not |
+    |---|---|---|
+    | `ForecastingPipeline.__init__` | `_init_config_attrs` / `_init_run_identity` / `_init_collaborators` | seed + cfg saklama korundu |
+    | `EvaluationManager.__init__` | `_init_model_attrs` / `_init_execution_attrs` / `_init_signal_calibration_state` / `_init_mutable_state` / `_init_context_and_state` | line-118 erken servis init sırası korundu |
+
+  - **E1 owner-forward (güvenli dilim, commit a541a10):** `_OwnerBackedService.__setattr__`
+    **fail-loud** yapıldı — yönlendirilen yazım owner'da var olan bir attribute'u
+    (veya bildirilmiş lazy `ensemble_weight_scope`) hedeflemezse `AttributeError`.
+    Bu, B1'in baş ihlali olan **sessiz-typo → owner'a yeni alan** açığını kapatır.
+    Guard **opt-in** (`_FAIL_LOUD` sınıf bayrağı): evaluation servisleri +
+    eval/training workflow'larında aktif; DataManager servis ailesi (4 sınıf:
+    DataIngestion/TensorPreparation/ValidationSplit/DataQualityReporting)
+    `_FAIL_LOUD=False` ile permissive bırakıldı (owner state yüzeyi — `selection_df`,
+    `final_holdout_df`, `tensors`, `wf_splits` lazy — henüz sertleştirilmedi).
+  - **Hâlâ açık (Tier 3 kalan epik):** tam owner-forward kaldırma — mixin'leri
+    `__getattr__`/`__setattr__` magic'ten kurtarıp davranış-sahibi DI servislerine
+    (`EvaluationContext`/`EvaluationState` üzerinden açık state) çevirmek (~4500 satır
+    mixin, leakage/sözleşme riski); `forecasting/workflows`'un ayrı
+    `_OwnerBackedForecastService` base'i; DataManager servislerinin guard'a alınması.
+    Karakterizasyon testi şart; kendi odaklı session'ını hak ediyor.
+  - Doğrulama: tüm suite yeşil (549) + guard fonksiyonel smoke (typo yakalandı,
+    legit/allowlist yazımlar geçti, opt-out aile permissive).
