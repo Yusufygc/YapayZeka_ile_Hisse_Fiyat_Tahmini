@@ -371,6 +371,79 @@ class EvaluationManager:
     def enable_shadow_backtests(self, value: bool) -> None:
         self.context.enable_shadow_backtests = value
 
+    # Faz 3.3: SignalCalibrationService'in okudugu exe_cfg flag'leri context'e tasindi.
+    @property
+    def calibration_scope(self) -> str:
+        return self.context.calibration_scope
+
+    @calibration_scope.setter
+    def calibration_scope(self, value: str) -> None:
+        self.context.calibration_scope = value
+
+    @property
+    def signal_calibration_require_oos_confirmation(self) -> bool:
+        return self.context.signal_calibration_require_oos_confirmation
+
+    @signal_calibration_require_oos_confirmation.setter
+    def signal_calibration_require_oos_confirmation(self, value: bool) -> None:
+        self.context.signal_calibration_require_oos_confirmation = value
+
+    @property
+    def signal_calibration_min_eval_excess_return(self) -> float:
+        return self.context.signal_calibration_min_eval_excess_return
+
+    @signal_calibration_min_eval_excess_return.setter
+    def signal_calibration_min_eval_excess_return(self, value: float) -> None:
+        self.context.signal_calibration_min_eval_excess_return = value
+
+    @property
+    def signal_calibration_min_eval_sharpe(self) -> float:
+        return self.context.signal_calibration_min_eval_sharpe
+
+    @signal_calibration_min_eval_sharpe.setter
+    def signal_calibration_min_eval_sharpe(self, value: float) -> None:
+        self.context.signal_calibration_min_eval_sharpe = value
+
+    @property
+    def signal_calibration_objective(self) -> str:
+        return self.context.signal_calibration_objective
+
+    @signal_calibration_objective.setter
+    def signal_calibration_objective(self, value: str) -> None:
+        self.context.signal_calibration_objective = value
+
+    @property
+    def signal_calibration_profile(self) -> str:
+        return self.context.signal_calibration_profile
+
+    @signal_calibration_profile.setter
+    def signal_calibration_profile(self, value: str) -> None:
+        self.context.signal_calibration_profile = value
+
+    @property
+    def signal_calibration_sampler(self) -> str:
+        return self.context.signal_calibration_sampler
+
+    @signal_calibration_sampler.setter
+    def signal_calibration_sampler(self, value: str) -> None:
+        self.context.signal_calibration_sampler = value
+
+    @property
+    def signal_calibration_seed(self) -> int:
+        return self.context.signal_calibration_seed
+
+    @signal_calibration_seed.setter
+    def signal_calibration_seed(self, value: int) -> None:
+        self.context.signal_calibration_seed = value
+
+    @property
+    def signal_calibration_max_trials(self) -> Optional[int]:
+        return self.context.signal_calibration_max_trials
+
+    @signal_calibration_max_trials.setter
+    def signal_calibration_max_trials(self, value: Optional[int]) -> None:
+        self.context.signal_calibration_max_trials = value
+
     # ------------------------------------------------------------------ #
     #  Mutable state property forward'lari (Faz 1)                        #
     #                                                                     #
@@ -526,7 +599,7 @@ class EvaluationManager:
     def _init_services(self) -> None:
         self.prediction_service = PredictionService(self.context, self.state)
         self.backtest_service = BacktestService(self.context, self.state)
-        self.signal_calibration_service = SignalCalibrationService(self)
+        self.signal_calibration_service = SignalCalibrationService(self.context, self.state)
         self.metrics_reporting_service = MetricsReportingService(self)
         self.single_split_workflow = SingleSplitEvaluationWorkflow(self)
         self.walk_forward_workflow = WalkForwardEvaluationWorkflow(self)

@@ -65,6 +65,18 @@ class EvaluationContext:
     auto_signal_diagnostics: bool = True
     enable_gate_diagnostics: bool = False
     enable_shadow_backtests: bool = False
+    # Faz 3.3: SignalCalibrationService'in okuduğu exe_cfg flag'leri (READ-ONLY).
+    # Default'lar eski getattr(self, "X", default) fallback'leriyle birebir eşleşir
+    # (mixin + signal_calibration/grid.apply_trial_policy).
+    calibration_scope: str = "wf_train"
+    signal_calibration_require_oos_confirmation: bool = True
+    signal_calibration_min_eval_excess_return: float = 0.0
+    signal_calibration_min_eval_sharpe: float = 0.0
+    signal_calibration_objective: str = "risk_adjusted"
+    signal_calibration_profile: str = "production"
+    signal_calibration_sampler: str = "adaptive_stratified"
+    signal_calibration_seed: int = 42
+    signal_calibration_max_trials: Optional[int] = 64
 
 
 @dataclass
@@ -179,8 +191,19 @@ class BacktestService(_BacktestRunnerMixin):
         self.state = state
 
 
-class SignalCalibrationService(_OwnerBackedService, _SignalCalibratorMixin):
-    """Signal quality threshold and execution-parameter calibration."""
+class SignalCalibrationService(_SignalCalibratorMixin):
+    """Signal quality threshold and execution-parameter calibration.
+
+    Faz 3.3 (E1 owner-forward epiği): owner-forward kaldırıldı; ctor `(ctx, state)`
+    enjekte alır. Mixin gövdesi `self.ctx.X` (READ-ONLY config: calibration_scope,
+    commission/slippage/initial_capital, outputs_dir, default_signal_config,
+    dataset_metadata, signal_calibration_* flag'leri) / `self.state.X` (mutable
+    runtime: signal_config, signal_threshold_source/calibration_summary) kullanır.
+    """
+
+    def __init__(self, ctx: EvaluationContext, state: EvaluationState) -> None:
+        self.ctx = ctx
+        self.state = state
 
 
 class MetricsReportingService(_OwnerBackedService, _MetricsReporterMixin):
