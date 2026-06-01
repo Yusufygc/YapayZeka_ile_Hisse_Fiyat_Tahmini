@@ -48,8 +48,8 @@ linked pages below.
   evaluation services are being converted from `_OwnerBackedService`
   (`__getattr__`/`__setattr__` forwarding) to explicit `(ctx, state)` dependency
   injection (`EvaluationContext` read-only config + `EvaluationState` mutable
-  runtime). As of 2026-06-01, `PredictionService` and `BacktestService` are DI;
-  `SignalCalibrationService` and `MetricsReportingService` remain owner-backed.
+  runtime). As of 2026-06-01, `PredictionService`, `BacktestService` and
+  `SignalCalibrationService` are DI; `MetricsReportingService` remains owner-backed.
   Behavior is locked by golden tests in `tests/test_owner_forward_contract.py`.
   See [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md).
 - The default production candidate set is defined in `src/pipeline/model_scope.py`

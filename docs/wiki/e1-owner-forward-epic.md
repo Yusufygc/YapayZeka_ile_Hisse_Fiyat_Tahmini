@@ -210,6 +210,21 @@ Owner-forward sınıflarının `self.<attr>` oku/yaz sınıflandırması:
 
 ## Durum
 
+- 2026-06-01 (Faz 3.3 ✅): `SignalCalibrationService` DI'ya geçti (Faz 3 servis #3/4).
+  `_OwnerBackedService` mirası kalktı, ctor `(ctx, state)`. `_SignalCalibratorMixin`
+  forward erişimleri açık: READ-ONLY `self.ctx.X` (commission/slippage/initial_capital/
+  outputs_dir/default_signal_config/dataset_metadata + 9 yeni signal_calibration flag),
+  mutable `self.state.X` (signal_config/signal_threshold_source/
+  signal_threshold_calibration_summary). `EvaluationContext`'e mixin + `signal_calibration/
+  grid.apply_trial_policy`'nin okuduğu 9 exe_cfg flag eklendi (`calibration_scope`,
+  `signal_calibration_require_oos_confirmation`, `signal_calibration_min_eval_excess_return`,
+  `signal_calibration_min_eval_sharpe`, `signal_calibration_objective`,
+  `signal_calibration_profile`, `signal_calibration_sampler`, `signal_calibration_seed`,
+  `signal_calibration_max_trials`) — default'lar eski getattr fallback'leriyle birebir
+  aynı. `apply_trial_policy(self.ctx, grid)` artık ctx'i okur. Manager'da 9 yeni
+  context-backed property; `_init_services` `SignalCalibrationService(self.context, self.state)`.
+  Kalan 1 servis (MetricsReporting) hâlâ owner-backed. Tam suite **561 passed**,
+  golden değişmedi. Sonraki: Faz 3.4 (MetricsReportingService).
 - 2026-06-01 (Faz 3.2 ✅): `BacktestService` DI'ya geçti (Faz 3 servis #2/4).
   `_OwnerBackedService` mirası kalktı, ctor `(ctx, state)`. `_BacktestRunnerMixin`
   forward erişimleri açık: READ-ONLY `self.ctx.X` (commission/slippage/initial_capital/

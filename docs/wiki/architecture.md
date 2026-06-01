@@ -80,10 +80,11 @@ constructor, where `EvaluationContext` is the read-only config/identity bag and
 `evaluation_services.py`). The mixin bodies now read/write `self.ctx.X` /
 `self.state.X` instead of forwarding to the owner.
 
-Migration status (2026-06-01): `PredictionService` (Faz 3.1) and
-`BacktestService` (Faz 3.2) are converted to DI and no longer inherit
-`_OwnerBackedService`. `SignalCalibrationService` and `MetricsReportingService`
-are still owner-backed pending Faz 3.3/3.4. `EvaluationManager` exposes
+Migration status (2026-06-01): `PredictionService` (Faz 3.1),
+`BacktestService` (Faz 3.2) and `SignalCalibrationService` (Faz 3.3) are
+converted to DI and no longer inherit `_OwnerBackedService`.
+`MetricsReportingService` is still owner-backed pending Faz 3.4.
+`EvaluationManager` exposes
 `manager.X ⇄ manager.context.X` / `manager.state.X` property forwards so the
 remaining owner-backed services and all workflows keep reading the same
 context/state. Behavior is unchanged and locked by characterization golden tests

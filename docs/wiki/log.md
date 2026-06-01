@@ -1,3 +1,18 @@
+## [2026-06-01] Refactor (E1 Faz 3.3) | SignalCalibrationService owner-forward'dan DI'ya
+
+- `SignalCalibrationService` `_OwnerBackedService` mirasindan `(ctx, state)` DI'ya
+  cevrildi (Faz 3 servis #3/4). `_SignalCalibratorMixin` govdesi self.ctx.X
+  (READ-ONLY config) / self.state.X (mutable runtime) kullanir.
+- `EvaluationContext`'e mixin + `signal_calibration/grid.apply_trial_policy`'nin
+  okudugu 9 exe_cfg flag eklendi (calibration_scope, require_oos_confirmation,
+  min_eval_excess_return/sharpe, objective, profile, sampler, seed, max_trials);
+  default'lar eski getattr fallback'leriyle birebir esit. `apply_trial_policy`
+  artik `self.ctx` alir. Manager'da 9 yeni context-backed property.
+- Davranis degismedi: golden karakterizasyon testleri (12) degismeden, tam suite
+  **561 passed**. Commit'lendi. Kalan: Faz 3.4 (MetricsReportingService).
+- Guncellenen sayfalar: `e1-owner-forward-epic.md` (Durum Faz 3.3), `architecture.md`
+  (migration status), `index.md` (DI durum maddesi).
+
 ## [2026-06-01] Wiki bakim | E1 ilerlemesi tum sayfalara yansitildi
 
 - Kullanici istegi uzerine tum wiki tam kontrol edildi; E1 owner-forward
