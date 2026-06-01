@@ -77,6 +77,11 @@ class EvaluationContext:
     signal_calibration_sampler: str = "adaptive_stratified"
     signal_calibration_seed: int = 42
     signal_calibration_max_trials: Optional[int] = 64
+    # Faz 3.4: MetricsReportingService'in (XAI yazımı) okuduğu exe_cfg flag'leri
+    # (READ-ONLY). Default'lar eski getattr(self, "X", default) fallback'leriyle
+    # birebir eşleşir (metrics_reporter._write_xai_reports).
+    write_xai_tables: bool = False
+    write_markdown_reports: bool = True
 
 
 @dataclass
@@ -206,5 +211,18 @@ class SignalCalibrationService(_SignalCalibratorMixin):
         self.state = state
 
 
-class MetricsReportingService(_OwnerBackedService, _MetricsReporterMixin):
-    """Metric enrichment, model selection and XAI report routing."""
+class MetricsReportingService(_MetricsReporterMixin):
+    """Metric enrichment, model selection and XAI report routing.
+
+    Faz 3.4 (E1 owner-forward epiği): owner-forward kaldırıldı; ctor `(ctx, state)`
+    enjekte alır. Mixin gövdesi `self.ctx.X` (READ-ONLY config: dataset_metadata,
+    commission/slippage_bps, stock_symbol, feature_names, xai_dir,
+    write_xai_tables, write_markdown_reports) / `self.state.X` (mutable runtime:
+    predictions, prediction_targets, quantile_predictions, y_true_aligned,
+    ensemble_weights, latest_backtest_results) kullanır. Son owner-backed servisti;
+    `_OwnerBackedService` artık hiçbir evaluation servisi tarafından kullanılmıyor.
+    """
+
+    def __init__(self, ctx: EvaluationContext, state: EvaluationState) -> None:
+        self.ctx = ctx
+        self.state = state

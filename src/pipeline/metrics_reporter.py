@@ -60,22 +60,22 @@ class _MetricsReporterMixin:
         self, metrics_dict: Dict[str, Dict[str, Any]]
     ) -> Dict[str, Dict[str, Any]]:
         for model_metrics in metrics_dict.values():
-            model_metrics["Target_Semantics"] = self.dataset_metadata.get("target_semantics", "")
-            model_metrics["Execution_Lag"] = self.dataset_metadata.get("execution_lag", "")
-            model_metrics["Macro_Release_Lag"] = str(self.dataset_metadata.get("macro_release_lag", {}))
-            model_metrics["Transaction_Costs"] = f"commission_bps={self.commission_bps}; slippage_bps={self.slippage_bps}"
-            model_metrics["Validation_Protocol"] = str(self.dataset_metadata.get("validation_config", {}))
-            model_metrics["Selection_Set"] = str(self.dataset_metadata.get("selection_set", {}))
-            model_metrics["Evaluation_Set"] = str(self.dataset_metadata.get("evaluation_set", {}))
+            model_metrics["Target_Semantics"] = self.ctx.dataset_metadata.get("target_semantics", "")
+            model_metrics["Execution_Lag"] = self.ctx.dataset_metadata.get("execution_lag", "")
+            model_metrics["Macro_Release_Lag"] = str(self.ctx.dataset_metadata.get("macro_release_lag", {}))
+            model_metrics["Transaction_Costs"] = f"commission_bps={self.ctx.commission_bps}; slippage_bps={self.ctx.slippage_bps}"
+            model_metrics["Validation_Protocol"] = str(self.ctx.dataset_metadata.get("validation_config", {}))
+            model_metrics["Selection_Set"] = str(self.ctx.dataset_metadata.get("selection_set", {}))
+            model_metrics["Evaluation_Set"] = str(self.ctx.dataset_metadata.get("evaluation_set", {}))
             model_metrics["Final_Holdout_Used_For_Selection"] = False
-            model_metrics["Corporate_Action_Adjustment"] = str(self.dataset_metadata.get("corporate_action", {}))
-            model_metrics["Feature_Pruning"] = str(self.dataset_metadata.get("feature_pruning", {}))
-            model_metrics["Feature_Groups"] = str(self.dataset_metadata.get("feature_groups", {}))
-            model_metrics["Scaling_Clip_Report"] = str(self.dataset_metadata.get("scaling_reports", []))
-            model_metrics["Threshold_Config"] = str(self.dataset_metadata.get("signal_threshold_config", {}))
+            model_metrics["Corporate_Action_Adjustment"] = str(self.ctx.dataset_metadata.get("corporate_action", {}))
+            model_metrics["Feature_Pruning"] = str(self.ctx.dataset_metadata.get("feature_pruning", {}))
+            model_metrics["Feature_Groups"] = str(self.ctx.dataset_metadata.get("feature_groups", {}))
+            model_metrics["Scaling_Clip_Report"] = str(self.ctx.dataset_metadata.get("scaling_reports", []))
+            model_metrics["Threshold_Config"] = str(self.ctx.dataset_metadata.get("signal_threshold_config", {}))
             model_metrics["Market_Regime_Source"] = "Market_Regime_SMA200"
-            model_metrics["Prophet_Regressors_Used"] = str(self.dataset_metadata.get("prophet_regressors_used", []))
-            model_metrics["Survivorship_Bias_Check"] = str(self.dataset_metadata.get("survivorship_bias", {}))
+            model_metrics["Prophet_Regressors_Used"] = str(self.ctx.dataset_metadata.get("prophet_regressors_used", []))
+            model_metrics["Survivorship_Bias_Check"] = str(self.ctx.dataset_metadata.get("survivorship_bias", {}))
         return metrics_dict
 
     # ------------------------------------------------------------------ #
@@ -89,7 +89,7 @@ class _MetricsReporterMixin:
             if model_name.startswith("Ensemble "):
                 model_metrics["Model_Family"] = "ensemble"
                 model_metrics["Ensemble_Method"] = model_name.replace("Ensemble ", "")
-                model_metrics["Ensemble_Weights"] = str(self.ensemble_weights.get(model_name, {}))
+                model_metrics["Ensemble_Weights"] = str(self.state.ensemble_weights.get(model_name, {}))
             elif model_name in {"DLinear", "NLinear"}:
                 model_metrics["Model_Family"] = "low_parameter_sequence_baseline"
             elif model_name == "LightGBM Return":
@@ -101,8 +101,8 @@ class _MetricsReporterMixin:
     def _attach_model_scope_metadata(
         self, metrics_dict: Dict[str, Dict[str, Any]]
     ) -> Dict[str, Dict[str, Any]]:
-        candidate_models = set(self.dataset_metadata.get("candidate_models", []))
-        benchmark_models = set(self.dataset_metadata.get("benchmark_models", BENCHMARK_MODELS))
+        candidate_models = set(self.ctx.dataset_metadata.get("candidate_models", []))
+        benchmark_models = set(self.ctx.dataset_metadata.get("benchmark_models", BENCHMARK_MODELS))
         for model_name, model_metrics in metrics_dict.items():
             group = report_group(model_name, candidate_models)
             model_metrics["Candidate_For_Selection"] = bool(is_selection_candidate(model_name, candidate_models))
@@ -114,7 +114,7 @@ class _MetricsReporterMixin:
         self, data: Dict[str, Any],
         metrics_dict: Dict[str, Dict[str, Any]] | None = None,
     ) -> Dict[str, Any]:
-        candidate_models = set(self.dataset_metadata.get("candidate_models", []))
+        candidate_models = set(self.ctx.dataset_metadata.get("candidate_models", []))
         names = set(metrics_dict or data)
         allowed = reportable_model_names(names, candidate_models)
         return {name: value for name, value in data.items() if name in allowed}
@@ -201,23 +201,23 @@ class _MetricsReporterMixin:
     def _get_xai_single_split(
         self, trained_models: dict, tensors: dict
     ) -> Optional[Dict[str, Any]]:
-        if not self.predictions:
+        if not self.state.predictions:
             return None
         try:
             if XAIExplainer is None:
                 raise ImportError(f"XAI dependency unavailable: {_XAI_IMPORT_ERROR}")
             explainer = XAIExplainer(
-                self.stock_symbol,
-                self.feature_names,
-                self.dataset_metadata,
+                self.ctx.stock_symbol,
+                self.ctx.feature_names,
+                self.ctx.dataset_metadata,
             )
             payload = explainer.explain_single_split(
                 trained_models=trained_models,
                 tensors=tensors,
-                predictions=self.predictions,
-                prediction_targets=self.prediction_targets,
-                y_true_aligned=self.y_true_aligned,
-                quantile_predictions=self.quantile_predictions,
+                predictions=self.state.predictions,
+                prediction_targets=self.state.prediction_targets,
+                y_true_aligned=self.state.y_true_aligned,
+                quantile_predictions=self.state.quantile_predictions,
             )
             self._write_xai_reports(payload, suffix="latest")
             return payload
@@ -237,15 +237,15 @@ class _MetricsReporterMixin:
             if XAIExplainer is None:
                 raise ImportError(f"XAI dependency unavailable: {_XAI_IMPORT_ERROR}")
             explainer = XAIExplainer(
-                self.stock_symbol,
-                self.feature_names,
-                self.dataset_metadata,
+                self.ctx.stock_symbol,
+                self.ctx.feature_names,
+                self.ctx.dataset_metadata,
             )
             payload = explainer.explain_walk_forward(
                 wf_predictions=wf_predictions,
                 wf_y_true=np.asarray(wf_y_true) if wf_y_true is not None else np.asarray([]),
                 wf_backtest_inputs=wf_backtest_inputs or {},
-                backtest_results=self.latest_backtest_results.get("wf", {}),
+                backtest_results=self.state.latest_backtest_results.get("wf", {}),
             )
             self._write_xai_reports(payload, suffix="wf")
             return payload
@@ -259,9 +259,9 @@ class _MetricsReporterMixin:
             return
         try:
             XAIReportWriter(
-                self.xai_dir,
-                write_tables=bool(getattr(self, "write_xai_tables", False)),
-                write_markdown=bool(getattr(self, "write_markdown_reports", True)),
+                self.ctx.xai_dir,
+                write_tables=bool(self.ctx.write_xai_tables),
+                write_markdown=bool(self.ctx.write_markdown_reports),
             ).write(payload, suffix=suffix)
         except Exception as exc:
             print(f"  [WARN] XAI dosya yazimi basarisiz ({suffix}): {exc}")

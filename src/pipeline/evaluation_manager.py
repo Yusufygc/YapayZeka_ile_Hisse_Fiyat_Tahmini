@@ -444,6 +444,23 @@ class EvaluationManager:
     def signal_calibration_max_trials(self, value: Optional[int]) -> None:
         self.context.signal_calibration_max_trials = value
 
+    # Faz 3.4: MetricsReportingService'in (XAI yazimi) okudugu exe_cfg flag'leri context'e tasindi.
+    @property
+    def write_xai_tables(self) -> bool:
+        return self.context.write_xai_tables
+
+    @write_xai_tables.setter
+    def write_xai_tables(self, value: bool) -> None:
+        self.context.write_xai_tables = value
+
+    @property
+    def write_markdown_reports(self) -> bool:
+        return self.context.write_markdown_reports
+
+    @write_markdown_reports.setter
+    def write_markdown_reports(self, value: bool) -> None:
+        self.context.write_markdown_reports = value
+
     # ------------------------------------------------------------------ #
     #  Mutable state property forward'lari (Faz 1)                        #
     #                                                                     #
@@ -600,7 +617,7 @@ class EvaluationManager:
         self.prediction_service = PredictionService(self.context, self.state)
         self.backtest_service = BacktestService(self.context, self.state)
         self.signal_calibration_service = SignalCalibrationService(self.context, self.state)
-        self.metrics_reporting_service = MetricsReportingService(self)
+        self.metrics_reporting_service = MetricsReportingService(self.context, self.state)
         self.single_split_workflow = SingleSplitEvaluationWorkflow(self)
         self.walk_forward_workflow = WalkForwardEvaluationWorkflow(self)
         self.final_holdout_workflow = FinalHoldoutEvaluationWorkflow(self)
