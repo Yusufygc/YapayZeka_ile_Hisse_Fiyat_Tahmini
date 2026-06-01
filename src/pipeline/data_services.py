@@ -23,8 +23,6 @@ from src.utils.data_splitter import TimeSeriesSplitter
 
 
 class DataIngestionService(_OwnerBackedService):
-    # DataManager owner state surface not yet hardened; keep permissive forwarding.
-    _FAIL_LOUD = False
 
     def run(self) -> None:
         print("\n" + "=" * 60)
@@ -302,8 +300,6 @@ class DataIngestionService(_OwnerBackedService):
 
 
 class TensorPreparationService(_OwnerBackedService):
-    # DataManager owner state surface not yet hardened; keep permissive forwarding.
-    _FAIL_LOUD = False
 
     def build_target_series(self, close_values: np.ndarray) -> np.ndarray:
         self._ensure_config_objects()
@@ -538,8 +534,6 @@ class TensorPreparationService(_OwnerBackedService):
 
 
 class ValidationSplitService(_OwnerBackedService):
-    # DataManager owner state surface not yet hardened; keep permissive forwarding.
-    _FAIL_LOUD = False
 
     def split_data(self, validation_mode: str) -> None:
         self._ensure_config_objects()
@@ -687,8 +681,6 @@ class ValidationSplitService(_OwnerBackedService):
 
 
 class DataQualityReportingService(_OwnerBackedService):
-    # DataManager owner state surface not yet hardened; keep permissive forwarding.
-    _FAIL_LOUD = False
 
     def check_survivorship_bias(self) -> dict:
         if self.df is None or self.df.empty:

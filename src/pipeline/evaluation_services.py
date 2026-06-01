@@ -137,9 +137,11 @@ class _OwnerBackedService:
     # intentionally lazy-initialized rather than set in the owner's __init__.
     _LAZY_FORWARDED_WRITES = frozenset({"ensemble_weight_scope"})
 
-    # Opt-in fail-loud guard. Enabled for the evaluation services and workflows
-    # (the E1/B1 owner-forward god-object). DataManager service families keep the
-    # permissive forwarding until their owner state surface is hardened too.
+    # Fail-loud guard. Enabled for every owner-forward family — evaluation services,
+    # training/eval workflows, and (since Faz 6) DataManager services. Each owner
+    # pre-initializes its full mutable state surface in ``__init__`` (and DataManager
+    # also via ``_ensure_config_objects`` for ``__new__``-built legacy objects), so a
+    # forwarded write to an unknown attribute is a typo and must raise.
     _FAIL_LOUD = True
 
     def __init__(self, owner: Any) -> None:
