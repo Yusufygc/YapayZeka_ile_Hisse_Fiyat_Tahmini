@@ -672,16 +672,6 @@ class EvaluationManager:
             wf_backtest_inputs,
         )
 
-    def _save_selected_models_plot(
-        self,
-        y_true: np.ndarray,
-        predictions: Dict[str, np.ndarray],
-        save_path: str,
-        title: str,
-    ) -> None:
-        self._ensure_services()
-        return self.prediction_service._save_selected_models_plot(y_true, predictions, save_path, title)
-
     def _predict_single_model(self, model_name: str, model: Any, tensors: dict):
         self._ensure_services()
         return self.prediction_service._predict_single_model(model_name, model, tensors)
@@ -689,22 +679,6 @@ class EvaluationManager:
     def generate_predictions(self, trained_models: dict, tensors: dict):
         self._ensure_services()
         return self.prediction_service.generate_predictions(trained_models, tensors)
-
-    @staticmethod
-    def _diagnostic_numeric(frame: pd.DataFrame, column: str) -> np.ndarray:
-        return BacktestService._diagnostic_numeric(frame, column)
-
-    @staticmethod
-    def _diagnostic_float(value: Any) -> float:
-        return BacktestService._diagnostic_float(value)
-
-    @staticmethod
-    def _count_decision(frame: pd.DataFrame, decision: str) -> int:
-        return BacktestService._count_decision(frame, decision)
-
-    @staticmethod
-    def _payload_expected_return(payload: Dict[str, Any], target_mode: str) -> np.ndarray:
-        return BacktestService._payload_expected_return(payload, target_mode)
 
     def _get_shadow_backtests(
         self,
@@ -757,14 +731,6 @@ class EvaluationManager:
             suffix=suffix,
             target_mode=target_mode,
         )
-
-    def _write_signal_gate_diagnostics(self, diagnostics: pd.DataFrame, suffix: str) -> None:
-        self._ensure_services()
-        return self.backtest_service._write_signal_gate_diagnostics(diagnostics, suffix)
-
-    def _write_shadow_backtest_reports(self, shadow_results: Dict[str, Any], suffix: str) -> None:
-        self._ensure_services()
-        return self.backtest_service._write_shadow_backtest_reports(shadow_results, suffix)
 
     def _run_backtests(
         self,
@@ -836,31 +802,9 @@ class EvaluationManager:
             min_trade_count=min_trade_count,
         )
 
-    @staticmethod
-    def _signal_calibration_sort_key(row: Dict[str, Any]) -> tuple:
-        return SignalCalibrationService._signal_calibration_sort_key(row)
-
     @classmethod
     def _select_signal_calibration_row(cls, rows: list[Dict[str, Any]]) -> Dict[str, Any] | None:
         return SignalCalibrationService._select_signal_calibration_row(rows)
-
-    def _write_signal_calibration_reports(
-        self,
-        calibration_df: pd.DataFrame,
-        decision_md: str,
-        *,
-        suffix: str = "",
-    ) -> None:
-        self._ensure_services()
-        return self.signal_calibration_service._write_signal_calibration_reports(
-            calibration_df,
-            decision_md,
-            suffix=suffix,
-        )
-
-    def _get_signal_calibration_decision_md(self, best_row: Dict[str, Any] | None) -> str:
-        self._ensure_services()
-        return self.signal_calibration_service._get_signal_calibration_decision_md(best_row)
 
     @staticmethod
     def _attach_composite_scores(metrics_dict: Dict[str, Dict[str, float]]) -> Dict[str, Dict[str, float]]:
