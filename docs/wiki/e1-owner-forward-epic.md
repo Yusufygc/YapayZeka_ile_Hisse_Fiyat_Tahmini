@@ -210,6 +210,24 @@ Owner-forward sınıflarının `self.<attr>` oku/yaz sınıflandırması:
 
 ## Durum
 
+- 2026-06-01 (Faz 5 ✅): `ForecastRunner` DI'ya geçti. `_OwnerBackedForecastService`
+  base sınıfı **silindi** (read-only `__getattr__` forward'du). Yeni `ForecastContext`
+  dataclass (`forecasting/workflows.py`): READ-ONLY config (`project_root`, `db`,
+  `rules`, `model_config`, `persistence`) + `ForecastRunner` factory callable'ları
+  (`make_model_instance`, `make_prophet`, `target_to_price`; `model_config`'e bağlı,
+  runner'da kalır) + kardeş servis referansları (5 servis). 6 forecast servisi
+  (`BestModelResolver`, `ForecastDataPreparationService`, `ProductionTrainingWorkflow`,
+  `LatestTargetPredictionWorkflow`, `ForecastPointGenerator`, `ForecastSymbolWorkflow`)
+  artık ctor'da `(ctx)` alır; gövdedeki owner-forward `self.X` erişimleri `self.ctx.X`
+  oldu. `BestModelResolver._best_trainable_experiment` owner hop'u kendi metoduna
+  (`self.best_trainable_experiment`) indirildi. `_init_workflows` ctx kurar,
+  servisleri inşa eder, kardeş referansları ctx'e bağlar; runner test/public yüzeyini
+  (`model_resolver`, `forecast_point_generator`, `_make_target`, `_target_to_price`,
+  `_roll_forward_points`, `_best_trainable_experiment`, `db`, ...) korur.
+  Stub-owner testleri (`test_prediction_date_aware`, `test_recursive_quantile_path`)
+  pozisyonel ctor'a uyumlu, dokunulmadı. Tam suite **561 passed**, forecast golden'ları
+  değişmedi. Commit `0806c11`. **Kalan owner-forward: yalnız evaluation
+  `_OwnerBackedService`** (workflow + DataManager). Sonraki: Faz 6 (DataManager guard).
 - 2026-06-01 (Faz 4 ✅): `EvaluationManager` ince orkestratör sadeleştirmesi.
   Geriye-uyumlu servis delegasyon yüzeyinden **hiçbir yerden çağrılmayan 10 ölü
   delegasyon** silindi (workflow forward, src, test — hepsi 0 referans; davranış

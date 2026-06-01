@@ -1,3 +1,17 @@
+## [2026-06-01] Refactor (E1 Faz 5) | ForecastRunner owner-forward'dan DI'ya (ForecastContext)
+
+- `_OwnerBackedForecastService` base sinifi silindi (read-only __getattr__ forward).
+- Yeni ForecastContext dataclass (forecasting/workflows.py): config (project_root,
+  db, rules, model_config, persistence) + factory callable'lari (make_model_instance,
+  make_prophet, target_to_price) + 5 kardes servis referansi.
+- 6 forecast servisi ctor'da (ctx) alir; govde self.X -> self.ctx.X. BestModelResolver
+  owner hop'u kendi metoduna indirildi (self.best_trainable_experiment).
+- ForecastRunner._init_workflows ctx kurar + kardes referanslari baglar; runner
+  test/public yuzeyi korundu. Stub-owner testlerine dokunulmadi.
+- Tam suite 561 passed, forecast golden degismedi. Commit 0806c11. Kalan owner-forward:
+  yalniz evaluation _OwnerBackedService (Faz 7). Sonraki: Faz 6 (DataManager guard).
+- Guncellenen wiki: e1-owner-forward-epic.md (Durum), index.md (durum), log.md.
+
 ## [2026-06-01] Refactor (E1 Faz 4) | EvaluationManager ince orkestrator - olu delegasyonlar silindi
 
 - `EvaluationManager`'dan hicbir yerden cagrilmayan 10 olu servis delegasyonu

@@ -50,11 +50,13 @@ linked pages below.
   injection (`EvaluationContext` read-only config + `EvaluationState` mutable
   runtime). As of 2026-06-01, all four evaluation services (`PredictionService`,
   `BacktestService`, `SignalCalibrationService`, `MetricsReportingService`) are
-  DI; `_OwnerBackedService` now backs only the workflows + `DataManager` services
-  (removal in Faz 7). Faz 4 (2026-06-01) trimmed `EvaluationManager` to a thinner
-  orchestrator by deleting 10 dead service delegations (no workflow/src/test
-  caller; 1035 → 979 lines). Behavior is locked by golden tests in
-  `tests/test_owner_forward_contract.py`.
+  DI. Faz 4 (2026-06-01) trimmed `EvaluationManager` to a thinner orchestrator by
+  deleting 10 dead service delegations (no workflow/src/test caller; 1035 → 979
+  lines). Faz 5 (2026-06-01) converted `ForecastRunner`'s 6 forecast services to
+  `ForecastContext` DI and deleted `_OwnerBackedForecastService`. The only
+  remaining owner-forward base is the evaluation `_OwnerBackedService`, now backing
+  just the evaluation/training workflows + `DataManager` services (removal in Faz 7).
+  Behavior is locked by golden tests in `tests/test_owner_forward_contract.py`.
   See [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md).
 - The default production candidate set is defined in `src/pipeline/model_scope.py`
   and the model registry; in the current source tree `TFT` is not registered and
