@@ -74,50 +74,70 @@ class EvaluationManager:
 
         self.exe_cfg = exe_cfg
         self.model_cfg = model_cfg
+        self.stock_db = stock_db
 
-        # --- model attributes ------------------------------------------
+        self._init_model_attrs()
+        self._init_execution_attrs()
+        # signal threshold metadata triggers an early service init (uses
+        # signal_calibration_service); call order preserved intentionally.
+        self._init_signal_calibration_state()
+        self._init_mutable_state()
+        self._init_context_and_state(
+            stock_symbol=stock_symbol,
+            outputs_dir=outputs_dir,
+            models_dir=models_dir,
+            tracker=tracker,
+            feature_names=feature_names,
+            dataset_hash=dataset_hash,
+            dataset_metadata=dataset_metadata,
+            exe_cfg=exe_cfg,
+            model_cfg=model_cfg,
+            stock_db=stock_db,
+        )
+        self._init_services()
+
+    def _init_model_attrs(self) -> None:
         self.selected_models = set(self.model_cfg.selected_models) if self.model_cfg.selected_models else None
         self.ensemble_enabled = self.model_cfg.ensemble_enabled
 
-        # --- execution attributes --------------------------------------
-        self.backtest_enabled = self.exe_cfg.backtest_enabled
-        self.commission_bps = self.exe_cfg.commission_bps
-        self.slippage_bps = self.exe_cfg.slippage_bps
-        self.initial_capital = self.exe_cfg.initial_capital
-        self.signal_mode = self.exe_cfg.signal_mode
-        self.signal_config = self.exe_cfg.signal_config
-        self.calibration_scope: str = self.exe_cfg.calibration_scope
-        self.signal_calibration_train_ratio = self.exe_cfg.signal_calibration_train_ratio
-        self.min_signal_evaluation_folds = self.exe_cfg.min_signal_evaluation_folds
-        self.enable_signal_execution_calibration = self.exe_cfg.enable_signal_execution_calibration
-        self.enable_gate_diagnostics = self.exe_cfg.enable_gate_diagnostics
-        self.enable_shadow_backtests = self.exe_cfg.enable_shadow_backtests
-        self.signal_calibration_max_trials = self.exe_cfg.signal_calibration_max_trials
-        self.signal_calibration_profile = self.exe_cfg.signal_calibration_profile
-        self.signal_calibration_sampler = self.exe_cfg.signal_calibration_sampler
-        self.signal_calibration_seed = self.exe_cfg.signal_calibration_seed
-        self.signal_calibration_objective = self.exe_cfg.signal_calibration_objective
-        self.signal_calibration_min_trades = self.exe_cfg.signal_calibration_min_trades
-        self.signal_calibration_require_oos_confirmation = self.exe_cfg.signal_calibration_require_oos_confirmation
-        self.signal_calibration_min_eval_excess_return = self.exe_cfg.signal_calibration_min_eval_excess_return
-        self.signal_calibration_min_eval_sharpe = self.exe_cfg.signal_calibration_min_eval_sharpe
-        self.signal_calibration_reject_behavior = self.exe_cfg.signal_calibration_reject_behavior
-        self.auto_signal_diagnostics = self.exe_cfg.auto_signal_diagnostics
-        self.report_detail_level = self.exe_cfg.report_detail_level
-        self.write_text_reports = self.exe_cfg.write_text_reports
-        self.write_markdown_reports = self.exe_cfg.write_markdown_reports
-        self.write_xai_tables = self.exe_cfg.write_xai_tables
-        self.write_trade_logs = self.exe_cfg.write_trade_logs
+    def _init_execution_attrs(self) -> None:
+        e = self.exe_cfg
+        self.backtest_enabled = e.backtest_enabled
+        self.commission_bps = e.commission_bps
+        self.slippage_bps = e.slippage_bps
+        self.initial_capital = e.initial_capital
+        self.signal_mode = e.signal_mode
+        self.signal_config = e.signal_config
+        self.calibration_scope: str = e.calibration_scope
+        self.signal_calibration_train_ratio = e.signal_calibration_train_ratio
+        self.min_signal_evaluation_folds = e.min_signal_evaluation_folds
+        self.enable_signal_execution_calibration = e.enable_signal_execution_calibration
+        self.enable_gate_diagnostics = e.enable_gate_diagnostics
+        self.enable_shadow_backtests = e.enable_shadow_backtests
+        self.signal_calibration_max_trials = e.signal_calibration_max_trials
+        self.signal_calibration_profile = e.signal_calibration_profile
+        self.signal_calibration_sampler = e.signal_calibration_sampler
+        self.signal_calibration_seed = e.signal_calibration_seed
+        self.signal_calibration_objective = e.signal_calibration_objective
+        self.signal_calibration_min_trades = e.signal_calibration_min_trades
+        self.signal_calibration_require_oos_confirmation = e.signal_calibration_require_oos_confirmation
+        self.signal_calibration_min_eval_excess_return = e.signal_calibration_min_eval_excess_return
+        self.signal_calibration_min_eval_sharpe = e.signal_calibration_min_eval_sharpe
+        self.signal_calibration_reject_behavior = e.signal_calibration_reject_behavior
+        self.auto_signal_diagnostics = e.auto_signal_diagnostics
+        self.report_detail_level = e.report_detail_level
+        self.write_text_reports = e.write_text_reports
+        self.write_markdown_reports = e.write_markdown_reports
+        self.write_xai_tables = e.write_xai_tables
+        self.write_trade_logs = e.write_trade_logs
 
-        self.stock_db = stock_db
-
-        # --- signal calibration state ----------------------------------
+    def _init_signal_calibration_state(self) -> None:
         self.default_signal_config = self.signal_config
         self.signal_threshold_source = "default_config"
         self.signal_threshold_calibration_summary: Dict[str, Any] = {}
         self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
 
-        # --- mutable prediction state ----------------------------------
+    def _init_mutable_state(self) -> None:
         self.predictions: Dict[str, np.ndarray] = {}
         self.prediction_targets: Dict[str, np.ndarray] = {}
         self.quantile_predictions: Dict[str, np.ndarray] = {}
@@ -131,18 +151,9 @@ class EvaluationManager:
         self.latest_backtest_metrics: Dict[str, Any] = {}
         self.latest_model_metrics: Dict[str, Any] = {}
         self.ensemble_weights: Dict[str, Dict[str, float]] = {}
-        self.context = EvaluationContext(
-            stock_symbol=stock_symbol,
-            outputs_dir=outputs_dir,
-            models_dir=models_dir,
-            tracker=tracker,
-            feature_names=feature_names,
-            dataset_hash=dataset_hash,
-            dataset_metadata=dataset_metadata,
-            exe_cfg=exe_cfg,
-            model_cfg=model_cfg,
-            stock_db=stock_db,
-        )
+
+    def _init_context_and_state(self, **kwargs: Any) -> None:
+        self.context = EvaluationContext(**kwargs)
         self.state = EvaluationState(
             predictions=self.predictions,
             prediction_targets=self.prediction_targets,
@@ -154,7 +165,6 @@ class EvaluationManager:
             latest_model_metrics=self.latest_model_metrics,
             ensemble_weights=self.ensemble_weights,
         )
-        self._init_services()
 
     def _init_services(self) -> None:
         self.prediction_service = PredictionService(self)

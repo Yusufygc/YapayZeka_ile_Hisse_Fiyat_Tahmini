@@ -48,6 +48,14 @@ from src.pipeline.artifacts import (
 
 class ForecastingPipeline:
     def __init__(self, cfg: PipelineConfig):
+        # cfg'yi saklıyoruz — EvaluationManager'a geçirilecek
+        self._cfg = cfg
+        self._init_config_attrs(cfg)
+        set_global_seed(42)
+        self._init_run_identity(cfg.models)
+        self._init_collaborators(cfg.execution)
+
+    def _init_config_attrs(self, cfg: PipelineConfig) -> None:
         # ── config nesnelerini çöz ─────────────────────────────────────────
         d = cfg.data
         v = cfg.validation
@@ -113,11 +121,7 @@ class ForecastingPipeline:
         self.model_config.setdefault("prophet", {})
         self.model_config["prophet"].setdefault("use_regressors", self.use_prophet_macro_regressors)
 
-        # cfg'yi saklıyoruz — EvaluationManager'a geçirilecek
-        self._cfg = cfg
-
-        set_global_seed(42)
-
+    def _init_run_identity(self, m: ModelConfig) -> None:
         self.stock_symbol = os.path.splitext(os.path.basename(self.data_file))[0]
         self.project_root = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -148,6 +152,7 @@ class ForecastingPipeline:
         self.experiment_dir = os.path.join(self.outputs_dir, "experiments")
         self.registry_dir = self.models_dir
 
+    def _init_collaborators(self, e: ExecutionConfig) -> None:
         self.tracker = ExperimentTracker(self.experiment_dir)
 
         db_path = os.path.join(self.project_root, "data", "stock_models.db")
