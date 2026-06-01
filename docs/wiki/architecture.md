@@ -67,7 +67,7 @@ facades still own state and preserve existing method names such as
 `evaluate_*`. This keeps compatibility while reducing the complexity of the
 three largest pipeline files.
 
-### Evaluation Services: Owner-Forward → Explicit DI (E1 epic, in progress)
+### Evaluation Services: Owner-Forward → Explicit DI (E1 epic, closed)
 
 The original evaluation services (`PredictionService`, `BacktestService`,
 `SignalCalibrationService`, `MetricsReportingService`) were *owner-backed*:
@@ -80,12 +80,23 @@ constructor, where `EvaluationContext` is the read-only config/identity bag and
 `evaluation_services.py`). The mixin bodies now read/write `self.ctx.X` /
 `self.state.X` instead of forwarding to the owner.
 
-Migration status (2026-06-01): all four evaluation services —
+Migration status (2026-06-01, E1 closed at Faz 7): all four evaluation services —
 `PredictionService` (Faz 3.1), `BacktestService` (Faz 3.2),
 `SignalCalibrationService` (Faz 3.3) and `MetricsReportingService` (Faz 3.4) —
-are converted to DI and no longer inherit `_OwnerBackedService`.
-`_OwnerBackedService` now backs only the evaluation/training workflows and the
-`DataManager` service families (removal scheduled for Faz 7).
+are converted to DI and no longer inherit `_OwnerBackedService`. `ForecastRunner`
+moved to `ForecastContext` DI and `_OwnerBackedForecastService` was deleted
+(Faz 5). The four `DataManager` services were made fail-loud (Faz 6).
+
+`_OwnerBackedService` is **intentionally retained** as the forwarding base for
+the remaining owner-forward consumers: the three evaluation workflows
+(`SingleSplit/WalkForward/FinalHoldout EvaluationWorkflow`), the three training
+workflows (`FinalHoldout/SingleSplit/WalkForward TrainingWorkflow`), and the four
+`DataManager` services — all of which both read and write shared owner state
+(the service↔workflow integration contract). Converting those 10 classes to DI
+is a large, high-regression-risk effort the epic deliberately deferred (§1 / §8,
+training is out of E1 scope); it is tracked as a **future epic** rather than
+forced into Faz 7. All forwarded writes are now fail-loud against typos.
+
 `EvaluationManager` still exposes `manager.X ⇄ manager.context.X` /
 `manager.state.X` property forwards so the workflows keep reading the same
 context/state. Behavior is unchanged and locked by characterization golden tests

@@ -1,3 +1,20 @@
+## [2026-06-01] Refactor (E1 Faz 7) | Temizlik & dokumantasyon — E1 EPIGI KAPANDI
+
+- Gecici AST envanter script'i tools/owner_forward_inventory.py silindi (hic commit
+  edilmemisti; untracked diskten kaldirildi).
+- Kod gercegi dogrulandi (kod > wiki): `_OwnerBackedForecastService` zaten Faz 5'te
+  silinmis. `_OwnerBackedService` ise CANLI — 3 eval workflow + 3 training workflow +
+  4 DataManager servisi miras aliyor, hepsi paylasilan owner state'i okur+yazar
+  (servis<->workflow entegrasyon sozlesmesi).
+- Epic'in orijinal "taban silindi" kabul kriteri REVIZE edildi: tabani silmek = bu 10
+  sinifi DI'ya cevirmek; epic §1 "big-bang yuksek risk" + §8 training kapsam-disi →
+  ayri gelecek epik (E1.x) olarak isaretlendi. Taban bilincli korundu; tum forward
+  yazimlar fail-loud (Faz 6).
+- Kod davranisi DEGISMEDI (sadece temp script + doc). Tam suite 561 passed, golden sabit.
+- Guncellenen wiki: architecture.md (E1 closed + gerekce), refactor-plan.md (E1 KAPANDI),
+  e1-owner-forward-epic.md (frontmatter status: done, §6 revize, Durum Faz 7),
+  index.md (durum), log.md.
+
 ## [2026-06-01] Refactor (E1 Faz 6) | DataManager servisleri fail-loud guard'a alindi
 
 - 4 DataManager owner-forward servisinden (DataIngestionService,

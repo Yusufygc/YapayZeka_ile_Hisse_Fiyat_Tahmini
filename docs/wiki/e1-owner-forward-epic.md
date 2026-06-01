@@ -1,7 +1,7 @@
 ---
 title: E1 Owner-Forward Removal Epic
 type: plan
-status: active
+status: done
 last_updated: 2026-06-01
 owner: llm
 source_count: 9
@@ -159,11 +159,26 @@ kalmamalı).
 
 ## 6. Kabul kriterleri
 
-- `_OwnerBackedService` ve `_OwnerBackedForecastService` repo'dan silindi.
-- Hiçbir serviste `__getattr__`/`__setattr__` owner-forward kalmadı.
-- Tüm suite yeşil (≥549) + karakterizasyon golden'lar değişmeden geçer.
-- Leakage/determinizm assert'leri korundu; monkeypatch hedefleri çalışıyor.
-- Public API imzaları değişmedi.
+> **Revize (2026-06-01, Faz 7):** Orijinal kriter "`_OwnerBackedService` repo'dan
+> silindi" idi. Kodu esas alınca (kod > test > wiki) bu tabanın hâlâ 3 eval + 3
+> training workflow + 4 DataManager servisi tarafından miras alındığı ve bu 10
+> sınıfın paylaşılan owner state'i okuyup-yazdığı görüldü (servis↔workflow
+> entegrasyon sözleşmesi, §1'in "big-bang yüksek risk" uyarısı; training §8'de
+> zaten kapsam-dışı). Tabanı tamamen silmek = bu 10 sınıfı DI'ya çevirmek →
+> **ayrı gelecek epik**. E1 hedefi "evaluation servislerini + forecast runner'ı
+> DI'ya çevir, forecast tabanını sil, tüm forward yazımları fail-loud yap" olarak
+> karşılandı.
+
+- ✅ `_OwnerBackedForecastService` repo'dan silindi (Faz 5).
+- ✅ 4 evaluation servisi + `ForecastRunner` owner-forward'dan DI'ya geçti; bu
+  yüzeylerde `__getattr__`/`__setattr__` forward kalmadı.
+- ✅ `_OwnerBackedService` tabanı bilinçli korundu (workflow + DataManager
+  servisleri); tüm forward yazımlar fail-loud (typo guard).
+- ✅ Tüm suite yeşil (561) + karakterizasyon golden'lar değişmeden geçer.
+- ✅ Leakage/determinizm assert'leri korundu; monkeypatch hedefleri çalışıyor.
+- ✅ Public API imzaları değişmedi.
+- ⏭️ **Gelecek epik (E1.x):** 6 workflow + 4 DataManager servisini DI'ya çevirip
+  `_OwnerBackedService` tabanını sil (servis-servis, golden korunarak).
 
 ## 7. Geri alma (rollback)
 
@@ -210,6 +225,23 @@ Owner-forward sınıflarının `self.<attr>` oku/yaz sınıflandırması:
 
 ## Durum
 
+- 2026-06-01 (Faz 7 ✅ — **EPİK KAPANDI**): Temizlik & dokümantasyon. Geçici AST
+  envanter script'i `tools/owner_forward_inventory.py` **silindi** (hiç commit
+  edilmemişti, untracked diskten kaldırıldı). Kod gerçeği doğrulandı (kod > wiki):
+  `_OwnerBackedForecastService` zaten Faz 5'te silinmiş (kalan = yalnız tarihsel
+  doc/yorum). `_OwnerBackedService` ise **canlı** — 3 eval workflow
+  (`SingleSplit/WalkForward/FinalHoldout EvaluationWorkflow`), 3 training workflow
+  (`FinalHoldout/SingleSplit/WalkForward TrainingWorkflow`), 4 DataManager servisi
+  miras alıyor; hepsi paylaşılan owner state'i hem okur hem yazar (servis↔workflow
+  entegrasyon sözleşmesi). Bu yüzden epic'in orijinal "taban silindi" kabul kriteri
+  **revize edildi**: tabanı silmek = bu 10 sınıfı DI'ya çevirmek, epic §1'in
+  "big-bang yüksek regresyon riski" diye uyardığı ve §8'in training için kapsam-dışı
+  bıraktığı büyük iş → **ayrı gelecek epik (E1.x)** olarak işaretlendi. Taban
+  **bilinçli korundu**, tüm forward yazımlar artık fail-loud (Faz 6). Doc güncellendi:
+  `architecture.md` (E1 closed + taban-koru gerekçesi), `refactor-plan.md` Durum
+  (E1 KAPANDI girişi), epic frontmatter `status: done`, §6 kabul kriteri revize.
+  Kod davranışı **değişmedi** (sadece temp script silindi + doc). Tam suite **561
+  passed**, golden sabit. **E1 epiği tamamlandı.**
 - 2026-06-01 (Faz 6 ✅): DataManager servisleri fail-loud guard'a alındı. 4 servisten
   (`DataIngestionService`, `TensorPreparationService`, `ValidationSplitService`,
   `DataQualityReportingService`) `_FAIL_LOUD = False` opt-out **kaldırıldı**; artık

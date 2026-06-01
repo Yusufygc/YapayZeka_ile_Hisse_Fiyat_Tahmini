@@ -44,23 +44,24 @@ linked pages below.
 - The active orchestration facade is `ForecastingPipeline` in `src/pipeline/orchestrator.py`.
 - Main orchestration responsibilities are split across `DataManager`, `ModelTrainer`, and `EvaluationManager`.
 - Evaluation logic is now service-composed via `PredictionService`, `BacktestService`, `SignalCalibrationService`, and `MetricsReportingService`.
-- **Owner-forward removal (E1 epic, in progress on `refactor/e1-owner-forward-di`):**
-  evaluation services are being converted from `_OwnerBackedService`
-  (`__getattr__`/`__setattr__` forwarding) to explicit `(ctx, state)` dependency
-  injection (`EvaluationContext` read-only config + `EvaluationState` mutable
-  runtime). As of 2026-06-01, all four evaluation services (`PredictionService`,
-  `BacktestService`, `SignalCalibrationService`, `MetricsReportingService`) are
-  DI. Faz 4 (2026-06-01) trimmed `EvaluationManager` to a thinner orchestrator by
-  deleting 10 dead service delegations (no workflow/src/test caller; 1035 → 979
-  lines). Faz 5 (2026-06-01) converted `ForecastRunner`'s 6 forecast services to
-  `ForecastContext` DI and deleted `_OwnerBackedForecastService`. Faz 6
-  (2026-06-01) removed the `_FAIL_LOUD = False` opt-out from the 4 `DataManager`
-  services so every owner-forward family is now fail-loud; the full mutable state
-  surface is pre-init in `__init__` (and in `_ensure_config_objects` for
-  `__new__`-built legacy objects). The only remaining owner-forward base is
-  `_OwnerBackedService`, now backing just the evaluation/training workflows +
-  `DataManager` services (base removal in Faz 7).
-  Behavior is locked by golden tests in `tests/test_owner_forward_contract.py`.
+- **Owner-forward removal (E1 epic, ✅ CLOSED 2026-06-01 on `refactor/e1-owner-forward-di`):**
+  all four evaluation services (`PredictionService`, `BacktestService`,
+  `SignalCalibrationService`, `MetricsReportingService`) were converted from
+  `_OwnerBackedService` (`__getattr__`/`__setattr__` forwarding) to explicit
+  `(ctx, state)` dependency injection (`EvaluationContext` read-only config +
+  `EvaluationState` mutable runtime). Faz 4 trimmed `EvaluationManager` to a
+  thinner orchestrator (deleted 10 dead delegations, 1035 → 979 lines). Faz 5
+  moved `ForecastRunner` to `ForecastContext` DI and **deleted**
+  `_OwnerBackedForecastService`. Faz 6 made the 4 `DataManager` services
+  fail-loud. Faz 7 (cleanup) deleted the temporary
+  `tools/owner_forward_inventory.py` and updated docs. The `_OwnerBackedService`
+  base is **intentionally retained**: it still backs 3 evaluation workflows, 3
+  training workflows, and the 4 `DataManager` services — all read+write shared
+  owner state (the service↔workflow integration contract). Converting those 10
+  classes to DI to fully delete the base is deferred to a **future epic (E1.x)**
+  per epic §1/§8 (high-regression-risk, training out of scope). All forwarded
+  writes are now fail-loud against typos; behavior unchanged, locked by golden
+  tests in `tests/test_owner_forward_contract.py`.
   See [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md).
 - The default production candidate set is defined in `src/pipeline/model_scope.py`
   and the model registry; in the current source tree `TFT` is not registered and

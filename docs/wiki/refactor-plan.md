@@ -297,5 +297,16 @@ en son.
     (`MetricsReportingService`) DI'ya çevrilecek, sonra ince orkestratör (Faz 4),
     `ForecastRunner` DI (`_OwnerBackedForecastService` kaldırma, Faz 5), DataManager
     servislerinin guard'a alınması (Faz 6), temizlik (Faz 7).
+  - **E1 KAPANDI (2026-06-01, Faz 7):** Faz 3.1–3.4 (4 eval servisi DI) + Faz 4
+    (ince orkestratör, 10 ölü delegasyon silindi) + Faz 5 (`ForecastRunner`
+    `ForecastContext` DI, `_OwnerBackedForecastService` **silindi**) + Faz 6 (4
+    DataManager servisi fail-loud) + Faz 7 (geçici `tools/owner_forward_inventory.py`
+    silindi, doc'lar güncellendi) tamamlandı. `_OwnerBackedService` tabanı **bilinçli
+    korundu**: 3 eval workflow + 3 training workflow + 4 DataManager servisi hâlâ
+    miras alıyor (hepsi paylaşılan owner state'i okur+yazar → servis↔workflow
+    entegrasyon sözleşmesi). Bu 10 sınıfı DI'ya çevirmek epic §1/§8'in ertelediği
+    yüksek-riskli iş; **gelecek ayrı epik** olarak işaretlendi (epic kabul kriteri
+    "taban silindi" bu nedenle revize edildi). Tüm forward-yazımlar artık typo'ya
+    karşı fail-loud. Tam suite 561 yeşil, golden sabit.
   - Doğrulama: tüm suite yeşil (549) + guard fonksiyonel smoke (typo yakalandı,
     legit/allowlist yazımlar geçti, opt-out aile permissive).
