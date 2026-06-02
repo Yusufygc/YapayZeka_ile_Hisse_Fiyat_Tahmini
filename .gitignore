@@ -12,6 +12,7 @@ _make_report.py
 rapor.docx
 tools/*
 !tools/audit_corporate_actions.py
+!tools/e2_faz0_universe_audit.py
 .claude
 kalinanYer.md
 kalinanYer1.md
