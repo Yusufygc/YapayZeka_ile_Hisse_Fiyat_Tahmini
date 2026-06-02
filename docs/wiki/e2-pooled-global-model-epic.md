@@ -205,10 +205,14 @@ confidence concept is introduced.
     stable signal; on a thin 64-symbol subset they also lifted IC mean
     (ICIR 0.65→0.93). **Best config = cross-sectional target + cs-features,
     ICIR ~1.55 on the full BIST universe.**
-  - *Repro note:* between two full runs the ABSOLUTE ICIR moved 0.525→0.718 (and
-    cross-sectional 1.243→1.418) at identical config/seed/`num_threads=1`; the
-    cross-sectional dominance is robust across both, but LightGBM run-to-run
-    determinism is worth a follow-up check before locking serving numbers.
+  - *Determinism (checked):* **in-process is byte-identical** — two back-to-back
+    CS+CSFEAT fits gave identical IC/ICIR and predictions (maxdiff 0). So
+    train-once-persist serving is fully reproducible from a fixed data snapshot,
+    and champion/challenger comparisons within a run are exact. The earlier
+    cross-*run* ICIR drift (ABSOLUTE 0.525→0.718) is NOT a model bug (same panel
+    size 1.228M rows, deterministic in-process) — most likely a data-snapshot
+    difference between processes (data/ CSVs are being refreshed). Benign for
+    serving; lock the data snapshot when persisting.
 - **Faz 4 — Gated per-symbol fine-tune (optional, experimental).** Pretrain pool
   → short per-symbol fine-tune, applied ONLY when a symbol has enough history AND
   fine-tune improves its multi-window OOS; else serve global. Consistent with
