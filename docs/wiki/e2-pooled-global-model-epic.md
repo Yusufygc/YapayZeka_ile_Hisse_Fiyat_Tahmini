@@ -74,17 +74,24 @@ confidence concept is introduced.
 - **Faz 0 — Data/universe audit (blocking). ✅ DONE 2026-06-02.** See findings
   below. Auditor: `tools/e2_faz0_universe_audit.py` (read-only; writes
   `outputs/e2_faz0_universe_audit.md` + `outputs/e2_faz0_symbol_stats.csv`).
-- **Faz 0.5 — Universe re-pull (freshness/format/universe fix). Tool ready
+- **Faz 0.5 — Universe re-pull (freshness/format/universe fix). ✅ DONE
   2026-06-02.** `tools/refetch_universe.py` re-fetches every ticker from yfinance
   (`{SYMBOL}.IS`, `auto_adjust=True` per the split-leakage invariant), rewrites
   each `data/{TICKER}.csv` from scratch in a single ISO `%Y-%m-%d` format, and
   upserts `data/bist_universe.csv` per fetched symbol (Listed_Date from min date,
   Status Active/Inactive by freshness, Sector/Delisted_Date preserved if already
-  set). Resolves Faz 0 findings #freshness, #date-format, and partially
-  #survivorship (no-data symbols flagged as likely delisted/invalid). Smoke-
-  verified on EREGL/AKBNK/TUPRS → ~2910 rows each, fresh to 2026-06-02. Full
-  592-symbol run is the operator's trigger (long, network-heavy, overwrites all
-  CSVs).
+  set). **Full 592-symbol run result:** ok **585**, no-data **7**, failed 0.
+  Post-refetch re-audit confirms the fix: date format unified to ISO (592/592),
+  fresh-to-2026-06-02 = 583 (was 1), universe coverage 585/592 (was 28),
+  1,275,614 pooled rows (+178k), dup/zero-price = 0. The 7 no-data symbols
+  (`DOBUR, EFORC, IPEKE, KOZAA, KOZAL, SNKRN, YGYO`) returned no yfinance data —
+  likely delisted/suspended (Koza group etc.); their old CSVs are retained and
+  flagged for the survivorship decision. **Remaining Faz 0 gaps:** sector still
+  blank for ~557 symbols (only the original 28 cataloged sectors survive) →
+  backfill needed; 110 symbols still show a `|log_return|≥0.30` day (real split/
+  dividend events even under auto_adjust — needs an audit pass); 30 thin (<500
+  rows) cold-start symbols. (Audit's `sector_missing` counter undercounts: NaN
+  sectors are truthy — real blank count is ~557.)
 - **Faz 1 — Horizon shift (cheap win, orthogonal).** Daily → weekly (5-day)
   forward return target. Higher signal/noise; reuses existing pipeline. Measure
   EREGL + a stratified sample before/after.

@@ -1,3 +1,14 @@
+## [2026-06-02] Faz 0.5 KOSULDU | universe tam yeniden cekildi
+
+`tools/refetch_universe.py` tam 592-sembol kosusu: ok=585, no-data=7, failed=0.
+Re-audit ile dogrulandi: tarih formati ISO'ya birlesti (592/592), fresh-to-
+2026-06-02=583 (onceden 1), universe coverage 585/592 (onceden 28), 1,275,614
+pooled satir (+178k), dup/zero-price=0. No-data 7 sembol (DOBUR, EFORC, IPEKE,
+KOZAA, KOZAL, SNKRN, YGYO) yfinance'den veri donmedi -> delist/aski suphesi;
+eski CSV'leri korundu, survivorship karari icin isaretli. Kalan Faz 0 gap'leri:
+sektor ~557 hissede bos (backfill), 110 hissede |log_return|>=0.30 gunu (split/
+temettu audit), 30 thin (<500) cold-start. Veri+universe commit edilmedi.
+
 ## [2026-06-02] Faz 0.5 | E2 universe re-pull araci yazildi
 
 `tools/refetch_universe.py`: Faz 0'in 3 sorununu cozer. Her ticker icin
