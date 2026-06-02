@@ -1,3 +1,16 @@
+## [2026-06-03] Faz 2 BITTI | per-symbol OOS aggregation harness
+
+Faz 2 son parca kodlandi + test edildi -> Faz 2 ✅ DONE:
+- `src/validation/pooled_oos.py` `evaluate_per_symbol`: her CV fold icin taze
+  `model_factory()` fit (fold'lar arasi durum sizmasi yok), test satirlarini
+  tahmin, OOS tahminleri SEMBOL bazinda grupla -> per-symbol metrik dagilimi
+  (`dir_acc`, `rmse`, `base_rate`, base-rate-uzeri `edge`, `positive_fold_ratio`,
+  `reliable`) + per-`(symbol,fold)` detay. log-return target -> isaret tabanli
+  yon (price-mode/prev_close coupling yok). final_holdout varsayilan dislanir.
+- 6 test + gercek Ridge smoke (3 sembol): AKBNK edge +0.5, EREGL -1.9, TUPRS
+  -2.4 -> durust, base-rate civari. Faz 5 serving guven skorunu besler.
+- Tam suite 587 yesil. Siradaki: Faz 3 global kosullandirilmis model.
+
 ## [2026-06-02] Faz 2 KOD | pooled_loader + pooled_cv (cekirdek)
 
 Tasarimin cekirdegi kodlandi + test edildi:

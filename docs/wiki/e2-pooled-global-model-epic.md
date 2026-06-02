@@ -119,8 +119,8 @@ confidence concept is introduced.
     (**Faz 1b**) is deferred until pooled models beat baselines — for h>1 the
     backtest/forecast/signal path is NOT yet horizon-correct, so h>1 backtest/
     Sharpe must not be interpreted.
-- **Faz 2 — Pooled loader + group-aware CV (leakage guard). 🟡 CORE DONE
-  2026-06-02.** Design: [E2 Faz 2 Pooled CV Design](e2-faz2-pooled-cv-design.md).
+- **Faz 2 — Pooled loader + group-aware CV (leakage guard). ✅ DONE
+  2026-06-03.** Design: [E2 Faz 2 Pooled CV Design](e2-faz2-pooled-cv-design.md).
   Implemented + tested:
   - `src/validation/pooled_cv.py` — `PooledPurgedWalkForward` date-based splitter
     (global date axis → no cross-symbol leak; purge+embargo `E=h+buffer`; exact
@@ -131,10 +131,17 @@ confidence concept is introduced.
     `sector`/`symbol_id`/causal `liq_log`/`vol`; delisted history included;
     stray raw `Kapanış` price-level dropped). 6 tests + real 3-symbol smoke
     (8463 rows, 6+1 folds, leak-asserted on real data).
-  - Full suite 581 green. **Remaining:** the per-symbol OOS aggregation harness
-    (predict folds with a dummy/global model → group by symbol → distribution)
-    is the last Faz 2 slice, then Faz 3 model. Defaults locked: 63×6 OOS,
-    expanding, cross-sec norm off, delisted included.
+  - `src/validation/pooled_oos.py` — `evaluate_per_symbol` aggregation harness:
+    fits a fresh `model_factory()` per CV fold (no cross-fold state leak),
+    predicts test rows, groups OOS predictions by symbol → per-symbol metric
+    distribution (`dir_acc`, `rmse`, `base_rate`, `edge`-over-base-rate,
+    `positive_fold_ratio`, `reliable`) + per-`(symbol,fold)` detail. log-return
+    target → sign-based direction (no price-mode/prev_close coupling). Final
+    holdout excluded by default. 6 tests + real Ridge smoke (3 symbols: AKBNK
+    edge +0.5, EREGL −1.9, TUPRS −2.4 — honest, near base-rate). Feeds the Faz 5
+    serving confidence score.
+  - Full suite 587 green. Defaults locked: 63×6 OOS, expanding, cross-sec norm
+    off, delisted included. **Next:** Faz 3 global conditioned model.
 - **Faz 3 — Global conditioned model (pretrain).** One model + conditioning
   features/embedding, trained on pooled rows. Champion/challenger compatible
   (matches existing training policy: periodic batch retrain, no per-query
