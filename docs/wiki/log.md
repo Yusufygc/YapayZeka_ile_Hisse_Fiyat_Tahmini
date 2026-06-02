@@ -1,3 +1,23 @@
+## [2026-06-02] Bugfix | run_id model slug MAX_PATH tasmasi (ALL_MODELS etiketi)
+
+EREGL'i tum modellerle (`--role candidate`, 14 model) egitince batch "1 hata" verdi:
+egitim + DB tamam ama son `model_result_exporter.export_walk_forward_results` adimi
+`FileNotFoundError [Errno 2]` ile coktu; run_all final-holdout + best-model secimine
+gecemeden abort oldu (`best_models` eski RF kaydinda kaldi).
+
+- **Kok neden:** Windows `MAX_PATH` (260). `_model_slug_for_run_id` 4+ model icin
+  `models-<A>-<B>-<C>-plusN-<sha8>` uretiyordu; uzun model adlariyla run klasor adi ~88
+  karakter -> per-model export yolu (`.../model_results/naive_last_value/metrics_walk_forward.json`)
+  267 karaktere ciktigi icin `open()` patladi (dizin 241'de makedirs gecmisti).
+- **Fix (`src/pipeline/orchestrator.py`):** (a) secim tum candidate setini kapsiyorsa
+  run_id slug = `ALL_MODELS`; (b) 4+ kismi liste -> gorunur isimler atilir,
+  `models<N>-<sha8>` kalir. Yeni `_covers_all_candidates` yardimcisi candidate kapsamini
+  kontrol eder. Tam yol ~210 (<260).
+- **Test:** `tests/test_run_id_naming.py` guncellendi (uzun-slug artik `models6-<hash>`,
+  yeni `ALL_MODELS` testi). Tam suite yesil (`.codex_tmp` kilidi disinda; temiz basetemp'le 42/42).
+- Davranis: yalniz run klasor *adi* degisti; per-model alt klasor yapisi
+  (`runs/<id>/model_results/<slug>/`) ayni.
+
 ## [2026-06-02] Bugfix | Macro feature-cache zehirlenmesi + forced --model bos model_path
 
 E1 manuel testinde (EREGL forecast smoke) yuzeye cikan iki bagimsiz, E1-disi bug

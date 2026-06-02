@@ -227,7 +227,17 @@ data/optuna/                 Optuna warm-start SQLite files
 tools/reports/               local report generation helpers
 ```
 
-The run id includes timestamp, symbol, validation mode, and a compact selected-model slug.
+The run id includes timestamp, symbol, validation mode, and a compact selected-model slug
+(`ForecastingPipeline._model_slug_for_run_id`). Slug rules:
+
+- selection covers all production candidates -> `ALL_MODELS`;
+- no explicit selection -> `models-All`;
+- 1 model -> `model-<Name>`; 2-3 -> `models-<A>-<B>-<C>`;
+- 4+ partial -> `models<N>-<sha8>` (visible names dropped).
+
+The 4+ and `ALL_MODELS` slugs stay short on purpose: long model-name lists previously
+pushed per-model export paths past the Windows 260-char `MAX_PATH` limit, aborting
+all-models runs in `model_result_exporter` (2026-06-02 fix).
 
 ## Important Invariants
 
