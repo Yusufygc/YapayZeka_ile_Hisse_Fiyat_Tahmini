@@ -195,18 +195,20 @@ prerequisite).
 - Per-symbol OOS metrics computable from a dummy global model end-to-end.
 - No change to `GET /analysis/{symbol}` schema or existing suite.
 
-## Open questions (need a decision)
+## Decisions (2026-06-02, locked with user)
 
-1. **Window length / count:** `window_len=63` (≈3m) × `n_windows=6` ≈ 1.5y OOS.
-   Bigger windows = more stable, fewer folds. Acceptable default?
-2. **Expanding vs sliding train:** expanding (all history) vs `max_train_days`
-   (regime-local). Default expanding for Faz 2?
-3. **Liquidity/size proxy:** TL turnover trailing median as cap proxy — OK, or
-   source a real market-cap/free-float feed later?
-4. **Cross-sectional standardization:** default off in Faz 2 (measure in Faz 3),
-   or on from the start?
-5. **Delisted inclusion:** include all retained-history symbols (survivorship-
-   correct) — confirm we want delisted names in the training pool.
+1. **OOS windows:** `window_len=63` × `n_windows=6` (~1.5y OOS). ✅
+2. **Train window:** **expanding** (`max_train_days=None`, all history to cutoff). ✅
+3. **Cross-sectional standardization:** **off in Faz 2**; A/B-measure in Faz 3.
+   Faz 2 uses the existing global robust-X / standard-Y scaling, train-only fit. ✅
+4. **Delisted inclusion:** **include** delisted symbols' retained history
+   (survivorship-correct); `include_delisted=True`. ✅
+5. **Liquidity/size proxy:** trailing-median **TL turnover (close×volume)** decile
+   (`liq_lookback=63`) — the only source available in the data; a real
+   market-cap/free-float feed is a later option. ✅ (no further input needed)
+
+These match the dataclass defaults above (`PooledCVConfig`, `PooledLoaderConfig`),
+so Faz 2 implementation can proceed with defaults as-is.
 
 ## Related Pages
 
