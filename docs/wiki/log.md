@@ -1,3 +1,22 @@
+## [2026-06-03] Faz 3.6 | cross-sectional (peer-goreli) ozellikler
+
+`add_cross_sectional_features` (src/data/cross_sectional.py): her mevcut causal
+ozelligin tarih-ici goreli versiyonu (merkezli rank `_csr` [-1,1] + zscore `_csz`).
+"bu hisse bugun akranlarina gore nerede". Leakage-safe (ayni-tarih, causal,
+gelecege bakis yok; hedef tarafini purge korur; NaN->notr 0). build_pooled_features
+otomatik feature alir. 2 yeni test.
+
+Full-evren 3 varyant (589 sembol, 1.23M satir, 378 OOS gun, boost 400):
+- ABSOLUTE: IC +0.044 / ICIR 0.718 / %IC>0 74
+- CROSS-SECTIONAL: IC +0.105 / ICIR 1.418 / %IC>0 91
+- CS+CSFEAT: IC +0.099 / ICIR 1.550 / %IC>0 93.4
+cs-features esasen IC varyansini kisiyor (ICIR 1.42->1.55) -> daha kararli sinyal;
+ince 64-sembol alt-kumede IC ortalamasini da itti (ICIR 0.65->0.93). En iyi config
+= cross-sectional target + cs-features, ICIR ~1.55. Repro notu: iki full kosu
+arasi ABSOLUTE ICIR 0.525->0.718 oynadi (ayni seed/num_threads=1); cross-sectional
+ustunlugu saglam ama LightGBM kosu-arasi determinizmi serving sayilari oncesi
+dogrulanmali.
+
 ## [2026-06-03] Faz 3.5 DOGRULAMA | full-evren cross-sectional IC
 
 `tools/e2_faz35_cs_ic_study.py` (outputs/e2_faz35_cs_ic_study.md): tum evren

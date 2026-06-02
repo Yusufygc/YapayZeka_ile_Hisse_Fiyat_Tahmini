@@ -190,9 +190,25 @@ confidence concept is introduced.
   - **Implication:** product is per-stock but alpha is relative → serving must
     translate predicted rank into "expected to out/under-perform peers", with
     confidence from IC stability (NOT absolute price/direction). Faz 4 per-symbol
-    fine-tune is not the lever; the validated path is Faz 5 serving around
-    cross-sectional rank + IC-based confidence, then Faz 6 stratified study /
-    richer cross-sectional features.
+    fine-tune is not the lever.
+- **Faz 3.6 — Cross-sectional (peer-relative) features. ✅ DONE 2026-06-03.**
+  `add_cross_sectional_features` (`src/data/cross_sectional.py`): per-date
+  relative version of each existing causal feature — centered rank `_csr`
+  (`[-1,1]`) + `_csz` z-score. "Where does this stock sit vs peers today."
+  Leakage-safe: same-date, all inputs causal (no look-ahead); purge guards the
+  target side; NaN→neutral 0. Auto-included as features by `build_pooled_features`
+  (numeric, non-`target_*`). 2 tests (8 total in cross_sectional).
+  - **Full-universe 3-variant run** (`tools/e2_faz35_cs_ic_study.py`, boost=400):
+    ABSOLUTE IC +0.044 / ICIR 0.718 / %IC>0 74; CROSS-SECTIONAL IC +0.105 /
+    ICIR 1.418 / %IC>0 91; **CS+CSFEAT IC +0.099 / ICIR 1.550 / %IC>0 93.4.**
+    cs-features mainly cut IC variance (ICIR 1.42→1.55, %positive 91→93) — a more
+    stable signal; on a thin 64-symbol subset they also lifted IC mean
+    (ICIR 0.65→0.93). **Best config = cross-sectional target + cs-features,
+    ICIR ~1.55 on the full BIST universe.**
+  - *Repro note:* between two full runs the ABSOLUTE ICIR moved 0.525→0.718 (and
+    cross-sectional 1.243→1.418) at identical config/seed/`num_threads=1`; the
+    cross-sectional dominance is robust across both, but LightGBM run-to-run
+    determinism is worth a follow-up check before locking serving numbers.
 - **Faz 4 — Gated per-symbol fine-tune (optional, experimental).** Pretrain pool
   → short per-symbol fine-tune, applied ONLY when a symbol has enough history AND
   fine-tune improves its multi-window OOS; else serve global. Consistent with
