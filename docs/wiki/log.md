@@ -1,3 +1,16 @@
+## [2026-06-02] Faz 2 KOD | pooled_loader + pooled_cv (cekirdek)
+
+Tasarimin cekirdegi kodlandi + test edildi:
+- `src/validation/pooled_cv.py` PooledPurgedWalkForward: tarih-bazli split
+  (capraz-sembol leak yok), purge+embargo (E=h+buffer), target_date ile kesin
+  purge, coklu-pencere OOS + final-holdout. 7 leak/yapi testi.
+- `src/data/pooled_loader.py` PooledPanelLoader: uzun panel (per-symbol feature,
+  h-gun target+target_date, sector/symbol_id/causal liq_log/vol, delisted dahil).
+  Stray ham `Kapanış` fiyat-seviyesi feature sizintisi giderildi. 6 test + gercek
+  3-sembol smoke (8463 satir, 6+1 fold, gercek veride leak-free).
+- Tam suite 581 yesil. Kalan Faz 2: per-symbol OOS aggregation harness (dummy/
+  global model -> fold tahmin -> sembol bazli dagilim), sonra Faz 3 model.
+
 ## [2026-06-02] Faz 2 TASARIM | pooled loader + grup-purged CV
 
 `docs/wiki/e2-faz2-pooled-cv-design.md` yazildi: pooled panel loader + tarih-bazli

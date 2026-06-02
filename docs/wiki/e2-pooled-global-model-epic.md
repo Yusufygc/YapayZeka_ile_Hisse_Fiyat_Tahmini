@@ -119,12 +119,22 @@ confidence concept is introduced.
     (**Faz 1b**) is deferred until pooled models beat baselines — for h>1 the
     backtest/forecast/signal path is NOT yet horizon-correct, so h>1 backtest/
     Sharpe must not be interpreted.
-- **Faz 2 — Pooled loader + group-aware CV (leakage guard).** Pooled
-  (symbol, date) data loader. Purged + embargo, **group-aware** splits: no
-  same-calendar-date leakage across symbols between train/test, no symbol-future
-  leakage. Replace single final-holdout with **multi-window rolling OOS** →
-  report a distribution, not one number. Feeds `stability_score` /
-  `rolling_positive_window_ratio` (already in confidence policy).
+- **Faz 2 — Pooled loader + group-aware CV (leakage guard). 🟡 CORE DONE
+  2026-06-02.** Design: [E2 Faz 2 Pooled CV Design](e2-faz2-pooled-cv-design.md).
+  Implemented + tested:
+  - `src/validation/pooled_cv.py` — `PooledPurgedWalkForward` date-based splitter
+    (global date axis → no cross-symbol leak; purge+embargo `E=h+buffer`; exact
+    purge via `target_date < a_k` when present; multi-window rolling OOS + newest
+    window reserved as final holdout). 7 leak/structure tests.
+  - `src/data/pooled_loader.py` — `PooledPanelLoader` builds the long panel
+    (per-symbol features via `FeaturePipeline`, h-day `target`+`target_date`,
+    `sector`/`symbol_id`/causal `liq_log`/`vol`; delisted history included;
+    stray raw `Kapanış` price-level dropped). 6 tests + real 3-symbol smoke
+    (8463 rows, 6+1 folds, leak-asserted on real data).
+  - Full suite 581 green. **Remaining:** the per-symbol OOS aggregation harness
+    (predict folds with a dummy/global model → group by symbol → distribution)
+    is the last Faz 2 slice, then Faz 3 model. Defaults locked: 63×6 OOS,
+    expanding, cross-sec norm off, delisted included.
 - **Faz 3 — Global conditioned model (pretrain).** One model + conditioning
   features/embedding, trained on pooled rows. Champion/challenger compatible
   (matches existing training policy: periodic batch retrain, no per-query
