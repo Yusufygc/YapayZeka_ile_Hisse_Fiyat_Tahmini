@@ -92,6 +92,16 @@ confidence concept is introduced.
   dividend events even under auto_adjust — needs an audit pass); 30 thin (<500
   rows) cold-start symbols. (Audit's `sector_missing` counter undercounts: NaN
   sectors are truthy — real blank count is ~557.)
+- **Faz 0.6 — Sector backfill (conditioning prerequisite). ✅ DONE 2026-06-02.**
+  `tools/backfill_sectors.py` fills `bist_universe.csv` `Sector` with a uniform
+  GICS vocabulary from yfinance `Ticker.info` (585 symbols: 580 resolved, 5
+  `Unknown` = GMTAS, ISGSY, ISKUR, KZGYO, ULUFA). Distribution: Industrials 115,
+  Consumer Cyclical 99, Financial Services 77, Basic Materials 71, Consumer
+  Defensive 61, Real Estate 56, Technology 36, Utilities 33, Healthcare 15,
+  Communication Services 12, Energy 5, Unknown 5. `Sector_Index` (the 7-index
+  macro sector-return field) is left untouched. Industry is fetched but not
+  written (no universe column yet) — deferred to a Faz 3 feature. Sector is now a
+  usable categorical conditioning input.
 - **Faz 1 — Horizon shift (cheap win, orthogonal).** Daily → weekly (5-day)
   forward return target. Higher signal/noise; reuses existing pipeline. Measure
   EREGL + a stratified sample before/after.

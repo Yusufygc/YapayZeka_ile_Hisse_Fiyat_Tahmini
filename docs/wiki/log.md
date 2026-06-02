@@ -1,3 +1,14 @@
+## [2026-06-02] Faz 0.6 | sektor backfill (kosullandirma prerequ)
+
+`tools/backfill_sectors.py` ile bist_universe.csv Sector kolonu yfinance
+Ticker.info GICS sektoruyle tek tip dolduruldu: 585 sembol, 580 resolved, 5
+Unknown (GMTAS, ISGSY, ISKUR, KZGYO, ULUFA). Dagilim: Industrials 115, Consumer
+Cyclical 99, Financial Services 77, Basic Materials 71, Consumer Defensive 61,
+Real Estate 56, Technology 36, Utilities 33, Healthcare 15, Communication
+Services 12, Energy 5. Sector_Index (macro sektor-getiri alani) dokunulmadi;
+schema sabit (Industry yazilmadi). Sektor artik E2 kosullandirma icin kullanilabilir
+categorical. Universe commit edilmedi (veri, kural).
+
 ## [2026-06-02] Faz 0.5 KOSULDU | universe tam yeniden cekildi
 
 `tools/refetch_universe.py` tam 592-sembol kosusu: ok=585, no-data=7, failed=0.
