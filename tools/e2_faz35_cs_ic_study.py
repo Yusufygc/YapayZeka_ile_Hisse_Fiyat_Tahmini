@@ -26,7 +26,10 @@ import pandas as pd
 # repo-root sys.path (python tools/x.py -> sys.path[0]=tools/, src bulunmaz)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.data.cross_sectional import add_cross_sectional_target
+from src.data.cross_sectional import (
+    add_cross_sectional_features,
+    add_cross_sectional_target,
+)
 from src.data.pooled_loader import PooledLoaderConfig, PooledPanelLoader
 from src.models.global_pooled_model import (
     GlobalPooledConfig,
@@ -82,17 +85,30 @@ def main() -> None:
     sel = [f for f in folds if not f.is_final_holdout]
     _log(f"folds: {len(folds)} ({len(sel)} selectable + holdout)")
 
+    # Faz 3.6: mevcut causal ozelliklerin cross-sectional goreli versiyonu.
+    aug0, feats0, _ = build_pooled_features(panel)
+    cs_base = [c for c in feats0 if c not in ("symbol_id", "sector_code")]
+    panel, cs_new = add_cross_sectional_features(panel, cs_base)
+    _log(f"cross-sectional features added: {len(cs_new)} (base {len(cs_base)})")
+
     aug, feats, cat_idx = build_pooled_features(panel)
     assert not any(c.startswith("target") for c in feats), "target leak!"
-    _log(f"features: {len(feats)} (cat at {cat_idx})")
+    feats_nocs = [c for c in feats if not (c.endswith("_csr") or c.endswith("_csz"))]
+    _log(f"features: {len(feats)} total, {len(feats_nocs)} without cs-feats "
+         f"(cat at {cat_idx})")
     factory = make_global_model_factory(cat_idx, GlobalPooledConfig(num_boost_round=args.boost))
 
+    variants = [
+        ("ABSOLUTE", "target", feats_nocs),
+        ("CROSS-SECTIONAL", "target_cs", feats_nocs),
+        ("CS+CSFEAT", "target_cs", feats),
+    ]
     results = {}
-    for tcol, label in [("target", "ABSOLUTE"), ("target_cs", "CROSS-SECTIONAL")]:
-        _log(f"fitting GlobalPooledModel — target={tcol} ...")
+    for label, tcol, fcols in variants:
+        _log(f"fitting GlobalPooledModel — {label} (target={tcol}, {len(fcols)} feats) ...")
         ts = time.time()
         res = evaluate_per_symbol(
-            aug, folds, factory, PerSymbolOOSConfig(feature_cols=feats, target_col=tcol))
+            aug, folds, factory, PerSymbolOOSConfig(feature_cols=fcols, target_col=tcol))
         ic = res.ic
         rel = res.per_symbol[res.per_symbol["reliable"]]
         results[label] = (res, ic, rel)
@@ -114,8 +130,9 @@ def main() -> None:
         lines.append(f"| {label} | {ic['ic_mean']:+.4f} | {ic['icir']:+.3f} | "
                      f"{100*ic['pct_positive']:.1f} | {ic['n_days']} | {len(rel)} |")
     lines.append("")
-    rcs, ics, relcs = results["CROSS-SECTIONAL"]
-    lines.append(f"- CROSS-SECTIONAL reliable per-symbol dir_acc mean: "
+    best_label = "CS+CSFEAT" if "CS+CSFEAT" in results else "CROSS-SECTIONAL"
+    rcs, ics, relcs = results[best_label]
+    lines.append(f"- {best_label} reliable per-symbol dir_acc mean: "
                  f"{relcs['dir_acc'].mean():.2f}, edge mean: {relcs['edge'].mean():+.2f}")
     lines.append(f"- total elapsed: {time.time()-t0:.0f}s")
     with open("outputs/e2_faz35_cs_ic_study.md", "w", encoding="utf-8") as fh:

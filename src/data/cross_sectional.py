@@ -58,3 +58,45 @@ def add_cross_sectional_target(
     df = df[counts >= int(min_names)].copy()
     df = df.dropna(subset=[out_col]).reset_index(drop=True)
     return df
+
+
+def add_cross_sectional_features(
+    panel: pd.DataFrame,
+    cols: list[str],
+    date_col: str = "Date",
+    kinds: tuple[str, ...] = ("rank", "zscore"),
+    rank_suffix: str = "_csr",
+    z_suffix: str = "_csz",
+) -> tuple[pd.DataFrame, list[str]]:
+    """Mevcut CAUSAL ozelliklerin tarih-ici (cross-sectional) goreli versiyonu.
+
+    Pooling'in alpha'si goreli: "bu hisse bugun akranlarina GORE nerede". Her
+    `col` icin her tarih ici:
+      rank:   2*(rank-0.5)/n - 1  (merkezli [-1,1])
+      zscore: (x - mean_d) / std_d
+    Girdiler causal (>= gecmis) -> capraz-sembol ayni-tarih kullanimi leak DEGIL
+    (gelecege bakis yok). Hedef tarafini pooled_cv purge korur.
+
+    NaN sonuc (tek-sembol gun / std=0) notr 0.0 ile doldurulur.
+    Returns (panel_aug, new_feature_cols).
+    """
+    df = panel.copy()
+    new_cols: list[str] = []
+    present = [c for c in cols if c in df.columns]
+    for c in present:
+        g = df.groupby(date_col)[c]
+        if "rank" in kinds:
+            r = g.rank(method="average")
+            cnt = g.transform("size")
+            name = c + rank_suffix
+            df[name] = 2.0 * ((r - 0.5) / cnt) - 1.0
+            new_cols.append(name)
+        if "zscore" in kinds:
+            mean = g.transform("mean")
+            std = g.transform("std")
+            name = c + z_suffix
+            df[name] = (df[c] - mean) / std.replace(0.0, np.nan)
+            new_cols.append(name)
+    if new_cols:
+        df[new_cols] = df[new_cols].fillna(0.0)
+    return df, new_cols
