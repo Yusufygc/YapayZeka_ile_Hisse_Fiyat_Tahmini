@@ -142,10 +142,26 @@ confidence concept is introduced.
     serving confidence score.
   - Full suite 587 green. Defaults locked: 63×6 OOS, expanding, cross-sec norm
     off, delisted included. **Next:** Faz 3 global conditioned model.
-- **Faz 3 — Global conditioned model (pretrain).** One model + conditioning
-  features/embedding, trained on pooled rows. Champion/challenger compatible
-  (matches existing training policy: periodic batch retrain, no per-query
-  training).
+- **Faz 3 — Global conditioned model (pretrain). 🟡 MODEL BUILT 2026-06-03.**
+  `src/models/global_pooled_model.py`:
+  - `GlobalPooledModel` — pooled LightGBM (native API, deterministic: `seed`,
+    `deterministic=True`, `num_threads=1`). sklearn-vari `fit`/`predict` →
+    `pooled_oos` harness compatible. Champion/challenger compatible (periodic
+    batch retrain, no per-query training).
+  - `build_pooled_features(panel)` → `(panel_aug, feature_cols, cat_indices)`:
+    adds stable `sector_code`; conditioning = numeric `liq_log`/`vol` +
+    categorical `symbol_id`/`sector_code` (LightGBM native categorical, no
+    one-hot blowup). `make_global_model_factory(cat_indices, cfg)` for the harness.
+  - 5 tests (schema, stable codes, deterministic fit, harness run, sector-signal
+    learnability). Full suite 592 green.
+  - **Honest benchmark (OOS harness, h=5):** on 39 long-history symbols (109k
+    rows), pooled LightGBM+conditioning does **not** yet beat the pooled Ridge
+    base nor base-rate: GlobalL mean edge −2.92 (%edge>0 23%) vs Ridge −2.50
+    (31%). Infra is correct + deterministic, but the current stationary feature
+    set + simple conditioning carries no alpha at h=5. **Implication:** the next
+    real lever is the *learning objective/features* (cross-sectional rank target,
+    richer conditioning), not more plumbing or per-symbol fine-tune (Faz 4 won't
+    help a no-edge base). Captured for the Faz 6 stratified study.
 - **Faz 4 — Gated per-symbol fine-tune (optional, experimental).** Pretrain pool
   → short per-symbol fine-tune, applied ONLY when a symbol has enough history AND
   fine-tune improves its multi-window OOS; else serve global. Consistent with

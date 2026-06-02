@@ -1,3 +1,21 @@
+## [2026-06-03] Faz 3 KOD | global kosullandirilmis model (pooled LightGBM)
+
+`src/models/global_pooled_model.py`:
+- `GlobalPooledModel`: pooled LightGBM (native API, deterministik seed/
+  deterministic/num_threads=1), sklearn-vari fit/predict -> pooled_oos uyumlu.
+- `build_pooled_features`: stabil `sector_code` ekler; kosullandirma = sayisal
+  liq_log/vol + kategorik symbol_id/sector_code (LightGBM native categorical).
+  `make_global_model_factory` harness fabrikasi.
+- 5 test (sema, stabil kod, deterministik fit, harness kosu, sektor-sinyali
+  ogrenilebilirligi). Tam suite 592 yesil.
+- DURUST BENCHMARK (OOS harness, h=5, 39 uzun-gecmis sembol, 109k satir):
+  pooled LightGBM+conditioning ne Ridge base'i ne base-rate'i geciyor
+  (GlobalL edge -2.92 / %edge>0 23 vs Ridge -2.50 / 31). Altyapi dogru ama
+  mevcut durağan ozellik seti + basit conditioning h=5'te alpha tasimiyor.
+  Sonraki gercek kaldirac: ogrenme amaci/ozellikler (cross-sectional rank
+  target, zengin conditioning), tesisat degil. Faz 4 (fine-tune) edge'siz
+  tabani kurtarmaz. Faz 6 tabakali calismaya not edildi.
+
 ## [2026-06-03] Faz 2 BITTI | per-symbol OOS aggregation harness
 
 Faz 2 son parca kodlandi + test edildi -> Faz 2 ✅ DONE:
