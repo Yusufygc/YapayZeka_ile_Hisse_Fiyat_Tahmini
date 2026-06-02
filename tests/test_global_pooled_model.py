@@ -58,6 +58,17 @@ def test_build_pooled_features_schema_and_cat_indices():
     assert "liq_log" in feats and "vol" in feats and "feat" in feats
 
 
+def test_target_variants_never_become_features():
+    """target / target_cs gibi hedef kolonlar feature listesine SIZMAZ."""
+    panel = _panel()
+    panel = panel.copy()
+    panel["target_cs"] = panel["target"] * 0.5  # cross-sectional hedef varyanti
+    _, feats, _ = build_pooled_features(panel)
+    assert "target" not in feats
+    assert "target_cs" not in feats
+    assert not any(c.startswith("target") for c in feats)
+
+
 def test_sector_code_stable_sorted():
     panel = _panel()
     aug, _, _ = build_pooled_features(panel)

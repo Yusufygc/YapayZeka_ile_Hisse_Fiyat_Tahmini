@@ -27,11 +27,16 @@ from typing import Callable, Sequence
 import numpy as np
 import pandas as pd
 
-# loader/oos ile ayni "ozellik olmayan" kolonlar.
+# loader/oos ile ayni "ozellik olmayan" kolonlar. target* varyantlari (target,
+# target_cs, ...) ASLA feature olmamali -> sizinti.
 _BASE_NON_FEAT = {
-    "symbol", "Date", "target", "target_date", "sector", "symbol_id",
+    "symbol", "Date", "target_date", "sector", "symbol_id",
     "liq_log", "vol", "sector_code",
 }
+
+
+def _is_non_feature(col: str) -> bool:
+    return col in _BASE_NON_FEAT or col == "target" or col.startswith("target_")
 # kosullandirma sirasi sabit: once sayisal, sonra kategorik (cat_indices sonda).
 _NUMERIC_COND = ["liq_log", "vol"]
 _CATEGORICAL_COND = ["symbol_id", "sector_code"]
@@ -63,7 +68,7 @@ def build_pooled_features(
 
     base_feats = [
         c for c in df.columns
-        if c not in _BASE_NON_FEAT and pd.api.types.is_numeric_dtype(df[c])
+        if not _is_non_feature(c) and pd.api.types.is_numeric_dtype(df[c])
     ]
     num_cond = [c for c in _NUMERIC_COND if c in df.columns]
     cat_cond = [c for c in _CATEGORICAL_COND if c in df.columns]

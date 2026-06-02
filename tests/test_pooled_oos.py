@@ -7,6 +7,7 @@ import pandas as pd
 from src.validation.pooled_cv import PooledCVConfig, PooledPurgedWalkForward
 from src.validation.pooled_oos import (
     PerSymbolOOSConfig,
+    daily_cross_sectional_ic,
     evaluate_per_symbol,
 )
 
@@ -125,3 +126,37 @@ def test_deterministic_results():
     a = evaluate_per_symbol(panel, folds, _LinModel).per_symbol
     b = evaluate_per_symbol(panel, folds, _LinModel).per_symbol
     pd.testing.assert_frame_equal(a, b)
+
+
+def test_daily_ic_perfect_and_inverse():
+    """Perfect rank uyumu IC=+1; ters siralama IC=-1."""
+    dates = pd.bdate_range("2021-01-01", periods=4)
+    rows = []
+    for d in dates:
+        for s in range(8):
+            rows.append({"symbol": f"S{s}", "Date": d,
+                         "y_true": float(s), "y_pred": float(s)})
+    perf = daily_cross_sectional_ic(pd.DataFrame(rows), min_names=8)
+    assert abs(perf["ic_mean"] - 1.0) < 1e-9
+    assert perf["pct_positive"] == 1.0 and perf["n_days"] == 4
+
+    inv = pd.DataFrame(rows).copy()
+    inv["y_pred"] = -inv["y_pred"]
+    r = daily_cross_sectional_ic(inv, min_names=8)
+    assert abs(r["ic_mean"] + 1.0) < 1e-9
+
+
+def test_thin_dates_excluded_from_ic():
+    dates = pd.bdate_range("2021-01-01", periods=2)
+    rows = []
+    for s in range(4):  # min_names=8 altinda
+        rows.append({"symbol": f"S{s}", "Date": dates[0],
+                     "y_true": float(s), "y_pred": float(s)})
+    res = daily_cross_sectional_ic(pd.DataFrame(rows), min_names=8)
+    assert res["n_days"] == 0
+
+
+def test_result_exposes_ic_summary():
+    panel = _panel()
+    res = evaluate_per_symbol(panel, _folds(panel), _LinModel)
+    assert set(res.ic) >= {"ic_mean", "ic_std", "icir", "pct_positive", "n_days"}

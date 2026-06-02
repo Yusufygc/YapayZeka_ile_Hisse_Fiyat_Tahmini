@@ -1,3 +1,26 @@
+## [2026-06-03] Faz 3.5 ALPHA | cross-sectional rank target + gunluk IC
+
+KIRILMA: pooled model icin per-symbol dir_acc YANLIS metrik (sinyal mutlak
+degil GORELI). Cross-sectional rank target + dogru metrik (gunluk IC) alpha'yi
+ortaya cikardi.
+
+- `src/data/cross_sectional.py` `add_cross_sectional_target`: her tarih ici
+  ileri getirinin rank'i -> merkezli [-1,1] ((rank-0.5)/n, ortalama 0, base
+  ~%50). Leakage-safe (tek-tarih ici, ayni target_date=d+h -> purge tutarli).
+  `zscore` opsiyonu.
+- `daily_cross_sectional_ic` (pooled_oos, scipy'siz Spearman; `PerSymbolOOSResult.ic`):
+  her tarih semboller-arasi corr(pred,true); ICIR=mean/std.
+- SONUC (39 sembol, 109k satir, h=5): absolute target IC +0.041 / ICIR 0.228 /
+  %IC>0 60; CROSS-SECTIONAL target IC +0.092 / ICIR 0.549 / %IC>0 73. IC 2 kat,
+  ICIR 0.55 = kullanilabilir sinyal. Pooled model BIST hisselerini siralayabiliyor.
+- SIZINTI DUZELTME (regresyon testli): target/target_cs (her target_*) artik
+  build_pooled_features + pooled_oos._auto_feature_cols'ta feature DISI; ilk
+  yanlis kosu target_cs'in feature olarak sizmasiyla IC 0.97 vermisti.
+- 6+4 test. Tam suite 602 yesil. Cikarim: urun per-stock ama alpha goreli ->
+  serving tahmini "akranlarina gore daha iyi/kotu" rank'a cevirmeli; guven IC
+  istikrarindan. Faz 4 hala kaldirac degil; zengin cross-sectional ozellik +
+  Faz 6 tabakali IC calismasi sirada.
+
 ## [2026-06-03] Faz 3 KOD | global kosullandirilmis model (pooled LightGBM)
 
 `src/models/global_pooled_model.py`:

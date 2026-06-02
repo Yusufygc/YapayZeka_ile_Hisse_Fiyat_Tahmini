@@ -154,14 +154,34 @@ confidence concept is introduced.
     one-hot blowup). `make_global_model_factory(cat_indices, cfg)` for the harness.
   - 5 tests (schema, stable codes, deterministic fit, harness run, sector-signal
     learnability). Full suite 592 green.
-  - **Honest benchmark (OOS harness, h=5):** on 39 long-history symbols (109k
-    rows), pooled LightGBM+conditioning does **not** yet beat the pooled Ridge
-    base nor base-rate: GlobalL mean edge −2.92 (%edge>0 23%) vs Ridge −2.50
-    (31%). Infra is correct + deterministic, but the current stationary feature
-    set + simple conditioning carries no alpha at h=5. **Implication:** the next
-    real lever is the *learning objective/features* (cross-sectional rank target,
-    richer conditioning), not more plumbing or per-symbol fine-tune (Faz 4 won't
-    help a no-edge base). Captured for the Faz 6 stratified study.
+  - **Benchmark (OOS harness, h=5, 39 long-history symbols / 109k rows):** with
+    the **absolute** return target, pooled LightGBM does not beat per-symbol
+    base-rate (mean edge −2.92). **But the per-symbol directional metric is the
+    wrong lens for a pooled model** — the signal is *relative*, not absolute.
+- **Faz 3.5 — Cross-sectional rank target (alpha lever). ✅ DONE 2026-06-03.**
+  `src/data/cross_sectional.py` `add_cross_sectional_target`: per-date,
+  within-cross-section rank of the forward return → centered `[-1,1]`
+  (`(rank-0.5)/n`, mean 0; base-rate ~50%). Leakage-safe: ranking is within a
+  single date, all those rows share `target_date=d+h`, so `pooled_cv` purge keeps
+  them on the same side. Optional `zscore` method.
+  - **Correct metric = daily cross-sectional IC** (`daily_cross_sectional_ic` in
+    `pooled_oos`, scipy-free Spearman; exposed on `PerSymbolOOSResult.ic`):
+    per-date `corr(y_pred, y_true)` across symbols; ICIR = mean/std.
+  - **Result (same 39-symbol panel):** absolute target → IC +0.041, ICIR 0.228,
+    %IC>0 60%. **Cross-sectional target → IC +0.092, ICIR 0.549, %IC>0 73%** —
+    IC more than doubles, ICIR 0.55 is a genuinely usable cross-sectional signal.
+    The pooled global model *can* rank BIST names over h=5. This is the alpha
+    direction.
+  - **Leak fix (regression-tested):** `target`/`target_cs` (any `target_*`) are
+    now hard-excluded from features in both `build_pooled_features` and
+    `pooled_oos._auto_feature_cols`; a first wrong run showed IC 0.97 from
+    `target_cs` self-leaking as a feature. Tests:
+    `test_target_variants_never_become_features`, IC tests.
+  - 6 + 4 tests. Full suite 602 green. **Implication:** product is per-stock but
+    alpha is relative → serving must translate predicted rank into "expected to
+    out/under-perform peers"; confidence from IC stability. Faz 4 per-symbol
+    fine-tune still not the lever; richer cross-sectional features + Faz 6
+    stratified IC study are next.
 - **Faz 4 — Gated per-symbol fine-tune (optional, experimental).** Pretrain pool
   → short per-symbol fine-tune, applied ONLY when a symbol has enough history AND
   fine-tune improves its multi-window OOS; else serve global. Consistent with

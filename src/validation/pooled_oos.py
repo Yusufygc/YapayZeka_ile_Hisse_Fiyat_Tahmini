@@ -41,17 +41,22 @@ class PerSymbolOOSConfig:
     include_holdout: bool = False
 
 
-# panel'de ozellik OLMAYAN kolonlar (loader ciktisi + CV alanlari)
+# panel'de ozellik OLMAYAN kolonlar (loader ciktisi + CV alanlari). target*
+# varyantlari (target, target_cs, ...) ASLA feature olmamali -> sizinti.
 _NON_FEAT = {
-    "symbol", "Date", "target", "target_date", "sector", "symbol_id",
-    "liq_log", "vol",
+    "symbol", "Date", "target_date", "sector", "symbol_id",
+    "liq_log", "vol", "sector_code",
 }
+
+
+def _is_non_feature(col: str) -> bool:
+    return col in _NON_FEAT or col == "target" or col.startswith("target_")
 
 
 def _auto_feature_cols(panel: pd.DataFrame) -> list[str]:
     cols = []
     for c in panel.columns:
-        if c in _NON_FEAT:
+        if _is_non_feature(c):
             continue
         if pd.api.types.is_numeric_dtype(panel[c]):
             cols.append(c)
@@ -81,12 +86,54 @@ def _rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
 
 
+def _spearman(a: np.ndarray, b: np.ndarray) -> float:
+    """scipy'siz Spearman: degerleri rank'la, Pearson uygula."""
+    if len(a) < 3:
+        return float("nan")
+    ra = pd.Series(a).rank().to_numpy()
+    rb = pd.Series(b).rank().to_numpy()
+    if ra.std() == 0 or rb.std() == 0:
+        return float("nan")
+    return float(np.corrcoef(ra, rb)[0, 1])
+
+
+def daily_cross_sectional_ic(
+    predictions: pd.DataFrame, min_names: int = 8, date_col: str = "Date",
+) -> dict:
+    """Gunluk cross-sectional IC (semboller-arasi rank korelasyonu) ozeti.
+
+    Pooled/cross-sectional modelin DOGRU degerlendirmesi: her tarih icin
+    semboller-arasi corr(y_pred, y_true). Per-symbol dir_acc goreli siralama
+    becerisini olcemez; bu olcer. ICIR = mean/std (bilgi orani).
+    """
+    ics = []
+    for _, g in predictions.groupby(date_col):
+        if g["symbol"].nunique() < min_names:
+            continue
+        ic = _spearman(g["y_pred"].to_numpy(), g["y_true"].to_numpy())
+        if np.isfinite(ic):
+            ics.append(ic)
+    if not ics:
+        return {"ic_mean": float("nan"), "ic_std": float("nan"),
+                "icir": float("nan"), "pct_positive": float("nan"), "n_days": 0}
+    arr = np.array(ics, dtype=float)
+    mean, std = float(arr.mean()), float(arr.std())
+    return {
+        "ic_mean": mean,
+        "ic_std": std,
+        "icir": (mean / std) if std > 0 else float("nan"),
+        "pct_positive": float((arr > 0).mean()),
+        "n_days": len(arr),
+    }
+
+
 @dataclass
 class PerSymbolOOSResult:
     per_symbol: pd.DataFrame   # bir satir/sembol: dir_acc, rmse, edge, n, fold orani
     per_fold: pd.DataFrame     # bir satir/(sembol,fold): fold-bazli dir_acc/rmse/n
     predictions: pd.DataFrame  # ham OOS tahminleri (symbol, fold, Date, y_true, y_pred)
     n_folds_used: int = field(default=0)
+    ic: dict = field(default_factory=dict)  # gunluk cross-sectional IC ozeti
 
 
 def evaluate_per_symbol(
@@ -174,4 +221,5 @@ def evaluate_per_symbol(
         })
     per_symbol = pd.DataFrame(sym_recs).sort_values("symbol").reset_index(drop=True)
 
-    return PerSymbolOOSResult(per_symbol, per_fold, preds, n_used)
+    ic = daily_cross_sectional_ic(preds)
+    return PerSymbolOOSResult(per_symbol, per_fold, preds, n_used, ic)
