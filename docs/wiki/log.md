@@ -1,3 +1,20 @@
+## [2026-06-02] Faz 1 | target_horizon knob + predictive horizon kiyas
+
+E2 Faz 1 (predictive dilim): geri-uyumlu `DataConfig.target_horizon` (default 1 =
+davranis sabit) eklendi; `build_target_series`/`prepare_tensors` h-aware
+(`y[t]=target(close[t+h])`, `X=features[:-h]`). Test: `tests/test_data_services.py`
+(3 yeni), tam suite 568 yesil.
+
+`tools/e2_faz1_horizon_compare.py` ile EREGL/AKBNK/TUPRS/AEFES/SASA, h={1,3,5,10},
+Ridge+LightGBM, kronolojik 80/20, predictive-only (backtest YOK):
+- Ortalama Dir_Acc h=1 ~%50 -> h=5 ~%52.5 -> h=10 ~%52. Haftalik gunlukten biraz
+  daha ongorulebilir.
+- Uyari: yuksek h pozitif base-rate'i sisirir; naif "hep yukari"ya edge kucuk
+  (~0-3pp, h=5). Step-change degil, bedava alpha yok.
+- Karar: h=5 E2 default horizon (daha iyi S/N); asil kaldirac pooling (Faz 2-3).
+  Horizon-aware backtest/forecast = Faz 1b (pooling baseline'i gecince). h>1
+  backtest/Sharpe yorumlanmamali.
+
 ## [2026-06-02] Faz 0.6 | sektor backfill (kosullandirma prerequ)
 
 `tools/backfill_sectors.py` ile bist_universe.csv Sector kolonu yfinance

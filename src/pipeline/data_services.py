@@ -325,14 +325,19 @@ class DataIngestionService(_OwnerBackedService):
 
 class TensorPreparationService(_OwnerBackedService):
 
+    def _target_horizon(self) -> int:
+        """Egitim hedefinin ileri ufku (E2 Faz 1). h=1 -> mevcut davranis."""
+        return max(1, int(getattr(self.data_cfg, "target_horizon", 1) or 1))
+
     def build_target_series(self, close_values: np.ndarray) -> np.ndarray:
         self._ensure_config_objects()
+        h = self._target_horizon()
         if self.data_cfg.target_mode == "log_return":
-            return np.log(close_values[1:] / close_values[:-1])
+            return np.log(close_values[h:] / close_values[:-h])
         if self.data_cfg.target_mode == "return":
-            return (close_values[1:] / close_values[:-1]) - 1.0
+            return (close_values[h:] / close_values[:-h]) - 1.0
         if self.data_cfg.target_mode == "price":
-            return close_values[1:]
+            return close_values[h:]
         raise ValueError(
             f"Desteklenmeyen target_mode: {self.data_cfg.target_mode}. "
             "Beklenen: price, return, log_return"
@@ -416,21 +421,24 @@ class TensorPreparationService(_OwnerBackedService):
         test_close = test_df["Close"].values.astype(float)
         context_df = context_df.copy() if context_df is not None and not context_df.empty else None
 
-        if len(train_df) < 2 or len(test_df) < 2:
-            raise ValueError("t+1 hedefi için train ve test setlerinde en az 2 satır gerekir.")
+        h = self._target_horizon()
+        if len(train_df) < h + 1 or len(test_df) < h + 1:
+            raise ValueError(
+                f"t+{h} hedefi için train ve test setlerinde en az {h + 1} satır gerekir."
+            )
 
-        # X[t] -> y[t] = hedef(Close[t+1], Close[t])
-        X_train = train_df[features].iloc[:-1].values
-        X_test = test_df[features].iloc[:-1].values
+        # X[t] -> y[t] = hedef(Close[t+h], Close[t]); h=1 mevcut t+1 davranisi.
+        X_train = train_df[features].iloc[:-h].values
+        X_test = test_df[features].iloc[:-h].values
 
         train_target = self.build_target_series(train_close)
         test_target = self.build_target_series(test_close)
-        test_prev_close = test_close[:-1]
+        test_prev_close = test_close[:-h]
 
         y_train = train_target.reshape(-1, 1)
         y_test = test_target.reshape(-1, 1)
         if "Market_Regime_SMA200" in test_df.columns:
-            market_regime_test = test_df["Market_Regime_SMA200"].iloc[:-1].to_numpy(dtype=float)
+            market_regime_test = test_df["Market_Regime_SMA200"].iloc[:-h].to_numpy(dtype=float)
         else:
             market_regime_test = np.zeros(len(y_test), dtype=float)
 
@@ -488,7 +496,7 @@ class TensorPreparationService(_OwnerBackedService):
             "scaler_y": scaler_y,
             "clip_report": getattr(scaler_X, "clip_report_", {}),
             "context_rows": 0 if context_df is None else len(context_df),
-            "original_y_test_aligned": test_close[1:],
+            "original_y_test_aligned": test_close[h:],
             "prev_close_test": test_prev_close,
             "market_regime_test": market_regime_test,
             "train_close_last": float(train_close[-1]),

@@ -102,9 +102,23 @@ confidence concept is introduced.
   macro sector-return field) is left untouched. Industry is fetched but not
   written (no universe column yet) — deferred to a Faz 3 feature. Sector is now a
   usable categorical conditioning input.
-- **Faz 1 — Horizon shift (cheap win, orthogonal).** Daily → weekly (5-day)
-  forward return target. Higher signal/noise; reuses existing pipeline. Measure
-  EREGL + a stratified sample before/after.
+- **Faz 1 — Horizon shift (cheap win, orthogonal). ✅ DONE (predictive slice)
+  2026-06-02.** Added backward-compatible `DataConfig.target_horizon` (default 1
+  = unchanged) wired into `TensorPreparationService.build_target_series` /
+  `prepare_tensors` (`y[t]=target(close[t+h])`, `X=features[:-h]`). Tests in
+  `tests/test_data_services.py`; full suite green (568). Predictive comparison
+  `tools/e2_faz1_horizon_compare.py` (Ridge+LightGBM, chronological 80/20,
+  EREGL/AKBNK/TUPRS/AEFES/SASA, h∈{1,3,5,10}):
+  - Mean Dir_Acc rises h=1 ~50% → h=5 ~52.5% → h=10 ~52% — weekly is modestly
+    more predictable than daily, as predicted.
+  - **Caveat:** higher h inflates the positive base-rate (up-trending test
+    windows); edge over a naive "always up" baseline is small (~0–3pp at h=5,
+    ~0 at h=1). A small, consistent gain — not a step change, no free alpha.
+  - **Decision:** adopt h=5 as the E2 default horizon (better signal/noise);
+    the real lever remains pooling (Faz 2–3). Horizon-aware backtest/forecast
+    (**Faz 1b**) is deferred until pooled models beat baselines — for h>1 the
+    backtest/forecast/signal path is NOT yet horizon-correct, so h>1 backtest/
+    Sharpe must not be interpreted.
 - **Faz 2 — Pooled loader + group-aware CV (leakage guard).** Pooled
   (symbol, date) data loader. Purged + embargo, **group-aware** splits: no
   same-calendar-date leakage across symbols between train/test, no symbol-future

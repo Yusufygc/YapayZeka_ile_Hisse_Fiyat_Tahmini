@@ -28,13 +28,15 @@ def _frame(n: int = 40) -> pd.DataFrame:
     })
 
 
-def _manager(tmp_path, *, val_cfg: ValidationConfig | None = None) -> DataManager:
+def _manager(tmp_path, *, val_cfg: ValidationConfig | None = None,
+             target_horizon: int = 1) -> DataManager:
     return DataManager(
         data_cfg=DataConfig(
             data_file=os.path.join(str(tmp_path), "TEST.csv"),
             use_macro=False,
             time_steps=3,
             prune_correlated_features=False,
+            target_horizon=target_horizon,
         ),
         val_cfg=val_cfg or ValidationConfig(),
         models_dir=os.path.join(str(tmp_path), "models"),
@@ -107,6 +109,51 @@ def test_walk_forward_split_excludes_final_holdout_from_selection(monkeypatch, t
     assert len(manager.final_holdout_df) == 4
     assert not protocol["Final_Holdout_Used_For_Selection"].any()
     assert "final_holdout" in set(protocol["Split"])
+
+
+# --------------------------------------------------------------------------- #
+#  E2 Faz 1: target_horizon (haftalik hedef) semantigi                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_target_horizon_default_is_single_step(tmp_path):
+    """target_horizon=1 (default) -> mevcut t+1 davranisi birebir korunur."""
+    svc = _manager(tmp_path).tensor_preparation_service
+    close = np.array([100.0, 110.0, 121.0, 133.1], dtype=float)
+
+    y = svc.build_target_series(close)
+
+    expected = np.log(close[1:] / close[:-1])  # eski formul
+    np.testing.assert_allclose(y, expected)
+    assert len(y) == len(close) - 1
+
+
+def test_target_horizon_5_uses_5day_forward_return(tmp_path):
+    """target_horizon=5 -> y[i] = log(close[i+5]/close[i]), len = n-5."""
+    svc = _manager(tmp_path, target_horizon=5).tensor_preparation_service
+    close = np.linspace(100.0, 200.0, 30)
+
+    y = svc.build_target_series(close)
+
+    expected = np.log(close[5:] / close[:-5])
+    np.testing.assert_allclose(y, expected)
+    assert len(y) == len(close) - 5
+
+
+def test_prepare_tensors_horizon_aligns_x_and_target(tmp_path):
+    """h=5'te X satir sayisi ve original_y_test_aligned dogru hizalanir."""
+    manager = _manager(tmp_path, target_horizon=5)
+    df = _frame(40)
+
+    tensors = manager.prepare_tensors(df.iloc[:25].copy(), df.iloc[25:].copy())
+
+    # train 25 satir -> X_train = 25-5 = 20
+    assert tensors["X_train"].shape[0] == 20
+    # test 15 satir -> X_test = 15-5 = 10
+    assert tensors["X_test"].shape[0] == 10
+    test_close = df.iloc[25:]["Close"].to_numpy(dtype=float)
+    np.testing.assert_allclose(tensors["original_y_test_aligned"], test_close[5:])
+    np.testing.assert_allclose(tensors["prev_close_test"], test_close[:-5])
 
 
 # --------------------------------------------------------------------------- #

@@ -41,6 +41,12 @@ class DataConfig:
     # Listede her h icin ayri target dizisi `build_multi_horizon_targets()`
     # uretir; ensemble path icin sequence model'ler tek tek egitilir.
     target_horizons: Optional[List[int]] = None
+    # E2 Faz 1 (2026-06-02): tekil egitim hedefinin ileri ufku.
+    # target_horizon=1 -> y[t]=hedef(close[t+1]) (mevcut davranis, default).
+    # target_horizon=h -> y[t]=hedef(close[t+h]); haftalik (5) sinyal/gurultu
+    # deneyi icin. DIKKAT: h>1 backtest/forecast semantigi henuz horizon-aware
+    # DEGIL (Faz 1b); h>1 kosularda backtest/Sharpe yorumlanmamali.
+    target_horizon: int = 1
 
 
 @dataclass
