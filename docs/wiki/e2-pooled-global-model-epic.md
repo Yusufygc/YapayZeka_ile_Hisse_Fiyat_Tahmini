@@ -74,6 +74,17 @@ confidence concept is introduced.
 - **Faz 0 — Data/universe audit (blocking). ✅ DONE 2026-06-02.** See findings
   below. Auditor: `tools/e2_faz0_universe_audit.py` (read-only; writes
   `outputs/e2_faz0_universe_audit.md` + `outputs/e2_faz0_symbol_stats.csv`).
+- **Faz 0.5 — Universe re-pull (freshness/format/universe fix). Tool ready
+  2026-06-02.** `tools/refetch_universe.py` re-fetches every ticker from yfinance
+  (`{SYMBOL}.IS`, `auto_adjust=True` per the split-leakage invariant), rewrites
+  each `data/{TICKER}.csv` from scratch in a single ISO `%Y-%m-%d` format, and
+  upserts `data/bist_universe.csv` per fetched symbol (Listed_Date from min date,
+  Status Active/Inactive by freshness, Sector/Delisted_Date preserved if already
+  set). Resolves Faz 0 findings #freshness, #date-format, and partially
+  #survivorship (no-data symbols flagged as likely delisted/invalid). Smoke-
+  verified on EREGL/AKBNK/TUPRS → ~2910 rows each, fresh to 2026-06-02. Full
+  592-symbol run is the operator's trigger (long, network-heavy, overwrites all
+  CSVs).
 - **Faz 1 — Horizon shift (cheap win, orthogonal).** Daily → weekly (5-day)
   forward return target. Higher signal/noise; reuses existing pipeline. Measure
   EREGL + a stratified sample before/after.

@@ -1,3 +1,14 @@
+## [2026-06-02] Faz 0.5 | E2 universe re-pull araci yazildi
+
+`tools/refetch_universe.py`: Faz 0'in 3 sorununu cozer. Her ticker icin
+yfinance'den (`{SYMBOL}.IS`, `auto_adjust=True` invariant) TAM gecmis cekip
+`data/{TICKER}.csv`'yi TEK TIP ISO (`%Y-%m-%d`) tarihle SIFIRDAN yazar
+(overwrite, append degil) + `data/bist_universe.csv`'yi cekilen her hisse icin
+upsert eder (Listed_Date=min tarih, Status freshness'a gore, Sector/Delisted_Date
+mevcutsa korunur). Smoke: EREGL/AKBNK/TUPRS -> ~2910 satir, 2026-06-02'ye guncel,
+gecici dizine (gercek data + universe bozulmadi). Tam 592 kosusu operator tetigi
+(uzun, ag-yogun, tum CSV'leri overwrite eder). `.gitignore` whitelist'e eklendi.
+
 ## [2026-06-02] Faz 0 | E2 universe/data audit kosuldu
 
 `tools/e2_faz0_universe_audit.py` (read-only) ile 592 hisse CSV denetlendi.
