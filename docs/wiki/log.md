@@ -1,3 +1,22 @@
+## [2026-06-02] Plan | E2 Pooled Global Model epic acildi
+
+EREGL all-models kosusunun analizi sonrasi karar: tek-hisse egitim overfit ediyor +
+kanitlanmis alpha yok (AttentionLSTM v2 WF comp 83.81 -> holdout 56.15, dir 38.98%).
+Cozum yonu kullaniciyla konusuldu ve E2 epic'i acildi.
+
+- **Karar:** egitim kapsami != sunum kapsami. Urun/`GET /analysis/{symbol}` per-symbol
+  kalir (kontrat + confidence policy degismez); egitim ~592 hisseyi havuzlayan tek
+  **kosullu global model**'e gecer (overfit/alpha fix). Cold-start ince/IPO hisseleri
+  ilk gunden cevaplar. Spekulatif hisseler mevcut confidence hard-block (dir_acc<50) ile
+  zaten `low`.
+- **Fine-tune** opsiyonel/deneysel (urun tasariminin "later experimental phase"i ile
+  tutarli). Cross-sectional ranking/portfoy urune uymadigi icin elendi.
+- **Yeni dosya:** `docs/wiki/e2-pooled-global-model-epic.md` (problem, core decision,
+  Faz 0-6 plan, acceptance, open questions). `index.md` link + durum bolumu guncellendi.
+- **Dal:** `feat/e2-pooled-global-model` (E1 dali `refactor/e1-owner-forward-di` push
+  edildi, origin'e tracking kuruldu). Henuz kod yok — yalniz plan.
+- Data CSV'leri (592) kasten commit/push edilmedi (runtime/veri, kullanici talebi).
+
 ## [2026-06-02] Bugfix | run_id model slug MAX_PATH tasmasi (ALL_MODELS etiketi)
 
 EREGL'i tum modellerle (`--role candidate`, 14 model) egitince batch "1 hata" verdi:
