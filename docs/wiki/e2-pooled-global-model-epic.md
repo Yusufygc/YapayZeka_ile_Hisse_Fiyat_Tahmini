@@ -177,11 +177,22 @@ confidence concept is introduced.
     `pooled_oos._auto_feature_cols`; a first wrong run showed IC 0.97 from
     `target_cs` self-leaking as a feature. Tests:
     `test_target_variants_never_become_features`, IC tests.
-  - 6 + 4 tests. Full suite 602 green. **Implication:** product is per-stock but
-    alpha is relative → serving must translate predicted rank into "expected to
-    out/under-perform peers"; confidence from IC stability. Faz 4 per-symbol
-    fine-tune still not the lever; richer cross-sectional features + Faz 6
-    stratified IC study are next.
+  - 6 + 4 tests. Full suite 602 green.
+  - **DECISIVE full-universe run** (`tools/e2_faz35_cs_ic_study.py`,
+    `outputs/e2_faz35_cs_ic_study.md`): **589 symbols, 1.228M rows, 2856 dates,
+    378 OOS days, h=5.** ABSOLUTE target → IC +0.032, ICIR 0.525, %IC>0 70%.
+    **CROSS-SECTIONAL target → IC +0.083, ICIR 1.243, %IC>0 90%.** ICIR 1.24 is
+    a strong cross-sectional signal (quant: ICIR>1.0 is excellent); the thin
+    39-name cross-section had understated it (ICIR 0.55). Wide cross-section
+    (589 names/date) stabilizes IC. Per-symbol dir_acc edge still −2.5 →
+    re-confirms absolute per-symbol direction is the wrong lens; alpha lives in
+    the daily IC.
+  - **Implication:** product is per-stock but alpha is relative → serving must
+    translate predicted rank into "expected to out/under-perform peers", with
+    confidence from IC stability (NOT absolute price/direction). Faz 4 per-symbol
+    fine-tune is not the lever; the validated path is Faz 5 serving around
+    cross-sectional rank + IC-based confidence, then Faz 6 stratified study /
+    richer cross-sectional features.
 - **Faz 4 — Gated per-symbol fine-tune (optional, experimental).** Pretrain pool
   → short per-symbol fine-tune, applied ONLY when a symbol has enough history AND
   fine-tune improves its multi-window OOS; else serve global. Consistent with

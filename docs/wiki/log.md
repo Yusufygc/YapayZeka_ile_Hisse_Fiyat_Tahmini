@@ -1,3 +1,15 @@
+## [2026-06-03] Faz 3.5 DOGRULAMA | full-evren cross-sectional IC
+
+`tools/e2_faz35_cs_ic_study.py` (outputs/e2_faz35_cs_ic_study.md): tum evren
+589 sembol, 1.228M satir, 2856 tarih, 378 OOS gun, h=5.
+- ABSOLUTE target: IC +0.032 / ICIR 0.525 / %IC>0 70.
+- CROSS-SECTIONAL target: IC +0.083 / ICIR 1.243 / %IC>0 90.
+ICIR 1.24 = guclu sinyal (quant'ta >1.0 mukemmel). 39-sembollik ince
+cross-section (ICIR 0.55) az gostermisti; genis evren IC'yi stabilize etti.
+Per-symbol dir_acc edge hala -2.5 -> mutlak yon yanlis mercek, alpha IC'de.
+Dogrulanan yol: Faz 5 serving (rank->akran-goreli + IC guven), sonra Faz 6.
+Not: `python tools/x.py` icin repo-root sys.path eklendi.
+
 ## [2026-06-03] Faz 3.5 ALPHA | cross-sectional rank target + gunluk IC
 
 KIRILMA: pooled model icin per-symbol dir_acc YANLIS metrik (sinyal mutlak

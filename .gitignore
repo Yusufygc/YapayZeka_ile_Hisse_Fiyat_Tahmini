@@ -16,6 +16,7 @@ tools/*
 !tools/refetch_universe.py
 !tools/backfill_sectors.py
 !tools/e2_faz1_horizon_compare.py
+!tools/e2_faz35_cs_ic_study.py
 .claude
 kalinanYer.md
 kalinanYer1.md
