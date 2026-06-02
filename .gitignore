@@ -14,6 +14,7 @@ tools/*
 !tools/audit_corporate_actions.py
 !tools/e2_faz0_universe_audit.py
 !tools/refetch_universe.py
+!tools/backfill_sectors.py
 .claude
 kalinanYer.md
 kalinanYer1.md
