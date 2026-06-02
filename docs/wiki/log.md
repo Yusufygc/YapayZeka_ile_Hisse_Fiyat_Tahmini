@@ -1,3 +1,15 @@
+## [2026-06-02] Faz 2 TASARIM | pooled loader + grup-purged CV
+
+`docs/wiki/e2-faz2-pooled-cv-design.md` yazildi: pooled panel loader + tarih-bazli
+purged coklu-pencere CV detayli tasarimi. Mevcut `walk_forward_splits` satir-indeksli
+ve tek-sembol oldugu icin panele uymuyor -> yeni tarih-bazli splitter gerek.
+Leakage taksonomisi (capraz-sembol same-date / horizon / feature-lookahead) +
+purge+embargo (E=h+buffer) ile her birinin onlenmesi. Modul plani
+(`src/data/pooled_loader.py` PooledPanelLoader, `src/validation/pooled_cv.py`
+PooledPurgedWalkForward), CV algoritmasi, scaling/conditioning politikasi, per-symbol
+OOS metrik aggregation (API kontrati degismez), test plani, acceptance, 5 acik soru.
+index.md link eklendi. Henuz kod yok; tasarim onayi bekliyor.
+
 ## [2026-06-02] Faz 1 | target_horizon knob + predictive horizon kiyas
 
 E2 Faz 1 (predictive dilim): geri-uyumlu `DataConfig.target_horizon` (default 1 =
