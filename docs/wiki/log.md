@@ -1,3 +1,23 @@
+## [2026-06-02] Faz 0 | E2 universe/data audit kosuldu
+
+`tools/e2_faz0_universe_audit.py` (read-only) ile 592 hisse CSV denetlendi.
+Bulgular `e2-pooled-global-model-epic.md` "Faz 0 Findings"e islendi.
+
+- Olcek: 592 hisse, **1,097,481** pooled satir (8y+ 363 hisse). Thin <500: 71.
+- **Freshness BLOCKER:** 569 hisse 2025-10-24'te donmus (tek seferlik snapshot,
+  ~220 gun eski); yalniz 1 hisse guncel. Pooled egitim oncesi universe tek
+  guncel kesime cekilmeli.
+- **3 tarih formati** (`%Y-%m-%d` 577, `%d/%m/%Y` 14, `%d.%m.%Y` 1) — ingestion
+  hepsini tanimali (tek format varsayimi auditor'un ilk kosusunda 578/592'yi
+  sessizce dusurdu).
+- **Survivorship cozulemedi:** universe yalniz 28 sembol kataloglu, 564 CSV
+  disarida; delisting kaynagi Faz 2 CV oncesi gerek.
+- Veri kalitesi: 102 hisse |log_return(adj)|>=0.30 (CA/split), 1 zero/neg fiyat,
+  1 dup-date, 2 buyuk-gap. Sektor eksik: 564 (kosullandirma gap'i).
+- Pre-Faz-2 onkosullar listelendi (re-pull, multi-format ingestion, delisting
+  kaynagi, sektor backfill, CA temizlik).
+- Cikti raporlari `outputs/` altinda (runtime, commit edilmedi).
+
 ## [2026-06-02] Plan | E2 Pooled Global Model epic acildi
 
 EREGL all-models kosusunun analizi sonrasi karar: tek-hisse egitim overfit ediyor +

@@ -71,10 +71,9 @@ confidence concept is introduced.
 
 ## Phase Plan
 
-- **Faz 0 — Data/universe audit (blocking).** Survivorship & look-ahead across
-  the 592-symbol universe (delisted symbols, universe drift over time), IPO
-  cold-start handling, split/adjustment consistency, per-symbol history length
-  distribution. Decide minimum-history policy for pooling vs cold-start.
+- **Faz 0 — Data/universe audit (blocking). ✅ DONE 2026-06-02.** See findings
+  below. Auditor: `tools/e2_faz0_universe_audit.py` (read-only; writes
+  `outputs/e2_faz0_universe_audit.md` + `outputs/e2_faz0_symbol_stats.csv`).
 - **Faz 1 — Horizon shift (cheap win, orthogonal).** Daily → weekly (5-day)
   forward return target. Higher signal/noise; reuses existing pipeline. Measure
   EREGL + a stratified sample before/after.
@@ -102,6 +101,35 @@ confidence concept is introduced.
   `pooled-all` vs `pooled→finetune`, compared on per-symbol multi-window OOS.
   Promote pooled only where it beats single-symbol stably; document where nothing
   works → `low` confidence by policy.
+
+## Faz 0 Findings (2026-06-02)
+
+Audit of all 592 stock CSVs in `data/` via `tools/e2_faz0_universe_audit.py`.
+
+- **Scale confirmed:** 592 symbols, **1,097,481** pooled (symbol, date) rows.
+  History buckets: `<1y` 22, `1-2y` 49, `2-5y` 136, `5-8y` 22, `8y+` **363**.
+  Thin (<500 rows) = **71** symbols (cold-start dependent).
+- **Freshness BLOCKER:** only **1** symbol fresh (≤5 days); **569 frozen at
+  2025-10-24** (a one-time bulk snapshot export, ~220 days stale). The pipeline
+  only refreshes a handful of symbols. Pooled training must first re-pull /
+  align the whole universe to a single current cutoff date.
+- **Three date formats:** `%Y-%m-%d` (577), `%d/%m/%Y` (14), `%d.%m.%Y` (1).
+  A loader assuming one format silently produces an empty frame (this exact bug
+  hit the auditor's first pass: 578/592 dropped). Pooled ingestion must detect
+  all three.
+- **Survivorship unresolved:** `bist_universe.csv` catalogs only **28** symbols;
+  **564** CSVs are not in the universe (no sector, no `Delisted_Date`). Delisting
+  cannot be inferred from `last_date` (all cut at the same snapshot). Open
+  survivorship-bias risk — a delisting source is required before Faz 2 CV.
+- **Data quality:** 102 symbols have a `|log_return(adj)| ≥ 0.30` day (real
+  corporate action or unadjusted split — needs audit/clip policy); 1 symbol has
+  a zero/negative price row; 1 has duplicate dates; 2 have >30-day calendar gaps.
+- **Conditioning gap:** sector label missing for **564** symbols → needs
+  backfill or an `unknown` bucket before the model can condition on sector.
+
+**Pre-Faz-2 prerequisites surfaced:** (1) universe-wide re-pull to one cutoff
+(freshness); (2) multi-format date ingestion; (3) delisting/survivorship source;
+(4) sector backfill; (5) corporate-action + zero/neg price cleaning policy.
 
 ## Acceptance Criteria (draft)
 
