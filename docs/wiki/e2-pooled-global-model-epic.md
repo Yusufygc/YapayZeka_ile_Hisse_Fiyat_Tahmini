@@ -222,11 +222,37 @@ confidence concept is introduced.
   metrics + eligibility/confidence inputs so `GET /analysis/{symbol}` keeps
   working unchanged. Decide registry shape: global model row + per-symbol metric
   rows (vs the current per-symbol `best_models`).
-- **Faz 6 — Stratified validation & promotion policy.** 3-variant test on a
-  stratified sample (blue-chip / mid / speculative / thin): `single-symbol` vs
-  `pooled-all` vs `pooled→finetune`, compared on per-symbol multi-window OOS.
-  Promote pooled only where it beats single-symbol stably; document where nothing
-  works → `low` confidence by policy.
+- **Faz 6 — Stratified segment IC. ✅ DONE 2026-06-03.**
+  `src/validation/segment_ic.py` (`symbol_segments`, `segment_cross_sectional_ic`,
+  `attach_segments`) + `tools/e2_faz6_segment_ic.py`. Splits best-config OOS
+  predictions into liquidity / volatility quintiles + GICS sector and computes
+  per-segment daily cross-sectional IC. 5 tests. Reproduced overall ICIR 1.550
+  exactly (determinism holds across this run too).
+  - **Where the signal lives (full universe, ~117 names/bucket):**
+    - **Liquidity — signal strongest in the LEAST liquid:** Q1 IC +0.149 / ICIR
+      **1.35** / %IC>0 91 → monotone down to Q5 (most liquid) IC +0.051 / ICIR
+      0.39 / 64. Classic mispricing edge in less-efficient names.
+    - **Volatility — stronger in HIGH vol:** Q5 ICIR 1.23 / 89 vs Q1 ICIR 0.64 / 75.
+    - **Sector:** Industrials ICIR 1.20 (114) strongest; Consumer Cyclical 0.83,
+      Financials 0.78; weak: Unknown 0.10, Healthcare 0.30, Real Estate 0.38,
+      Comm Services 0.35; Energy n/a (5 names < min).
+  - **Product tension (key for confidence policy):** the signal is strongest
+    exactly where tradability is weakest (least-liquid Q1). So serving confidence
+    must be `segment_IC × tradability gates`, not IC alone — a thin/illiquid name
+    can have strong rank signal yet stay `low` confidence because the existing
+    hard liquidity/freshness gates block execution. This is the documented basis
+    for the Faz 5 confidence formula.
+  - *Caveat:* segment buckets here use full-history per-symbol medians
+    (descriptive analysis only). Serving must assign buckets from trailing/causal
+    liquidity & vol at score time.
+- **Faz 5 — Registry + serving wiring.** Persist global model + per-symbol OOS
+  metrics + eligibility/confidence inputs so `GET /analysis/{symbol}` keeps
+  working unchanged. **Decisions locked (2026-06-03):** nightly universe batch
+  scoring (score+rank the whole universe → per-symbol rows; not per-query);
+  new tables `global_model_runs` (1/run: artifact, data-snapshot hash, IC summary)
+  + `peer_scores` (run×symbol: peer_score −1..1, peer_percentile, confidence,
+  as_of_date), leaving `best_models` untouched; additive API `peer` block +
+  feed the existing `ConfidenceBlock` from `segment_IC × tradability`.
 
 ## Faz 0 Findings (2026-06-02)
 

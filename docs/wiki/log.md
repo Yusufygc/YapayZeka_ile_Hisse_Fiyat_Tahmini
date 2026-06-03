@@ -1,3 +1,24 @@
+## [2026-06-03] Faz 6 BITTI | stratified segment IC + serving kararlari
+
+`src/validation/segment_ic.py` (symbol_segments / segment_cross_sectional_ic /
+attach_segments) + `tools/e2_faz6_segment_ic.py`. Best config OOS tahminleri ->
+likidite/volatilite kovasi + sektor segment-ici gunluk cross-sectional IC. 5 test.
+Overall ICIR 1.550 birebir reproduce (determinizm bu kosuda da saglam).
+
+SINYAL NEREDE (full evren, ~117 isim/kova):
+- Likidite: EN AZ likitte EN GUCLU. Q1 ICIR 1.35/%91 -> Q5 (en likit) 0.39/%64.
+- Volatilite: yuksek vol guclu. Q5 1.23 vs Q1 0.64.
+- Sektor: Industrials 1.20 guclu; Unknown 0.10 / Healthcare 0.30 / Real Estate
+  0.38 zayif.
+URUN GERGINLIGI: sinyal en guclu oldugu yerde (az likit) islem yapilabilirlik
+en zayif -> serving confidence = segment_IC x tradability kapilari (IC tek basina
+degil). Ince/illikit hisse guclu rank sinyali tasiyabilir ama likidite kapisi
+yuzunden low confidence kalir. Faz 5 confidence formulunun temeli.
+
+FAZ 5 KARARLARI (kilitli): nightly universe batch scoring; yeni tablolar
+global_model_runs + peer_scores (best_models'a dokunma); additive API `peer`
+blok + mevcut ConfidenceBlock'u segment_IC x tradability'den besle.
+
 ## [2026-06-03] Faz 3.6 | cross-sectional (peer-goreli) ozellikler
 
 `add_cross_sectional_features` (src/data/cross_sectional.py): her mevcut causal
