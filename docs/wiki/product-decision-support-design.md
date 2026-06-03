@@ -2,7 +2,7 @@
 title: Product Decision Support Design
 type: feature-plan
 status: active
-last_updated: 2026-05-18
+last_updated: 2026-06-04
 owner: llm
 source_count: 10
 ---
@@ -107,6 +107,31 @@ artefacts; they do not trigger training.
 - Naive-leader rejection.
 - Signal-diagnosis-based confidence capping.
 
+## E2 Peer / Trend Tendency Output (additive, 2026-06-04)
+
+The E2 pooled global model adds a **cross-sectional peer view** to the same
+product boundary — still decision-support, never a buy/sell bot. Surfaced as the
+additive `peer` block on `GET /analysis/{symbol}`:
+
+- **Peer position**: peer_score / percentile / label (outperform/inline/
+  underperform) — where the symbol ranks *relative to the BIST universe today*.
+- **Trend tendency (Faz 7b)**: `yukarı / yatay / aşağı / belirsiz` + calibrated
+  `prob_up` + `expected_return`. This satisfies the original product goal of an
+  up/sideways/down lean — but framed honestly per the rules above:
+  - It is a **probabilistic tilt, not a guarantee** ("Definitely rising" stays
+    forbidden). Faz 7 evidence: the tilt is modest but real and monotone (top
+    quintile ~54% up vs bottom ~43%, base ~50%).
+  - It is **relative/market-neutral**, not an absolute price promise.
+  - Reliability is governed separately by the segment-ICIR `confidence_label`;
+    `high` confidence = tradeable *and* most accurate (Faz 7), `low` includes the
+    untradeable strongest-signal tail (flagged honestly).
+- **No personalisation**: no portfolio, suitability, or order generation — same
+  regulatory boundary as the rest of the product.
+
+Served via the nightly batch (no per-query training); see
+[Analysis API Contract](analysis-api-contract.md) and
+[E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md).
+
 ## Faz 3 (Research Phase)
 
 - Regime-based model performance tracking.
@@ -125,3 +150,4 @@ artefacts; they do not trigger training.
 - [Persistence and API](persistence-and-api.md)
 - [Model Catalog](model-catalog.md)
 - [Backtest Signal Improvement Plan](backtest-signal-improvement-plan.md)
+- [E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md)

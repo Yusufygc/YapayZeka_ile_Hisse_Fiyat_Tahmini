@@ -324,9 +324,46 @@ with `isoformat(timespec="seconds")`. Database writes that pre-date Sprint 9
 continue to use local wall-clock strings; gradual migration is in scope for
 Sprint 10.
 
+## Peer Serving Store (E2 Faz 5–8)
+
+The E2 pooled global model serves through an **isolated** SQLite DB
+`data/serving_pool.db` (`src/serving/peer_store.py`, class `PeerStore`) that
+**never touches `best_models`**. A nightly batch writes it; the API reads it.
+
+Two tables:
+
+- `global_model_runs` — one row per training/scoring run: `run_id` (PK), `created_at`,
+  `as_of_date`, `model_name`, `data_snapshot_hash`, `n_symbols`, `n_rows`,
+  `horizon`, `ic_mean`, `icir`, `pct_ic_positive`, `config_json`.
+- `peer_scores` — one row per (run, symbol), `UNIQUE(run_id, symbol)` (upsert):
+  `peer_score` (−1..1), `peer_percentile` (0..100), `peer_label`
+  (outperform/inline/underperform/unknown), `raw_pred`, `universe_size`,
+  `segment_liq/vol/sector`, `segment_icir` (composite, tradability-aware),
+  `confidence_label` (low/medium/high), `confidence_reasons/warnings` (JSON), and
+  **trend tendency (Faz 7b)**: `trend_label` (yukarı/yatay/aşağı/belirsiz),
+  `trend_prob_up`, `trend_expected_return`.
+
+`PeerStore._migrate` runs idempotent `ALTER TABLE ADD COLUMN` on open, so
+pre-existing DBs (run_id ≤ 2, no trend columns) upgrade in place; old rows return
+NULL trend → API surfaces `None` (graceful, never breaks).
+
+**API surface:** `src/api/services/peer_service.py` (`PeerEnrichmentService`)
+reads the latest run for a symbol and attaches an additive `peer` block to
+`AnalysisResponse` (`PeerBlock` in `src/api/schemas/analysis.py`). Missing
+DB/symbol → silent no-op; the existing absolute forecast/confidence blocks are
+never modified. See [Analysis API Contract](analysis-api-contract.md) and
+[E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md).
+
+**Nightly automation (Faz 8):** `tools/e2_nightly_pipeline.py` orchestrates
+trading-day gate → universe data refresh (`DataUpdater.check_and_update` loop) →
+scoring batch (`tools/e2_faz5_nightly_scoring.py`). `scripts/nightly_serving.ps1`
+is the Windows Task Scheduler target (daily 21:00, logs to `logs/nightly_*.log`);
+`scripts/register_nightly_task.ps1` registers it.
+
 ## Related Pages
 
 - [Architecture](architecture.md)
 - [Model Catalog](model-catalog.md)
 - [Validation and Backtesting](validation-and-backtesting.md)
+- [E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md)
 

@@ -129,6 +129,35 @@ Operational support modules added in this phase:
 | `src/forecasting/artifacts.py` | Forecast model/scaler/metadata sidecar persistence |
 | `src/forecasting/bist_calendar.py` | Deterministic BIST calendar generation and merge with manual overrides |
 
+## E2 Pooled Serving Subsystem (Faz 5–8)
+
+The E2 pooled global model adds a serving path that is **additive** to the
+existing per-symbol product (it does not change training facades or
+`best_models`). Modules under `src/serving/` plus `src/data/` and
+`src/validation/` helpers:
+
+| Module | Responsibility |
+|---|---|
+| `src/data/pooled_loader.py` | Long panel loader across ~589 stock CSVs; causal conditioning (sector, symbol_id, liq_log, vol) |
+| `src/data/cross_sectional.py` | Within-date rank target + cross-sectional rank/zscore features (leakage-safe) |
+| `src/models/global_pooled_model.py` | Pooled LightGBM (`GlobalPooledModel`) + feature builder |
+| `src/validation/pooled_cv.py` | Group-purged date-based walk-forward CV |
+| `src/validation/pooled_oos.py` | Per-symbol OOS aggregation + daily cross-sectional IC/ICIR |
+| `src/validation/segment_ic.py` | Stratified per-segment (liq/vol/sector) IC |
+| `src/serving/peer_scoring.py` | Rank one date's universe → peer_score/percentile/label |
+| `src/serving/confidence.py` | Segment-ICIR confidence with hard tradability/freshness gates |
+| `src/serving/trend_tendency.py` | Peer percentile → absolute trend (yukarı/yatay/aşağı) + calibrated P(up)/expected return (Faz 7b) |
+| `src/serving/nightly_scoring.py` | `assemble_peer_table`: score + segment + confidence + trend |
+| `src/serving/peer_store.py` | Isolated SQLite `PeerStore` (`data/serving_pool.db`) with idempotent migration |
+| `src/api/services/peer_service.py` | Attaches additive `peer` block to `GET /analysis/{symbol}` |
+| `tools/e2_nightly_pipeline.py` | Nightly orchestrator: XIST trading-day gate → data refresh → scoring |
+| `scripts/nightly_serving.ps1` / `register_nightly_task.ps1` | Windows Task Scheduler wrapper + registration (daily 21:00) |
+
+Validation hierarchy is cross-sectional (within-date, across-symbol), not
+per-symbol absolute — IC/ICIR is the right metric. See
+[E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md) and
+[Persistence and API](persistence-and-api.md).
+
 ## Modular Extraction Phase
 
 The 2026-05-16 modular refactor keeps the public facades stable while moving
@@ -177,7 +206,10 @@ tests because they own persistence, leakage, or user-facing output contracts.
 | Backtesting | Custom engine in `src/backtesting/` |
 | Persistence | JSON registry, CSV logs, SQLite |
 | API | FastAPI, Pydantic |
-| Market calendars | Deterministic local BIST calendar with optional `pandas-market-calendars` dependency |
+| Market calendars | Deterministic local BIST calendar; `pandas-market-calendars` (XIST) drives the E2 nightly trading-day gate (installed in `dl_env`) |
+| Pooled model (E2) | LightGBM native API, deterministic; cross-sectional rank target |
+| Serving DB (E2) | Isolated SQLite `data/serving_pool.db` (`PeerStore`) |
+| Scheduling (E2) | Windows Task Scheduler (`ts_forecasting_nightly`, daily 21:00) |
 | Testing | pytest/unittest style tests under `tests/` |
 | Formatting/static config | black, isort, mypy configured in `pyproject.toml` |
 

@@ -2,7 +2,7 @@
 title: Wiki Index
 type: index
 status: active
-last_updated: 2026-06-01
+last_updated: 2026-06-04
 owner: llm
 ---
 
@@ -65,11 +65,21 @@ linked pages below.
   writes are now fail-loud against typos; behavior unchanged, locked by golden
   tests in `tests/test_owner_forward_contract.py`.
   See [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md).
-- **E2 epic opened (2026-06-02, branch `feat/e2-pooled-global-model`):** training-side
-  redesign to pooled/global conditioned model over ~592 stock CSVs (overfit/alpha fix),
-  serving stays per-symbol with the existing `GET /analysis/{symbol}` contract + confidence
-  policy unchanged. Not started — plan only. See
-  [E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md).
+- **E2 pooled global model (branch `feat/e2-pooled-global-model`, Faz 2–8 ✅,
+  2026-06-04):** one conditioned LightGBM trained across ~589 BIST stocks with a
+  **cross-sectional rank target** (within-date rank of forward return). Group-
+  purged date walk-forward gives daily cross-sectional **IC ≈ 0.099 / ICIR ≈
+  1.55**. Serving stays per-symbol via an additive `peer` block on
+  `GET /analysis/{symbol}` (NOT per-query training): a nightly batch scores the
+  universe → `PeerStore` (`data/serving_pool.db`, isolated from `best_models`).
+  Each symbol gets peer_score/percentile/label, segment (liq/vol/sector) +
+  composite-ICIR confidence (tradability-gated), and a **trend tendency**
+  (`yukarı/yatay/aşağı/belirsiz` + calibrated P(up) + expected return; Faz 7
+  finding: peer rank carries a modest-but-real monotone absolute-direction tilt,
+  Q5 54% up vs Q1 43%). **Faz 8** adds a Windows nightly job (Task Scheduler
+  21:00, BIST trading-day gated) that refreshes universe data then re-scores. The
+  honest framing (relative, probabilistic, decision-support — not a buy/sell bot)
+  is preserved. See [E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md).
 - The default production candidate set is defined in `src/pipeline/model_scope.py`
   and the model registry; in the current source tree `TFT` is not registered and
   `src/models/tft_v2/` is absent.

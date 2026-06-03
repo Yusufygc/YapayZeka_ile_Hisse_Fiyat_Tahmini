@@ -1,3 +1,25 @@
+## [2026-06-04] Wiki tam tazeleme + graphify kurali kaldirildi
+
+Graphify otomasyonu kaldirildi (token maliyeti). Onun bilgi-tabani isini artik
+yalniz `docs/wiki/` ustleniyor. Degisiklikler:
+- Global `~/.claude/CLAUDE.md`: `# graphify` blogu silindi (yalniz @RTK.md kaldi).
+- `RULES.md`: "Otomatik Wiki ve Graphify Guncelleme Kurali" -> "Otomatik Wiki
+  Guncelleme Kurali" (graphify cagrisi cikarildi, wiki-only). Not: RULES.md
+  gitignore'da (izlenmiyor), bu degisiklik yerel.
+- E2 Faz 5-8'i yansitacak sekilde TUM ilgili wiki sayfalari tazelendi:
+  `index.md` (E2 durumu "plan only" -> Faz 2-8 done), `architecture.md`
+  (E2 serving subsystem + nightly job + tech-stack), `persistence-and-api.md`
+  (PeerStore + peer_scores trend kolonlari + nightly), `analysis-api-contract.md`
+  (peer block + trend alanlari), `data-pipeline.md` (evren-geneli nightly
+  refresh), `validation-and-backtesting.md` (pooled group-purged CV + cross-
+  sectional IC/ICIR), `model-catalog.md` (pooled global model ailesi),
+  `confidence-and-risk-policy.md` (peer/segment confidence + gates),
+  `product-decision-support-design.md` (peer/trend ciktisi, durust cerceve),
+  `source-map.md` (src/serving + tools + scripts + serving_pool.db), 
+  `testing-and-quality.md` (E2 test dosyalari + 670 passed).
+- Commit + push: bu oturumun kodu (Faz 7b+8) zaten otomatik commit hook ile
+  324268a'da; origin ile 0/0 (push'lu). Branch merge YOK (kullanici talebi).
+
 ## [2026-06-04] Faz 8 | Gecelik serving otomasyonu (veri taze kalsin)
 
 Serving DB'nin (data/serving_pool.db) bayatlamasini onlemek icin Windows gecelik

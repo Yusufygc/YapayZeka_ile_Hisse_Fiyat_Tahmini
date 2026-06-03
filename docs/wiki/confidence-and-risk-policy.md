@@ -177,6 +177,25 @@ Failed refresh jobs surface their failure reason through `refresh_reason`, but
 confidence still uses the freshness value from the forecast that is actually
 returned.
 
+## Peer / Segment Confidence (E2 Faz 5–7)
+
+The pooled-model `peer` block carries its **own** confidence
+(`src/serving/confidence.py`, `peer_confidence`), independent of the absolute
+forecast confidence above:
+
+- Signal strength = **composite segment ICIR** (`composite_icir`, weighted across
+  liquidity/volatility/sector buckets). ICIR ≥ 1.0 → `high`, ≥ 0.5 → `medium`,
+  else `low`.
+- **Hard gates always force `low`** regardless of ICIR: not tradeable
+  (median turnover below the liquidity floor), stale data, thin universe, or
+  `unknown` peer label. This encodes the Faz 6 tension: the strongest
+  cross-sectional signal lives in the least-liquid (hardest-to-trade) names.
+- Faz 7 validated that within the tradeable universe `high` is genuinely more
+  directionally accurate than `medium`; `low` also contains the untradeable
+  strong-signal tail (correctly flagged, not actionable).
+- The peer **trend tendency** (yukarı/yatay/aşağı) is a calibrated probabilistic
+  tilt; this confidence label governs how much to trust it.
+
 ## Related Pages
 
 - [Analysis API Contract](analysis-api-contract.md)
@@ -184,3 +203,4 @@ returned.
 - [Backtest Signal Improvement Plan](backtest-signal-improvement-plan.md)
 - [Validation and Backtesting](validation-and-backtesting.md)
 - [Model Catalog](model-catalog.md)
+- [E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md)

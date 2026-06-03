@@ -293,8 +293,22 @@ model family:
 - LIME is optional and used for local explanation helpers when the `lime`
   package is importable; missing LIME must not break XAI report generation.
 
+## Pooled Global Model (E2)
+
+Separate from the per-symbol candidate/benchmark catalog above, the **E2 pooled
+global model** (`src/models/global_pooled_model.py`, `GlobalPooledModel`) is one
+LightGBM trained across ~589 BIST stocks at once with a **cross-sectional rank
+target** (within-date rank of forward return), conditioned on sector, symbol_id,
+trailing liquidity (`liq_log`) and volatility (`vol`). It is **not** a per-symbol
+production candidate and does not enter `best_models`; it powers the additive
+cross-sectional `peer`/trend serving path only (see
+[E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md)). Evaluation metric
+is the daily cross-sectional IC/ICIR (≈ 0.099 / 1.55), not per-symbol absolute
+directional accuracy.
+
 ## Related Pages
 
 - [Validation and Backtesting](validation-and-backtesting.md)
 - [Persistence and API](persistence-and-api.md)
 - [Testing and Quality](testing-and-quality.md)
+- [E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md)
