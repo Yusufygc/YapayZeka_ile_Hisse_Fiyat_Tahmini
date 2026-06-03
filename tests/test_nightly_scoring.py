@@ -4,7 +4,11 @@
 import numpy as np
 import pandas as pd
 
-from src.serving.nightly_scoring import assemble_peer_table, segment_icir_from_table
+from src.serving.nightly_scoring import (
+    assemble_peer_table,
+    liqlog_floor_from_turnover,
+    segment_icir_from_table,
+)
 
 
 class _StubModel:
@@ -66,6 +70,23 @@ def test_segment_icir_from_table():
     m = segment_icir_from_table(tbl)
     assert m["Q1"] == 1.35
     assert m["Q5"] != m["Q5"]  # NaN korunur
+
+
+def test_liqlog_floor_from_turnover():
+    # liq_log = log1p(ciro) -> taban donusumu tersinir
+    assert abs(liqlog_floor_from_turnover(3_000_000) - np.log1p(3_000_000)) < 1e-9
+    assert liqlog_floor_from_turnover(0) == 0.0
+    assert liqlog_floor_from_turnover(-5) == 0.0  # negatif -> kapi etkisiz
+
+
+def test_turnover_floor_gates_illiquid_in_assemble():
+    """Medyan cirosu taban altindaki (az likit) guclu-sinyal hisse -> low."""
+    floor = liqlog_floor_from_turnover(3_000_000)  # liq_log ~14.91
+    # S0..S9 Q1 (guclu IC) ama ciro dusuk; tradable_for taban altinda -> low
+    out = assemble_peer_table(
+        _StubModel(), _latest_panel(), ["f0"], _seg_table(), _ICIR,
+        tradable_for=lambda s: 10.0 >= floor).set_index("symbol")  # 10 < 14.91 -> hicbiri tradable degil
+    assert (out["confidence_label"] == "low").all()
 
 
 def test_empty_panel_safe():

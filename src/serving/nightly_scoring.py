@@ -81,6 +81,15 @@ def assemble_peer_table(
     return merged
 
 
+def liqlog_floor_from_turnover(min_turnover_tl: float) -> float:
+    """TL/gun ciro tabanini loader liq_log birimine cevir (liq_log=log1p(ciro)).
+
+    Tradability kapisi icin: sembolun medyan liq_log'u bu esigin altinda ise
+    'islem yapilamaz' -> confidence low (Faz 6 gerginligi: en az likit = en guclu
+    sinyal ama islem zor). 0/negatif -> 0 (kapi etkisiz)."""
+    return float(np.log1p(max(0.0, float(min_turnover_tl))))
+
+
 def segment_icir_from_table(seg_ic_table: pd.DataFrame) -> dict[str, float]:
     """Faz 6 segment_cross_sectional_ic ciktisindan {segment: icir} sozlugu."""
     out = {}

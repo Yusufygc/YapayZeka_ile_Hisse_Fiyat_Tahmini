@@ -37,7 +37,11 @@ from src.models.global_pooled_model import (
     build_pooled_features,
     make_global_model_factory,
 )
-from src.serving.nightly_scoring import assemble_peer_table, segment_icir_from_table
+from src.serving.nightly_scoring import (
+    assemble_peer_table,
+    liqlog_floor_from_turnover,
+    segment_icir_from_table,
+)
 from src.serving.peer_store import GlobalRunMeta, PeerStore
 from src.validation.pooled_cv import PooledCVConfig, PooledPurgedWalkForward
 from src.validation.pooled_oos import PerSymbolOOSConfig, evaluate_per_symbol
@@ -62,7 +66,8 @@ def main() -> None:
     ap.add_argument("--min-names", type=int, default=15)
     ap.add_argument("--boost", type=int, default=400)
     ap.add_argument("--stale-days", type=int, default=10)
-    ap.add_argument("--liq-floor", type=float, default=0.0, help="median liq_log alt esigi (tradable)")
+    ap.add_argument("--liq-floor-tl", type=float, default=3_000_000.0,
+                    help="tradable alt esigi: medyan gunluk TL ciro (default 3M=P20, Q1'i kapatir)")
     ap.add_argument("--limit", type=int, default=0)
     args = ap.parse_args()
 
@@ -108,8 +113,9 @@ def main() -> None:
 
     # --- en guncel evreni skorla ---
     latest_rows = aug[aug["Date"] == aug["Date"].max()]
+    liq_floor = liqlog_floor_from_turnover(args.liq_floor_tl)
     def tradable_for(s: str) -> bool:
-        return float(sym_liq.get(s, -1e9)) >= args.liq_floor
+        return float(sym_liq.get(s, -1e9)) >= liq_floor
     def stale_for(s: str) -> bool:
         last = sym_last.get(s)
         return last is None or (latest_global - last).days > args.stale_days
@@ -131,7 +137,8 @@ def main() -> None:
         n_rows=int(len(aug)), horizon=args.horizon,
         ic_mean=res.ic["ic_mean"], icir=res.ic["icir"],
         pct_ic_positive=res.ic["pct_positive"],
-        config={"boost": args.boost, "icir_map": icir_map}))
+        config={"boost": args.boost, "icir_map": icir_map,
+                "liq_floor_tl": args.liq_floor_tl, "stale_days": args.stale_days}))
     n = store.insert_peer_scores(rid, table)
     dist = table["confidence_label"].value_counts().to_dict()
     _log(f"PeerStore run_id={rid}: {n} peer_scores yazildi -> {args.db}")
