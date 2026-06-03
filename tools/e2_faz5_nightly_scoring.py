@@ -102,9 +102,16 @@ def main() -> None:
         aug, folds, make_global_model_factory(ci, GlobalPooledConfig(num_boost_round=args.boost)),
         PerSymbolOOSConfig(feature_cols=feats, target_col="target_cs"))
     preds_seg = attach_segments(res.predictions, seg_table)
-    liq_ic = segment_cross_sectional_ic(preds_seg, group_col="liq_bucket", min_names=10)
-    icir_map = segment_icir_from_table(liq_ic)
-    _log(f"overall ICIR {res.ic['icir']:+.3f}; liq-bucket ICIR {icir_map}")
+    icir_maps = {
+        "liq": segment_icir_from_table(
+            segment_cross_sectional_ic(preds_seg, group_col="liq_bucket", min_names=10)),
+        "vol": segment_icir_from_table(
+            segment_cross_sectional_ic(preds_seg, group_col="vol_bucket", min_names=10)),
+        "sector": segment_icir_from_table(
+            segment_cross_sectional_ic(preds_seg, group_col="sector", min_names=10)),
+    }
+    _log(f"overall ICIR {res.ic['icir']:+.3f}; liq {icir_maps['liq']}")
+    _log(f"vol {icir_maps['vol']}")
 
     # --- final model: TUM gecmise egit ---
     _log("final GlobalPooledModel tum panele egitiliyor ...")
@@ -121,8 +128,8 @@ def main() -> None:
         return last is None or (latest_global - last).days > args.stale_days
 
     table = assemble_peer_table(
-        model, latest_rows, feats, seg_table, icir_map,
-        tradable_for=tradable_for, stale_for=stale_for, icir_segment_col="liq_bucket")
+        model, latest_rows, feats, seg_table, icir_maps=icir_maps,
+        tradable_for=tradable_for, stale_for=stale_for)
     _log(f"scored {len(table)} symbols at {table['as_of_date'].iloc[0] if len(table) else '-'}")
 
     # --- persist ---
@@ -137,7 +144,7 @@ def main() -> None:
         n_rows=int(len(aug)), horizon=args.horizon,
         ic_mean=res.ic["ic_mean"], icir=res.ic["icir"],
         pct_ic_positive=res.ic["pct_positive"],
-        config={"boost": args.boost, "icir_map": icir_map,
+        config={"boost": args.boost, "icir_maps": icir_maps,
                 "liq_floor_tl": args.liq_floor_tl, "stale_days": args.stale_days}))
     n = store.insert_peer_scores(rid, table)
     dist = table["confidence_label"].value_counts().to_dict()

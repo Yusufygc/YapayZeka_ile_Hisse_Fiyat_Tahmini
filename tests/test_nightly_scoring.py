@@ -6,6 +6,7 @@ import pandas as pd
 
 from src.serving.nightly_scoring import (
     assemble_peer_table,
+    composite_icir,
     liqlog_floor_from_turnover,
     segment_icir_from_table,
 )
@@ -87,6 +88,46 @@ def test_turnover_floor_gates_illiquid_in_assemble():
         _StubModel(), _latest_panel(), ["f0"], _seg_table(), _ICIR,
         tradable_for=lambda s: 10.0 >= floor).set_index("symbol")  # 10 < 14.91 -> hicbiri tradable degil
     assert (out["confidence_label"] == "low").all()
+
+
+_MAPS = {
+    "liq": {"Q1": 1.35, "Q5": 0.39},
+    "vol": {"Q5": 1.23, "Q1": 0.64},
+    "sector": {"Industrials": 1.20, "Technology": 0.30},
+}
+
+
+def test_composite_icir_weighted_mean():
+    # liq=Q5(0.39) vol=Q5(1.23) sector=Industrials(1.20), agirlik 0.5/0.3/0.2
+    v = composite_icir("Q5", "Q5", "Industrials", _MAPS)
+    expected = 0.5 * 0.39 + 0.3 * 1.23 + 0.2 * 1.20
+    assert abs(v - expected) < 1e-9
+
+
+def test_composite_icir_skips_missing_axis_renormalizes():
+    # vol bucket map'te yok -> atlanir, liq+sector agirligi yeniden normalize
+    v = composite_icir("Q1", "ZZ", "Industrials", _MAPS)
+    expected = (0.5 * 1.35 + 0.2 * 1.20) / (0.5 + 0.2)
+    assert abs(v - expected) < 1e-9
+
+
+def test_composite_icir_all_missing_nan():
+    import numpy as np
+    assert np.isnan(composite_icir(None, None, None, _MAPS))
+
+
+def test_blended_path_lifts_liquid_highvol_above_pure_liq():
+    """Q5 (likit, liq-IC 0.39) ama yuksek-vol+Industrials -> harman > 0.39,
+    saf-liq pathindeki low'dan medium/high'a cikabilir."""
+    seg = pd.DataFrame({
+        "symbol": [f"S{i}" for i in range(20)],
+        "liq_bucket": ["Q5"] * 20, "vol_bucket": ["Q5"] * 20,
+        "sector": ["Industrials"] * 20})
+    out = assemble_peer_table(_StubModel(), _latest_panel(), ["f0"], seg,
+                              icir_maps=_MAPS).set_index("symbol")
+    # harman = 0.5*0.39+0.3*1.23+0.2*1.20 = 0.804 -> medium (>=0.5)
+    assert abs(out["segment_icir"].iloc[0] - 0.804) < 1e-6
+    assert (out["confidence_label"] == "medium").all()
 
 
 def test_empty_panel_safe():
