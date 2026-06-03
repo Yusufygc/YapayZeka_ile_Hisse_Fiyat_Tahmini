@@ -1,3 +1,16 @@
+## [2026-06-03] Horizon sweep | h=21 full-evrende h=5'i GECMIYOR (negatif)
+
+daily_cross_sectional_ic'e sample_gap_days (ortusmeyen ornekleme; h-gun hedef
+pencereleri ortustugu icin ardisik gun IC'si ICIR'i sisirir).
+Subset sweep (80 sembol) uzun horizonu cazip gosterdi (h=21 ICIR 1.18 vs h=5 0.93)
+AMA full-evren (589) bunu DOGRULAMADI:
+- h=21 ortusen IC +0.093 ICIR 1.605; ortusmeyen (gap=21) IC +0.095 ICIR 1.544 (n=26).
+- h=5 full: IC +0.099 ICIR 1.550.
+Ortusmeyen h=21 (1.54) ≈ h=5 (1.55); h=5 IC ortalamasi hafif daha yuksek. Subset
+ince cross-section yaniltmis. Bonus: autocorr sismesi ihmal edilebilir (1.605->
+1.544) -> h=5 ICIR 1.55 durust/saglam. KARAR: h=5'te kal, horizon kaldiraci tukendi
+-> zengin cross-sectional ozellik sirada. 1 yeni test (sample_gap_days).
+
 ## [2026-06-03] Faz 5a+5b | tradability tabani + harman confidence
 
 (a) liqlog_floor_from_turnover + CLI --liq-floor-tl (3M TL/gun=P20): medyan cirosu
