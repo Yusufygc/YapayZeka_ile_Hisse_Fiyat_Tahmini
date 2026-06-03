@@ -52,6 +52,8 @@ data/macro/*.csv
 !/data/bist_universe.csv
 # Eski/arşiv hisse CSV klasörü (takip dışı)
 data/old/
+# Yerel veri yedek klasörü (takip dışı)
+data/yedek/
 
 # Batch çalışma raporları (çalışmaya özgü, arşiv değeri yok)
 batch_summary_*.csv
