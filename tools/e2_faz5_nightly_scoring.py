@@ -150,6 +150,8 @@ def main() -> None:
     dist = table["confidence_label"].value_counts().to_dict()
     _log(f"PeerStore run_id={rid}: {n} peer_scores yazildi -> {args.db}")
     _log(f"confidence dagilimi: {dist}")
+    if "trend_label" in table.columns:
+        _log(f"trend dagilimi: {table['trend_label'].value_counts().to_dict()}")
     _log(f"DONE in {time.time()-t0:.0f}s")
 
 

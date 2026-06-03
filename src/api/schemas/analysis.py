@@ -134,6 +134,10 @@ class PeerBlock(BaseModel):
     confidence_warnings: List[str] = []
     model_run_id: Optional[int] = None
     icir_overall: Optional[float] = None
+    # E2 Faz 7 — peer rank -> mutlak trend egilimi (kalibre, olasiliksal).
+    trend_label: Optional[str] = None             # yukarı | yatay | aşağı | belirsiz
+    trend_prob_up: Optional[float] = None         # kalibre P(h-gun getiri > 0)
+    trend_expected_return: Optional[float] = None  # kalibre ort. h-gun log-getiri
 
 
 class ForecastSourceBlock(BaseModel):

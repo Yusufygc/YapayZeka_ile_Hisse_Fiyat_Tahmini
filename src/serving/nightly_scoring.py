@@ -22,6 +22,7 @@ import pandas as pd
 
 from src.serving.confidence import ConfidenceThresholds, peer_confidence
 from src.serving.peer_scoring import PeerScoringConfig, score_latest_universe
+from src.serving.trend_tendency import TrendCalibration, trend_from_peer
 
 
 # (b) harman: eksen agirliklari (likidite baskin ayirici).
@@ -69,6 +70,7 @@ def assemble_peer_table(
     icir_segment_col: str = "liq_bucket",
     scoring_cfg: Optional[PeerScoringConfig] = None,
     thr: Optional[ConfidenceThresholds] = None,
+    trend_cfg: Optional[TrendCalibration] = None,
 ) -> pd.DataFrame:
     """En guncel evreni skorla + segment + confidence -> PeerStore'a hazir tablo.
 
@@ -119,6 +121,18 @@ def assemble_peer_table(
     merged["confidence_label"] = labels
     merged["confidence_reasons"] = reasons
     merged["confidence_warnings"] = warns
+
+    # --- mutlak trend eğilimi (Faz 7 kalibrasyonu) ---
+    tcfg = trend_cfg or TrendCalibration()
+    t_labels, t_pup, t_exp = [], [], []
+    for _, r in merged.iterrows():
+        t = trend_from_peer(r["peer_percentile"], r["universe_size"], tcfg)
+        t_labels.append(t.label)
+        t_pup.append(t.prob_up)
+        t_exp.append(t.expected_return)
+    merged["trend_label"] = t_labels
+    merged["trend_prob_up"] = t_pup
+    merged["trend_expected_return"] = t_exp
     return merged
 
 

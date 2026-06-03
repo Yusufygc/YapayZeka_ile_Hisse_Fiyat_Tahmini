@@ -290,6 +290,97 @@ confidence concept is introduced.
     Honest + actionable: high-conviction lives in tradeable mid-liquidity, not
     the (untradeable) strongest-signal tail nor the (no-edge) most-liquid tail.
 
+## Faz 7 — Confidence-stratified ABSOLUTE direction (2026-06-03)
+
+`tools/e2_faz7_confidence_diracc.py`. Question: does the serving confidence
+label track real absolute up/down accuracy? Full-universe OOS (CS+CSFEAT, h=5,
+589 syms, 217,444 rows, ICIR 1.55). Absolute target (`target`, log-return)
+joined back; per (fold,date) `y_pred` quintile; per-row composite_icir +
+tradability floor (3M TL) → confidence. Extreme-direction accuracy = Q5→up,
+Q1→down correct.
+
+| confidence | n | dir_acc(Q5+Q1) | Q5 %up | Q1 %up | ret_spread Q5−Q1 |
+|---|---|---|---|---|---|
+| high | 6,426 | 0.571 | 0.551 | 0.420 | +0.0213 |
+| medium | 167,085 | 0.544 | 0.541 | 0.452 | +0.0137 |
+| low | 43,933 | **0.578** | 0.542 | 0.395 | +0.0211 |
+| ALL | 217,444 | 0.553 | 0.541 | 0.435 | +0.0156 |
+
+base P(up)=0.498 (no nominal drift). **Confidence does NOT monotonically rank
+raw dir-acc**: low (0.578) ≈ high (0.571) > medium (0.544). Cause = the Faz 6
+tension restated: strongest signal lives in least-liquid names, and the
+tradability gate pushes those into `low`. So `low` = untradeable paper edge
+(can't act on it). **Within the actionable (tradeable) universe the label DOES
+work: high 0.571 > medium 0.544** (+2.7pp); high Q5 lift over its own base +7.8pp
+(0.551 vs 0.473) vs medium +3.5pp; mean-ret spread high +0.0213 vs medium
++0.0137. Caveat: high n=6,426 (~3%), noisy (high Q4 dips to 0.474). Verdict:
+peer rank carries a modest-but-real, monotone absolute-direction tilt
+(Q5 54% up / +0.79% vs Q1 43% up / −0.66% over 5d); confidence `high` =
+tradeable AND most accurate = best actionable signal; `low`'s higher raw accuracy
+is correctly flagged untradeable. Product up/yatay/aşağı output is supportable as
+an honest probabilistic tilt, not a guarantee.
+
+## Faz 7b — Trend tendency in API (2026-06-03)
+
+Ships the Faz 7 finding as a product output: peer rank → absolute trend
+tendency, surfaced additively on `GET /analysis/{symbol}` (`peer` block).
+
+- **`src/serving/trend_tendency.py`** — `trend_from_peer(peer_percentile,
+  universe_size, cfg)` → `TrendTendency(label, prob_up, expected_return, basis,
+  reasons)`. Label by percentile bands (≥70 `yukarı`, ≤30 `aşağı`, else `yatay`;
+  thin universe / NaN → `belirsiz`). `prob_up` + `expected_return` calibrated
+  per quintile from the Faz 7 absolute study (Q1..Q5 prob_up 0.435→0.541, exp
+  −0.0066→+0.0090, h=5). Honest framing baked into `reasons`: probabilistic
+  tilt, not a guarantee; confidence governs trust separately.
+- **`nightly_scoring.assemble_peer_table`** — emits `trend_label`,
+  `trend_prob_up`, `trend_expected_return` (new `trend_cfg` param).
+- **`peer_store`** — 3 new `peer_scores` columns + idempotent `_migrate`
+  (`ALTER TABLE ADD COLUMN`) so pre-existing DBs (run_id≤2) upgrade in place;
+  NULL trend on old rows → API returns `None` (graceful).
+- **`PeerBlock`** + `peer_service` — expose `trend_label`, `trend_prob_up`,
+  `trend_expected_return`. Existing absolute forecast/confidence untouched.
+- Tests: `test_trend_tendency.py` (10) + trend assertions in nightly/store/
+  service suites. Full suite **659 passed**.
+- Nightly re-run (`tools/e2_faz5_nightly_scoring.py`) repopulates `peer_scores`
+  with trend so the desktop app can consume `yukarı/yatay/aşağı` + calibrated
+  P(up) + expected return per symbol.
+
+## Faz 8 — Nightly automation (2026-06-04)
+
+Keeps the serving DB fresh automatically so peer/trend scores never go stale.
+Single Windows scheduled job: trading-day gate → universe data refresh →
+scoring batch → `PeerStore`. Runs even when Claude is closed.
+
+- **`tools/e2_nightly_pipeline.py`** (orchestrator) —
+  - (a) **trading-day gate**: `is_trading_day(d, "XIST")` via
+    `pandas-market-calendars` (knows BIST holidays). Target session is
+    time-aware (`gate_target_date`): evening run (≥19:00, after the ~18:00 BIST
+    close) → **today**; early-morning run (<19:00) → **yesterday**. Must be a
+    trading day else `skip`, exit 0. Fallback when lib/calendar errors = weekday
+    check (Mon–Fri), so weekends are still cut with zero deps.
+    `--skip-trading-gate` to force.
+  - (b) **data refresh**: `refresh_universe` loops `data/*.csv` (excludes
+    `bist_universe`/`advisory_history`), calls
+    `DataUpdater.check_and_update(path, sym, interactive=False)` (reused,
+    graceful), aggregates updated/up_to_date/skipped/failed + rows_added,
+    ~0.2s sleep between calls, continue-on-error. `--skip-data` to skip.
+  - (c) **scoring**: subprocess-calls `tools/e2_faz5_nightly_scoring.py`
+    (unchanged) with same interpreter; exit code propagated.
+- **`scripts/nightly_serving.ps1`** — Task Scheduler target. Sets `dl_env`
+  python (full path), env vars, tees stdout+stderr to
+  `logs/nightly_<yyyyMMdd>.log`, prunes logs >14 days, propagates exit code.
+- **`scripts/register_nightly_task.ps1`** — one-time `schtasks /Create`
+  (`ts_forecasting_nightly`, daily **21:00**, after BIST close; `-Time` param to
+  override). Remove: `schtasks /Delete /TN ts_forecasting_nightly /F`. Default
+  runs only when the user is logged on (no stored creds).
+- **Dependency**: `pandas-market-calendars==4.4.0` was declared in
+  `requirements.txt` but missing from `dl_env` → installed (XIST confirmed).
+- Tests: `tests/test_nightly_pipeline.py` (14; refresh aggregation, gate
+  real+fallback, `gate_target_date` evening/morning/boundary, main skip/run
+  flows). No network.
+- Idempotent: re-running on same data makes a new run_id; API reads latest —
+  harmless. The trading-day gate already prevents pointless weekend/holiday runs.
+
 ## Faz 0 Findings (2026-06-02)
 
 Audit of all 592 stock CSVs in `data/` via `tools/e2_faz0_universe_audit.py`.

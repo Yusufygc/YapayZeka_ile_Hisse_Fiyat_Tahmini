@@ -1,3 +1,63 @@
+## [2026-06-04] Faz 8 | Gecelik serving otomasyonu (veri taze kalsin)
+
+Serving DB'nin (data/serving_pool.db) bayatlamasini onlemek icin Windows gecelik
+gorevi. Akis: islem-gunu kapisi -> evren veri tazeleme -> skorlama -> PeerStore.
+- `tools/e2_nightly_pipeline.py` (YENI orkestrator): (a) `is_trading_day(d,"XIST")`
+  pandas-market-calendars ile BIST tatil-bilincli kapi; dun islem gunu degilse
+  skip+exit0. Lib/takvim hatasi -> hafta-ici fallback (Pzt-Cum), hafta sonu yine
+  kesilir. (b) `refresh_universe` data/*.csv dongusu + `DataUpdater.check_and_update`
+  (reuse, graceful) + updated/up_to_date/skipped/failed sayim. (c) skorlama
+  `tools/e2_faz5_nightly_scoring.py` subprocess ile (degismedi).
+- `scripts/nightly_serving.ps1`: Task Scheduler hedefi; dl_env python tam yol,
+  log logs/nightly_<tarih>.log, 14g+ log budama, exit kodu yansitma.
+- `scripts/register_nightly_task.ps1`: tek seferlik `schtasks /Create`
+  (ts_forecasting_nightly, gunluk 21:00, BIST kapanis sonrasi; -Time param).
+  Kaldirma: schtasks /Delete. Kapi hedefi saate gore: aksam(>=19)=bugun,
+  sabah=dun (`gate_target_date`). Saat 03:00->21:00 (kullanici talebi).
+- Bagimlilik: `pandas-market-calendars==4.4.0` requirements'ta vardi ama dl_env'de
+  YOK'tu -> kuruldu (XIST dogrulandi).
+- Testler: `tests/test_nightly_pipeline.py` (14, ag yok). Karar: kapsam veri+skor,
+  Task Scheduler 21:00, sadece islem gunleri. Wiki: e2 epic "Faz 8" bolumu.
+
+## [2026-06-03] Faz 7b | Trend egilimi (yukarı/yatay/aşağı) API'ye eklendi
+
+Faz 7 bulgusu urune cevrildi. Yeni `src/serving/trend_tendency.py`:
+`trend_from_peer(peer_percentile, universe_size)` -> TrendTendency(label, prob_up,
+expected_return). Etiket percentile bandindan (>=70 yukarı, <=30 aşağı, else yatay;
+ince evren/NaN -> belirsiz); prob_up+expected_return Faz 7 mutlak kalibrasyonundan
+(Q1..Q5 prob_up 0.435->0.541, exp -0.0066->+0.0090, h=5). Durust cerceve reasons'a
+gomulu (olasiliksal egilim, garanti degil; guven ayri yonetir).
+- `nightly_scoring.assemble_peer_table` 3 yeni kolon uretir (trend_cfg param).
+- `peer_store` 3 yeni peer_scores kolonu + idempotent `_migrate` (ALTER ADD COLUMN);
+  eski DB'ler (run_id<=2) yerinde yukseltilir, eski satirlarda NULL -> API None (zarif).
+- `PeerBlock` + `peer_service` trend alanlarini expose eder; mevcut mutlak
+  forecast/confidence dokunulmadi (additive).
+- Testler: test_trend_tendency.py (10) + nightly/store/service trend assert'leri.
+  Tam suite 659 passed.
+- Gecelik batch yeniden kosuldu -> peer_scores trend ile dolduruldu (desktop app
+  yukarı/yatay/aşağı + kalibre P(up) + beklenen getiri tuketebilir). Wiki:
+  e2-pooled-global-model-epic.md "Faz 7b" bolumu.
+
+## [2026-06-03] Faz 7 | Confidence-stratified MUTLAK yon isabeti olcumu
+
+`tools/e2_faz7_confidence_diracc.py`. Soru: serving confidence (segment composite
+ICIR x tradability) yuksek isimlerde mutlak yukari/asagi isabeti belirgin daha mi
+yuksek? Full-evren OOS (CS+CSFEAT h=5, 589 sym, 217444 satir, ICIR 1.55). Mutlak
+hedef geri eklendi; (fold,date) ici y_pred quintile; ekstrem-yon isabeti
+(Q5->yukari, Q1->asagi). base P(up)=0.498.
+- high (6426): dir_acc 0.571, Q5up 0.551, spread +0.0213
+- medium (167085): dir_acc 0.544, Q5up 0.541, spread +0.0137
+- low (43933): dir_acc 0.578, Q5up 0.542, spread +0.0211
+BULGU: confidence ham dir-acc'i MONOTON siralamiyor (low 0.578 ~ high 0.571 >
+medium 0.544). Sebep = Faz 6 gerginligi: en guclu sinyal en az likit isimlerde,
+tradability kapisi onlari low'a itiyor -> low = islem yapilamayan kagit edge.
+AMA aksiyon alinabilir (tradeable) evrende etiket CALISIYOR: high 0.571 > medium
+0.544 (+2.7pp); high Q5 kendi base'ine +7.8pp lift vs medium +3.5pp. KARAR:
+confidence `high` = tradeable + en isabetli = en iyi aksiyon sinyali; low'un
+yuksek isabeti dogru sekilde "islem zor" diye isaretli. Urun up/yatay/asagi
+ciktisi durust olasiliksal egilim olarak destekleniyor (garanti degil). Wiki:
+e2-pooled-global-model-epic.md "Faz 7" bolumu.
+
 ## [2026-06-03] Faktor zenginlestirme | klasik faktorler ZARAR veriyor (negatif)
 
 Loader'a klasik causal cross-sectional faktorler eklendi (mom_21/63/126, rev_5,

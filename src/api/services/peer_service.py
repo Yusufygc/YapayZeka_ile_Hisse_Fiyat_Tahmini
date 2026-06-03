@@ -62,6 +62,9 @@ class PeerEnrichmentService:
                 confidence_warnings=_json_list(row.get("confidence_warnings")),
                 model_run_id=row.get("run_id"),
                 icir_overall=run.get("icir"),
+                trend_label=row.get("trend_label"),
+                trend_prob_up=row.get("trend_prob_up"),
+                trend_expected_return=row.get("trend_expected_return"),
             )
         except Exception:  # serving katmani API'yi asla bozmasin
             return None

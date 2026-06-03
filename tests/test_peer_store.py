@@ -28,6 +28,9 @@ def _scored():
         "confidence_label": ["high", "medium", "low"],
         "confidence_reasons": [["guclu"], ["orta"], ["zayif"]],
         "confidence_warnings": [[], [], []],
+        "trend_label": ["yukarı", "yatay", "aşağı"],
+        "trend_prob_up": [0.541, 0.509, 0.435],
+        "trend_expected_return": [0.0090, 0.0050, -0.0066],
     })
 
 
@@ -55,6 +58,35 @@ def test_insert_and_read_peer_scores(tmp_path):
     assert aaa["confidence_label"] == "high"
     assert aaa["confidence_reasons"] == '["guclu"]'  # JSON serialized
     assert s.get_peer_score("CCC", rid)["segment_liq"] == "Q5"
+
+
+def test_trend_columns_roundtrip(tmp_path):
+    s = _store(tmp_path)
+    rid = s.insert_run(GlobalRunMeta(model_name="m", as_of_date="d"))
+    s.insert_peer_scores(rid, _scored())
+    aaa = s.get_peer_score("AAA")
+    assert aaa["trend_label"] == "yukarı"
+    assert abs(aaa["trend_prob_up"] - 0.541) < 1e-9
+    assert abs(aaa["trend_expected_return"] - 0.0090) < 1e-9
+
+
+def test_migration_adds_trend_cols_to_old_db(tmp_path):
+    """Eski sema (trend kolonsuz) -> PeerStore acilista ALTER ile ekler."""
+    import sqlite3
+    db = os.path.join(str(tmp_path), "old.db")
+    old_schema = """
+    CREATE TABLE peer_scores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, symbol TEXT,
+        as_of_date TEXT, peer_score REAL, peer_percentile REAL, peer_label TEXT,
+        raw_pred REAL, universe_size INTEGER, segment_liq TEXT, segment_vol TEXT,
+        segment_sector TEXT, segment_icir REAL, confidence_label TEXT,
+        confidence_reasons TEXT, confidence_warnings TEXT, UNIQUE(run_id, symbol));
+    """
+    with sqlite3.connect(db) as conn:
+        conn.executescript(old_schema)
+    cols = {r["name"] for r in PeerStore(db)._connect().execute(
+        "PRAGMA table_info(peer_scores)")}
+    assert {"trend_label", "trend_prob_up", "trend_expected_return"} <= cols
 
 
 def test_get_run_peer_scores_sorted(tmp_path):

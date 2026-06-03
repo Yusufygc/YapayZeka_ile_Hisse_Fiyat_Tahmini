@@ -130,6 +130,17 @@ def test_blended_path_lifts_liquid_highvol_above_pure_liq():
     assert (out["confidence_label"] == "medium").all()
 
 
+def test_assemble_adds_trend_columns():
+    out = assemble_peer_table(_StubModel(), _latest_panel(), ["f0"],
+                              _seg_table(), _ICIR).set_index("symbol")
+    for c in ["trend_label", "trend_prob_up", "trend_expected_return"]:
+        assert c in out.columns
+    # pred = f0 = arange -> S19 en yuksek percentile -> yukarı; S0 en dusuk -> aşağı
+    assert out.loc["S19", "trend_label"] == "yukarı"
+    assert out.loc["S0", "trend_label"] == "aşağı"
+    assert out.loc["S19", "trend_prob_up"] > out.loc["S0", "trend_prob_up"]
+
+
 def test_empty_panel_safe():
     empty = pd.DataFrame({"symbol": [], "Date": [], "f0": []})
     out = assemble_peer_table(_StubModel(), empty, ["f0"], _seg_table(), _ICIR)

@@ -23,6 +23,8 @@ def _seed(tmp_path) -> str:
         "segment_liq": ["Q1"], "segment_vol": ["Q5"], "segment_sector": ["Industrials"],
         "segment_icir": [1.35], "confidence_label": ["high"],
         "confidence_reasons": [["Segment sinyali guclu"]], "confidence_warnings": [[]],
+        "trend_label": ["yukarı"], "trend_prob_up": [0.541],
+        "trend_expected_return": [0.0090],
     }))
     return db
 
@@ -40,6 +42,9 @@ def test_enrich_attaches_peer_block(tmp_path):
     assert out.peer.segment_icir == 1.35
     assert out.peer.icir_overall == 1.55
     assert out.peer.confidence_reasons == ["Segment sinyali guclu"]
+    assert out.peer.trend_label == "yukarı"
+    assert abs(out.peer.trend_prob_up - 0.541) < 1e-9
+    assert abs(out.peer.trend_expected_return - 0.0090) < 1e-9
 
 
 def test_enrich_case_insensitive(tmp_path):

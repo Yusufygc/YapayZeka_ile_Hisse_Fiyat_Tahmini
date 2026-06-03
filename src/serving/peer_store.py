@@ -54,6 +54,9 @@ CREATE TABLE IF NOT EXISTS peer_scores (
     confidence_label TEXT,
     confidence_reasons TEXT,
     confidence_warnings TEXT,
+    trend_label TEXT,
+    trend_prob_up REAL,
+    trend_expected_return REAL,
     UNIQUE(run_id, symbol),
     FOREIGN KEY(run_id) REFERENCES global_model_runs(run_id)
 );
@@ -65,7 +68,15 @@ _PEER_COLS = [
     "symbol", "as_of_date", "peer_score", "peer_percentile", "peer_label",
     "raw_pred", "universe_size", "segment_liq", "segment_vol", "segment_sector",
     "segment_icir", "confidence_label", "confidence_reasons", "confidence_warnings",
+    "trend_label", "trend_prob_up", "trend_expected_return",
 ]
+
+# Eski DB'lere (run_id<3) eklenen kolonlar: ALTER TABLE ile geriye-uyumlu migrasyon.
+_PEER_MIGRATIONS = {
+    "trend_label": "TEXT",
+    "trend_prob_up": "REAL",
+    "trend_expected_return": "REAL",
+}
 
 
 @dataclass(frozen=True)
@@ -97,6 +108,14 @@ class PeerStore:
     def _init(self) -> None:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            self._migrate(conn)
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        """Eski peer_scores tablolarina eksik kolonlari ekle (idempotent)."""
+        have = {r["name"] for r in conn.execute("PRAGMA table_info(peer_scores)")}
+        for col, sqltype in _PEER_MIGRATIONS.items():
+            if col not in have:
+                conn.execute(f"ALTER TABLE peer_scores ADD COLUMN {col} {sqltype}")
 
     # ------------------------------------------------------------------ write
     def insert_run(self, meta: GlobalRunMeta, created_at: Optional[str] = None) -> int:
