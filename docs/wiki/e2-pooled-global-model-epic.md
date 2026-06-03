@@ -245,14 +245,30 @@ confidence concept is introduced.
   - *Caveat:* segment buckets here use full-history per-symbol medians
     (descriptive analysis only). Serving must assign buckets from trailing/causal
     liquidity & vol at score time.
-- **Faz 5 — Registry + serving wiring.** Persist global model + per-symbol OOS
-  metrics + eligibility/confidence inputs so `GET /analysis/{symbol}` keeps
-  working unchanged. **Decisions locked (2026-06-03):** nightly universe batch
-  scoring (score+rank the whole universe → per-symbol rows; not per-query);
-  new tables `global_model_runs` (1/run: artifact, data-snapshot hash, IC summary)
-  + `peer_scores` (run×symbol: peer_score −1..1, peer_percentile, confidence,
-  as_of_date), leaving `best_models` untouched; additive API `peer` block +
-  feed the existing `ConfidenceBlock` from `segment_IC × tradability`.
+- **Faz 5 — Registry + serving wiring. ✅ DONE 2026-06-03.** Decisions (locked):
+  nightly universe batch scoring; new tables, `best_models` untouched; additive
+  API `peer` block. Implemented:
+  - `src/serving/peer_scoring.py` — `rank_to_peer_scores` (one date's pred vector
+    → centered `peer_score` [-1,1] + `peer_percentile` + label
+    outperform/inline/underperform/unknown), `score_latest_universe`.
+  - `src/serving/confidence.py` — `peer_confidence = f(segment_ICIR)` AND-gated by
+    tradability/freshness/universe; hard gates always force `low` (Faz 6 tension:
+    strongest signal sits in least-tradable names).
+  - `src/serving/peer_store.py` — isolated SQLite `PeerStore`: `global_model_runs`
+    (1/run: artifact, data-snapshot hash, IC summary, config) + `peer_scores`
+    (run×symbol, UNIQUE(run_id,symbol), upsert). Does NOT touch `best_models`.
+  - `src/serving/nightly_scoring.py` — `assemble_peer_table` (score latest universe
+    + segment join + confidence) + `segment_icir_from_table`. liq_bucket = primary
+    ICIR discriminator.
+  - `tools/e2_faz5_nightly_scoring.py` — real batch: load → target_cs + cs-features
+    → OOS segment ICIR → final fit on full panel → score latest universe →
+    PeerStore. Smoke (64 symbols) wrote 64 peer_scores + confidence distribution.
+  - **API (additive, backward-compatible):** new optional `PeerBlock` on
+    `AnalysisResponse`; `src/api/services/peer_service.py` `PeerEnrichmentService`
+    reads PeerStore and attaches `peer` in the router after `build` (silent no-op
+    if the serving DB / symbol is absent — existing fields untouched). Default DB
+    `data/serving_pool.db`.
+  - 6+8+6+5+5 tests across scoring/confidence/store/orchestration/API.
 
 ## Faz 0 Findings (2026-06-02)
 

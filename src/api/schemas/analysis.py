@@ -112,6 +112,30 @@ class DataQualityBlock(BaseModel):
     reason: Optional[str] = None
 
 
+class PeerBlock(BaseModel):
+    """E2 Faz 5 — pooled global model cross-sectional (akran-goreli) ciktisi.
+
+    Ek (additive) blok; mevcut mutlak forecast/confidence alanlari korunur.
+    Kaynak: nightly batch -> PeerStore (global_model_runs + peer_scores).
+    """
+
+    available: bool = False
+    as_of_date: Optional[str] = None
+    peer_score: Optional[float] = None       # -1..1 (merkezli cross-sectional sira)
+    peer_percentile: Optional[float] = None  # 0..100
+    peer_label: Optional[str] = None         # outperform | inline | underperform | unknown
+    universe_size: Optional[int] = None
+    segment_liq: Optional[str] = None
+    segment_vol: Optional[str] = None
+    segment_sector: Optional[str] = None
+    segment_icir: Optional[float] = None
+    confidence_label: Optional[str] = None   # low | medium | high (segment_IC x tradability)
+    confidence_reasons: List[str] = []
+    confidence_warnings: List[str] = []
+    model_run_id: Optional[int] = None
+    icir_overall: Optional[float] = None
+
+
 class ForecastSourceBlock(BaseModel):
     type: str = "model"
     model_name: Optional[str] = None
@@ -144,3 +168,5 @@ class AnalysisResponse(BaseModel):
     forecast_source: Optional[ForecastSourceBlock] = None
     # Sprint 7 (2026-05-25) A7.3 — son 30g PSI drift monitoru.
     data_quality: Optional[DataQualityBlock] = None
+    # E2 Faz 5 — pooled global model akran-goreli ciktisi (additive).
+    peer: Optional[PeerBlock] = None

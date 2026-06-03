@@ -1,3 +1,20 @@
+## [2026-06-03] Faz 5 BITTI | serving: peer scoring + PeerStore + additive API
+
+Nightly batch serving uctan uca:
+- src/serving/peer_scoring.py: rank_to_peer_scores (tek tarih -> peer_score
+  [-1,1] + percentile + label), score_latest_universe.
+- src/serving/confidence.py: peer_confidence = f(segment_ICIR) AND tradability/
+  freshness kapilari (sert kapi her zaman low; Faz 6 gerginligi).
+- src/serving/peer_store.py: izole SQLite (global_model_runs + peer_scores),
+  best_models'a DOKUNMAZ. insert/get/latest.
+- src/serving/nightly_scoring.py: assemble_peer_table (skorla+segment+confidence).
+- tools/e2_faz5_nightly_scoring.py: gercek batch; smoke (64 sembol) PeerStore'a
+  64 satir yazdi.
+- API additive: PeerBlock + PeerEnrichmentService router'da build sonrasi enrich;
+  serving DB/sembol yoksa sessiz no-op, mevcut alanlar korunur. Default DB
+  data/serving_pool.db.
+30 yeni test. Geriye uyumlu (mevcut /analysis sozlesmesi bozulmadi).
+
 ## [2026-06-03] Faz 6 BITTI | stratified segment IC + serving kararlari
 
 `src/validation/segment_ic.py` (symbol_segments / segment_cross_sectional_ic /
