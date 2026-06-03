@@ -99,20 +99,36 @@ def _spearman(a: np.ndarray, b: np.ndarray) -> float:
 
 def daily_cross_sectional_ic(
     predictions: pd.DataFrame, min_names: int = 8, date_col: str = "Date",
+    sample_gap_days: int = 0,
 ) -> dict:
     """Gunluk cross-sectional IC (semboller-arasi rank korelasyonu) ozeti.
 
     Pooled/cross-sectional modelin DOGRU degerlendirmesi: her tarih icin
     semboller-arasi corr(y_pred, y_true). Per-symbol dir_acc goreli siralama
     becerisini olcemez; bu olcer. ICIR = mean/std (bilgi orani).
+
+    sample_gap_days>0 : IC serisini >= bu kadar TAKVIM gunu arali tarihlerle
+    alt-ornekle (greedy). h-gunluk hedef pencereleri ortustugu icin ardisik
+    gunlerin IC'si autocorrelation tasir -> ICIR'i SISIRIR (std kucuk). Ortusmeyen
+    ornekleme (gap≈h) durust ICIR verir.
     """
-    ics = []
-    for _, g in predictions.groupby(date_col):
+    pairs = []  # (date, ic)
+    for d, g in predictions.groupby(date_col):
         if g["symbol"].nunique() < min_names:
             continue
         ic = _spearman(g["y_pred"].to_numpy(), g["y_true"].to_numpy())
         if np.isfinite(ic):
-            ics.append(ic)
+            pairs.append((pd.Timestamp(d), float(ic)))
+    pairs.sort(key=lambda p: p[0])
+    if sample_gap_days and sample_gap_days > 0 and pairs:
+        kept = []
+        last = None
+        for d, ic in pairs:
+            if last is None or (d - last).days >= sample_gap_days:
+                kept.append((d, ic))
+                last = d
+        pairs = kept
+    ics = [ic for _, ic in pairs]
     if not ics:
         return {"ic_mean": float("nan"), "ic_std": float("nan"),
                 "icir": float("nan"), "pct_positive": float("nan"), "n_days": 0}

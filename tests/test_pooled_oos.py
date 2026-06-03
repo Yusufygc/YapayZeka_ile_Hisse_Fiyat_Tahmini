@@ -146,6 +146,23 @@ def test_daily_ic_perfect_and_inverse():
     assert abs(r["ic_mean"] + 1.0) < 1e-9
 
 
+def test_sample_gap_subsamples_ic_series():
+    """sample_gap_days ardisik gunleri seyreltir -> daha az gun, ortusmeyen."""
+    dates = pd.bdate_range("2021-01-01", periods=60)
+    rows = []
+    for d in dates:
+        for s in range(10):
+            rows.append({"symbol": f"S{s}", "Date": d,
+                         "y_true": float(s), "y_pred": float(s)})
+    preds = pd.DataFrame(rows)
+    full = daily_cross_sectional_ic(preds, min_names=8)
+    gap = daily_cross_sectional_ic(preds, min_names=8, sample_gap_days=21)
+    assert full["n_days"] == 60
+    assert gap["n_days"] < full["n_days"]   # seyreltildi
+    # perfect IC -> ortalama her iki sekilde de ~1
+    assert abs(gap["ic_mean"] - 1.0) < 1e-9
+
+
 def test_thin_dates_excluded_from_ic():
     dates = pd.bdate_range("2021-01-01", periods=2)
     rows = []
