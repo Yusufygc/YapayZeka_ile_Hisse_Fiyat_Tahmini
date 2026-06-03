@@ -1,3 +1,17 @@
+## [2026-06-03] Faktor zenginlestirme | klasik faktorler ZARAR veriyor (negatif)
+
+Loader'a klasik causal cross-sectional faktorler eklendi (mom_21/63/126, rev_5,
+mom_63_voladj, hi_252_prox, liq_mom) -> add_cross_sectional_features ile rank/zscore.
+Subset (80) ve full-evren (589) AYNI-RUN deterministik kiyas:
+- full NO-FACTOR: IC +0.1164 ICIR 1.770 %>0 96.3
+- full +FACTORS:  IC +0.0983 ICIR 1.524 %>0 94.2
+Faktorler ICIR'i 1.77->1.52 DUSURDU. Sebep: FeaturePipeline stationary ozellikleri
+zaten momentum/return sinyalini tasiyor -> eklenen faktorler redundant + overfit
+yuzeyi. KARAR: faktor eklemesi geri alindi (loader temiz baseline). Hem horizon
+hem naif faktor kaldiraci negatif -> CS+CSFEAT h=5 baseline (ICIR ~1.55-1.77)
+saglam, naif eklemelerle gecilmiyor. (Not: NO-FACTOR 1.77 vs onceki canonical 1.55
+= kosu-arasi data-snapshot drifti; ayni-run ici kiyas gecerli.)
+
 ## [2026-06-03] Horizon sweep | h=21 full-evrende h=5'i GECMIYOR (negatif)
 
 daily_cross_sectional_ic'e sample_gap_days (ortusmeyen ornekleme; h-gun hedef
