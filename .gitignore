@@ -44,6 +44,13 @@ data/feature_cache/
 # İndirilen makro veri CSV'leri (yfinance/FRED'den yeniden çekilir)
 data/macro/*.csv
 
+# Hisse OHLCV CSV'leri: yfinance ile yeniden çekilir, takip dışı (büyük churn).
+# Yalnız evren metadata (bist_universe.csv) ve data/meta/ takipte kalır.
+/data/*.csv
+!/data/bist_universe.csv
+# Eski/arşiv hisse CSV klasörü (takip dışı)
+data/old/
+
 # Batch çalışma raporları (çalışmaya özgü, arşiv değeri yok)
 batch_summary_*.csv
 batch_summary_*.json
