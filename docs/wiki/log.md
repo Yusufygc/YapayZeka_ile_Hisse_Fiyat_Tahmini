@@ -1,3 +1,19 @@
+## [2026-06-03] Faz 5a+5b | tradability tabani + harman confidence
+
+(a) liqlog_floor_from_turnover + CLI --liq-floor-tl (3M TL/gun=P20): medyan cirosu
+taban altinda -> tradable=False -> low (guclu sinyal olsa bile). Ciro: Q1 0-3.1M,
+Q5 78M+.
+(b) composite_icir: per-symbol liq/vol/sektor ICIR agirlikli harman (0.5/0.3/0.2).
+Tek-eksen (her Q1=1.35) yerine cozunurluk.
+
+Gercek nightly (run_id=2, 574 sembol): confidence high 17 / medium 444 / low 113
+(onceki tek-eksen+tabansiz: 111/349/114). Q1 mikrokap 108->low (tradability),
+Q5 blue-chip cogu ->medium (harman vol/sektorle kaldirdi: AKBNK 0.54 EREGL 0.52
+SASA 0.62; TUPRS 0.48 low). 17 high = tatli nokta (tradeable Q2/Q4 + yuksek vol +
+guclu sektor, composite>=1.0: MANAS, MEPET). Dürüst+aksiyon alinabilir: yuksek
+konviksiyon tradeable orta-likiditede, ne (islem zor) en guclu kuyrukta ne
+(edge yok) en likitte. API run_id=2 ile dogrulandi. 6 yeni test.
+
 ## [2026-06-03] Faz 5 BITTI | serving: peer scoring + PeerStore + additive API
 
 Nightly batch serving uctan uca:

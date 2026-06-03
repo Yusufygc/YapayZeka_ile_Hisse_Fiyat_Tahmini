@@ -269,6 +269,26 @@ confidence concept is introduced.
     if the serving DB / symbol is absent — existing fields untouched). Default DB
     `data/serving_pool.db`.
   - 6+8+6+5+5 tests across scoring/confidence/store/orchestration/API.
+  - **Faz 5a — tradability floor.** `liqlog_floor_from_turnover` + CLI
+    `--liq-floor-tl` (default 3M TL/day = P20). Median turnover below floor →
+    `tradable=False` → confidence `low` even with strong signal (the Faz 6
+    tension made explicit: least-liquid Q1 carries the strongest signal but is
+    hardest to trade). Turnover distribution: Q1 0–3.1M (median 1.2M) TL/day,
+    Q2 3.1–11M, Q5 78M+.
+  - **Faz 5b — blended confidence.** `composite_icir` weights the per-symbol
+    segment ICIRs across liq/vol/sector (default 0.5/0.3/0.2; missing axis
+    dropped + renormalized). Replaces the coarse single-axis (every Q1 = 1.35)
+    with per-symbol resolution; `assemble_peer_table` takes `icir_maps`.
+  - **Real nightly result (run_id=2, 574 symbols, floor 3M, blended):**
+    confidence high 17 / medium 444 / low 113 (was high 111 / medium 349 /
+    low 114 single-axis no-floor). Effect:
+    - Q1 microcaps 108→`low` (tradability-gated) + 3 high.
+    - Q5 blue-chips now mostly `medium` (blend lifts liq 0.39 with vol/sector;
+      AKBNK 0.54, EREGL 0.52, SASA 0.62 → medium; TUPRS 0.48 → low) — was all low.
+    - the 17 `high` are the actionable sweet-spot: tradeable Q2/Q4 liquidity +
+      high vol + strong sector, composite ICIR ≥ 1.0 (e.g. MANAS, MEPET).
+    Honest + actionable: high-conviction lives in tradeable mid-liquidity, not
+    the (untradeable) strongest-signal tail nor the (no-edge) most-liquid tail.
 
 ## Faz 0 Findings (2026-06-02)
 
