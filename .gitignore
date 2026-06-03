@@ -18,6 +18,7 @@ tools/*
 !tools/e2_faz1_horizon_compare.py
 !tools/e2_faz35_cs_ic_study.py
 !tools/e2_faz6_segment_ic.py
+!tools/e2_faz5_nightly_scoring.py
 .claude
 kalinanYer.md
 kalinanYer1.md
