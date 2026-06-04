@@ -52,6 +52,8 @@ data/macro/*.csv
 !/data/bist_universe.csv
 # Eski/arşiv hisse CSV klasörü (takip dışı)
 data/old/
+# Yedek veri klasörü (takip dışı)
+data/yedek/
 # Yerel veri yedek klasörü (takip dışı)
 data/yedek/
 
