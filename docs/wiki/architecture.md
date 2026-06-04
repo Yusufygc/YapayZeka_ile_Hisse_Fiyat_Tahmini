@@ -141,6 +141,8 @@ existing per-symbol product (it does not change training facades or
 | `src/data/pooled_loader.py` | Long panel loader across ~589 stock CSVs; causal conditioning (sector, symbol_id, liq_log, vol) |
 | `src/data/cross_sectional.py` | Within-date rank target + cross-sectional rank/zscore features (leakage-safe) |
 | `src/models/global_pooled_model.py` | Pooled LightGBM (`GlobalPooledModel`) + feature builder |
+| `src/models/torch_mlp_model.py` | Pooled DEEP model: embedding'li feedforward MLP (`TorchMLPModel`), harness/serving uyumlu (Faz 9) |
+| `src/models/ensemble_pooled_model.py` | `EnsemblePooledModel`: LGB + çok-seed MLP, tarih-içi pct-rank blend (50/50); serving final skorlama (Faz 9) |
 | `src/validation/pooled_cv.py` | Group-purged date-based walk-forward CV |
 | `src/validation/pooled_oos.py` | Per-symbol OOS aggregation + daily cross-sectional IC/ICIR |
 | `src/validation/segment_ic.py` | Stratified per-segment (liq/vol/sector) IC |

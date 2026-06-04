@@ -1,3 +1,20 @@
+## [2026-06-05] E2 Faz 9 serving | Ensemble production'a bağlandı
+
+PoC bulgusu serving'e taşındı (branch feat/e2-deep-ensemble):
+- Yeni production modülleri: `src/models/torch_mlp_model.py` (`TorchMLPModel`,
+  input-validation + fail-loud), `src/models/ensemble_pooled_model.py`
+  (`EnsemblePooledModel` = LGB + 3-seed MLP, tarih-içi pct-rank blend 50/50).
+- `tools/e2_faz5_nightly_scoring.py` `--model {lgb,ensemble}` (default lgb) +
+  `--mlp-epochs`; ensemble final skorlama, segment ICIR/confidence LGB-only (locked).
+- `tools/e2_nightly_pipeline.py` `--model` passthrough (scheduled job ensemble'a
+  geçebilir; default lgb, ~4× süre).
+- Testler: test_torch_mlp_model.py (7) + test_ensemble_pooled_model.py (6) +
+  nightly pipeline passthrough assert. Suite: 685 passed (1 ilgisiz fail:
+  test_leakage_guards BuyHold_Sharpe NaN — INTEREST_RATE.csv yok, risk-free
+  fail-loud; ayrı task açıldı).
+- Wiki: e2 epic Faz 9 "Serving entegrasyonu" + architecture.md model tablosu.
+- Live scheduled job hâlâ lgb default; ensemble'a geçiş kullanıcı kararına bırakıldı.
+
 ## [2026-06-05] E2 Faz 9 | Deep + Ensemble PoC (branch feat/e2-deep-ensemble)
 
 Kol A overfit'inin kök sebebi veri açlığı mıydı testi: derin model tek-hisse

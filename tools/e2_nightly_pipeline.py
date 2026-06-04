@@ -118,10 +118,10 @@ def refresh_universe(data_dir: str, *, sleep_s: float = 0.2,
 
 # ------------------------------------------------------------------- scoring
 def run_scoring(db: str, boost: int, data_dir: str, universe: str,
-                limit: int = 0) -> int:
+                limit: int = 0, model: str = "lgb") -> int:
     """e2_faz5 skorlama aracini subprocess ile cagir. Returns exit kodu."""
     cmd = [sys.executable, _SCORING_TOOL, "--db", db, "--boost", str(boost),
-           "--data-dir", data_dir, "--universe", universe]
+           "--data-dir", data_dir, "--universe", universe, "--model", model]
     if limit > 0:
         cmd += ["--limit", str(limit)]
     _log(f"skorlama baslatiliyor: {' '.join(cmd[1:])}")
@@ -137,6 +137,8 @@ def main() -> int:
     ap.add_argument("--universe", default="data/bist_universe.csv")
     ap.add_argument("--db", default="data/serving_pool.db")
     ap.add_argument("--boost", type=int, default=400)
+    ap.add_argument("--model", choices=["lgb", "ensemble"], default="lgb",
+                    help="skorlama modeli: lgb (varsayilan) | ensemble (LGB+MLP, Faz 9; ~4x sure)")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--sleep-s", type=float, default=0.2)
     ap.add_argument("--skip-data", action="store_true")
@@ -163,7 +165,7 @@ def main() -> int:
 
     # (c) skorlama
     rc = run_scoring(args.db, args.boost, args.data_dir, args.universe,
-                     limit=args.limit)
+                     limit=args.limit, model=args.model)
 
     _log(f"=== pipeline bitti: exit={rc}, sure={time.time()-t0:.0f}s ===")
     return rc

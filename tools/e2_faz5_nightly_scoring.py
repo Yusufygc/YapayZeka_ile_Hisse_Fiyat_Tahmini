@@ -31,12 +31,17 @@ from src.data.cross_sectional import (
     add_cross_sectional_target,
 )
 from src.data.pooled_loader import PooledLoaderConfig, PooledPanelLoader
+from src.models.ensemble_pooled_model import (
+    EnsemblePooledConfig,
+    EnsemblePooledModel,
+)
 from src.models.global_pooled_model import (
     GlobalPooledConfig,
     GlobalPooledModel,
     build_pooled_features,
     make_global_model_factory,
 )
+from src.models.torch_mlp_model import TorchMLPConfig
 from src.serving.nightly_scoring import (
     assemble_peer_table,
     liqlog_floor_from_turnover,
@@ -65,6 +70,9 @@ def main() -> None:
     ap.add_argument("--min-rows", type=int, default=300)
     ap.add_argument("--min-names", type=int, default=15)
     ap.add_argument("--boost", type=int, default=400)
+    ap.add_argument("--model", choices=["lgb", "ensemble"], default="lgb",
+                    help="final skorlama modeli: lgb (varsayilan) | ensemble (LGB+3-seed MLP, Faz 9)")
+    ap.add_argument("--mlp-epochs", type=int, default=15, help="ensemble MLP epoch")
     ap.add_argument("--stale-days", type=int, default=10)
     ap.add_argument("--liq-floor-tl", type=float, default=3_000_000.0,
                     help="tradable alt esigi: medyan gunluk TL ciro (default 3M=P20, Q1'i kapatir)")
@@ -114,9 +122,21 @@ def main() -> None:
     _log(f"vol {icir_maps['vol']}")
 
     # --- final model: TUM gecmise egit ---
-    _log("final GlobalPooledModel tum panele egitiliyor ...")
-    model = GlobalPooledModel(GlobalPooledConfig(num_boost_round=args.boost, cat_indices=tuple(ci)))
-    model.fit(aug[feats].to_numpy(dtype=float), aug["target_cs"].to_numpy(dtype=float))
+    X_full = aug[feats].to_numpy(dtype=float)
+    y_full = aug["target_cs"].to_numpy(dtype=float)
+    if args.model == "ensemble":
+        cardinalities = [int(aug[feats[i]].max()) + 1 for i in ci]
+        _log(f"final ENSEMBLE (LGB + {len([42,7,123])}-seed MLP) tum panele egitiliyor ...")
+        model = EnsemblePooledModel(EnsemblePooledConfig(
+            lgb=GlobalPooledConfig(num_boost_round=args.boost),
+            mlp=TorchMLPConfig(epochs=args.mlp_epochs),
+            cat_indices=tuple(ci), cat_cardinalities=tuple(cardinalities)))
+        model_name = "EnsemblePooled(LGB+MLP, CS+CSFEAT)"
+    else:
+        _log("final GlobalPooledModel tum panele egitiliyor ...")
+        model = GlobalPooledModel(GlobalPooledConfig(num_boost_round=args.boost, cat_indices=tuple(ci)))
+        model_name = "GlobalPooledModel(CS+CSFEAT)"
+    model.fit(X_full, y_full)
 
     # --- en guncel evreni skorla ---
     latest_rows = aug[aug["Date"] == aug["Date"].max()]
@@ -138,13 +158,13 @@ def main() -> None:
     ).hexdigest()[:12]
     store = PeerStore(args.db)
     rid = store.insert_run(GlobalRunMeta(
-        model_name="GlobalPooledModel(CS+CSFEAT)",
+        model_name=model_name,
         as_of_date=str(aug["Date"].max().date()),
         data_snapshot_hash=snap, n_symbols=int(panel["symbol"].nunique()),
         n_rows=int(len(aug)), horizon=args.horizon,
         ic_mean=res.ic["ic_mean"], icir=res.ic["icir"],
         pct_ic_positive=res.ic["pct_positive"],
-        config={"boost": args.boost, "icir_maps": icir_maps,
+        config={"boost": args.boost, "model": args.model, "icir_maps": icir_maps,
                 "liq_floor_tl": args.liq_floor_tl, "stale_days": args.stale_days}))
     n = store.insert_peer_scores(rid, table)
     dist = table["confidence_label"].value_counts().to_dict()

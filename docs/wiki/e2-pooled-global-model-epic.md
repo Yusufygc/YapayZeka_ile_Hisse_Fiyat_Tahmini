@@ -431,6 +431,34 @@ gece offline batch'te kabul edilebilir; 3-seed avg nondeterminizmi söndürür).
 Karar: ensemble'ı serving'e bağla (`nightly_scoring` → peer_score ensemble'dan).
 Sequence LSTM (D) ham-seri 3. bacak adayı olarak **en sona ertelendi**.
 
+### Serving entegrasyonu (✅ DONE 2026-06-05)
+
+PoC araçlarındaki MLP production'a taşındı + ensemble serving-uyumlu paketlendi:
+
+- **`src/models/torch_mlp_model.py`** — `TorchMLPModel` (+ `TorchMLPConfig`,
+  `make_mlp_factory`). PoC sınıfının production hali: input validation, fail-loud
+  (predict-before-fit `RuntimeError`, cat index/uzunluk `ValueError`), BatchNorm
+  tek-örnek guard, deterministik seed, lazy torch import. sklearn-vari fit/predict
+  → `pooled_oos` harness + `score_latest_universe` uyumlu.
+- **`src/models/ensemble_pooled_model.py`** — `EnsemblePooledModel`
+  (+ `EnsemblePooledConfig`): fit = LGB + çok-seed (varsayılan 3) MLP; predict =
+  tarih-içi **pct-rank blend** (`w·rank(lgb) + (1-w)·rank(mlp_avg)`).
+  **Blend 50/50** (locked karar: ICIR ~1.665, en yüksek %IC>0 = en kararlı). predict
+  TEK cross-section bekler (serving sözleşmesi; `score_latest_universe` tek tarih çağırır).
+- **`tools/e2_faz5_nightly_scoring.py`** — `--model {lgb,ensemble}` (default `lgb`,
+  geriye uyumlu) + `--mlp-epochs`. ensemble seçilince final fit+skorlama
+  `EnsemblePooledModel`; **segment ICIR/confidence OOS yine LGB-only** (locked
+  karar: hız + mevcut kalibrasyon). `global_model_runs.model_name` +
+  `config.model` modeli kaydeder.
+- **`tools/e2_nightly_pipeline.py`** — `--model` passthrough (Faz 8 scheduled job
+  ensemble'a geçebilir; default `lgb`, ~4× süre uyarısı arg help'te).
+- Testler: `tests/test_torch_mlp_model.py` (7) + `tests/test_ensemble_pooled_model.py`
+  (6); `test_nightly_pipeline.py` model passthrough assert eklendi. Tümü yeşil.
+  Ensemble nightly path uçtan uca smoke (30 sym, PeerStore'a yazıldı, trend dolu).
+- **Live job durumu:** scheduled `ts_forecasting_nightly` hâlâ `lgb` default'ta;
+  ensemble'a geçiş için pipeline'a `--model ensemble` geçmek (re-register) yeterli.
+  Kullanıcı kararına bırakıldı (gece ~4× hesap).
+
 ## Faz 0 Findings (2026-06-02)
 
 Audit of all 592 stock CSVs in `data/` via `tools/e2_faz0_universe_audit.py`.

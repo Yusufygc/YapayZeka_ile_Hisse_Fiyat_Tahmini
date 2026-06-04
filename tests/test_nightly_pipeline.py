@@ -151,11 +151,12 @@ def test_main_runs_scoring_on_trading_day(monkeypatch):
     _argv(monkeypatch, "--skip-data", "--skip-trading-gate")
     seen = {}
     monkeypatch.setattr(nl, "run_scoring",
-                        lambda db, boost, data_dir, universe, limit=0:
-                        seen.update(db=db, boost=boost) or 0)
+                        lambda db, boost, data_dir, universe, limit=0, model="lgb":
+                        seen.update(db=db, boost=boost, model=model) or 0)
     rc = nl.main()
     assert rc == 0
     assert seen["db"] == "data/serving_pool.db" and seen["boost"] == 400
+    assert seen["model"] == "lgb"
 
 
 def test_main_skip_data_does_not_refresh(monkeypatch):
