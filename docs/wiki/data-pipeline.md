@@ -257,6 +257,28 @@ daily/global merge, monthly ffill, and final feature-engineering helpers. Public
 inputs and output schema are unchanged; the split exists to keep EVDS/FRED/manual
 CSV fallback behavior and release-lag leakage controls independently testable.
 
+### Macro feature-cache poisoning guard (2026-06-02 fix)
+
+The feature-cache key already includes `use_macro`, but a transient macro-fetch
+failure used to poison the cache: when macro requested but unavailable, the
+engineered frame was still written under the `use_macro=True` key, so later
+(healthy) runs served the macro-less frame on a cache hit. A real trigger was a
+Windows `cp1252` `UnicodeEncodeError` on the `→` character in `MacroPipeline`
+log prints — the exception bubbled into `DataIngestionService._fetch_macro`,
+which swallowed it and returned an empty frame, silently dropping macro. Two
+guards in `DataIngestionService._engineer_features_cached`
+(`src/pipeline/data_services.py`):
+
+- **Write guard:** when `use_macro` is True but the resolved `macro_df` is empty/
+  None, the degraded frame is **not** cached (a transient failure cannot poison).
+- **Self-heal on read:** a cache hit whose `feature_names` contain no macro
+  feature (`_has_macro_features`, checked against
+  `MacroPipeline.macro_feature_names`) while macro is expected is evicted and
+  recomputed, so already-poisoned entries recover automatically.
+
+The root print crash was also removed (`→` replaced with `->` in
+`macro_pipeline.py` runtime prints) so macro no longer drops on cp1252 stdout.
+
 ## DataManager Responsibilities
 
 `DataManager` in `src/pipeline/data_manager.py` owns:

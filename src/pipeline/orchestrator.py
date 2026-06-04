@@ -34,6 +34,7 @@ from src.pipeline.data_manager import DataManager
 from src.pipeline.evaluation_manager import EvaluationManager
 from src.pipeline.model_scope import (
     BENCHMARK_MODELS,
+    candidate_models,
     normalize_candidate_models,
     resolve_candidates,
 )
@@ -48,6 +49,14 @@ from src.pipeline.artifacts import (
 
 class ForecastingPipeline:
     def __init__(self, cfg: PipelineConfig):
+        # cfg'yi saklıyoruz — EvaluationManager'a geçirilecek
+        self._cfg = cfg
+        self._init_config_attrs(cfg)
+        set_global_seed(42)
+        self._init_run_identity(cfg.models)
+        self._init_collaborators(cfg.execution)
+
+    def _init_config_attrs(self, cfg: PipelineConfig) -> None:
         # ── config nesnelerini çöz ─────────────────────────────────────────
         d = cfg.data
         v = cfg.validation
@@ -113,11 +122,7 @@ class ForecastingPipeline:
         self.model_config.setdefault("prophet", {})
         self.model_config["prophet"].setdefault("use_regressors", self.use_prophet_macro_regressors)
 
-        # cfg'yi saklıyoruz — EvaluationManager'a geçirilecek
-        self._cfg = cfg
-
-        set_global_seed(42)
-
+    def _init_run_identity(self, m: ModelConfig) -> None:
         self.stock_symbol = os.path.splitext(os.path.basename(self.data_file))[0]
         self.project_root = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -148,6 +153,7 @@ class ForecastingPipeline:
         self.experiment_dir = os.path.join(self.outputs_dir, "experiments")
         self.registry_dir = self.models_dir
 
+    def _init_collaborators(self, e: ExecutionConfig) -> None:
         self.tracker = ExperimentTracker(self.experiment_dir)
 
         db_path = os.path.join(self.project_root, "data", "stock_models.db")
@@ -176,8 +182,27 @@ class ForecastingPipeline:
         slug = re.sub(r"[^A-Za-z0-9]+", "", str(model_name))
         return slug or "Model"
 
+    @staticmethod
+    def _covers_all_candidates(selected_models: Optional[List[str]]) -> bool:
+        """True if `selected_models` includes every production candidate.
+
+        Tum candidate seti secildiginde run_id'ye okunur `ALL_MODELS` etiketi
+        verilir; bu hem kisa kalir (Windows MAX_PATH 260 tasmasi onlenir) hem de
+        klasor adi anlasilir olur. Ensemble'lar otomatik eklendigi icin
+        candidate kapsamina dahil edilmez.
+        """
+        try:
+            cands = set(candidate_models())
+        except Exception:
+            return False
+        if not cands:
+            return False
+        return cands.issubset({str(m) for m in (selected_models or [])})
+
     @classmethod
     def _model_slug_for_run_id(cls, selected_models: Optional[List[str]]) -> str:
+        if cls._covers_all_candidates(selected_models):
+            return "ALL_MODELS"
         models = [cls._slugify_model_name(model) for model in (selected_models or [])]
         models = [model for model in models if model]
         if not models:
@@ -187,9 +212,11 @@ class ForecastingPipeline:
         if len(models) <= 3:
             return "models-" + "-".join(models)
 
+        # 4+ kismi liste: gorunur isimleri at, sadece adet + hash birak.
+        # Eski "models-X-Y-Z-plusN-<hash>" bicimi uzun model adlariyla 260
+        # karakterlik yol limitini asabiliyordu (model_result_exporter write).
         digest = hashlib.sha1("|".join(models).encode("utf-8")).hexdigest()[:8]
-        visible = "-".join(models[:3])
-        return f"models-{visible}-plus{len(models) - 3}-{digest}"
+        return f"models{len(models)}-{digest}"
 
     def setup_environment(self) -> None:
         for directory in [

@@ -104,6 +104,125 @@ def _deflated_sharpe(
     return deflated, probabilistic_score
 
 
+def _resolve_risk_free(risk_free_annual: float | None) -> tuple[float | None, bool]:
+    """risk_free_annual None ise macro cache + env'den çözer (fail-loud).
+
+    Returns:
+        (oran, unavailable) — bulunamazsa (None, True).
+    """
+    if risk_free_annual is not None:
+        return risk_free_annual, False
+    resolved = _get_rf() if _get_rf is not None else None
+    return resolved, (resolved is None)
+
+
+def _empty_metrics(
+    model_name: str,
+    initial_capital: float,
+    risk_free_unavailable: bool,
+    risk_free_annual: float | None,
+) -> Dict[str, float | str | bool]:
+    """equity_curve boşken döndürülen sıfır-metrik sözlüğü."""
+    return {
+        "Model": model_name,
+        "Net_Return": 0.0,
+        "Annualized_Return": 0.0,
+        "CAGR": 0.0,
+        "Volatility": 0.0,
+        "Sharpe": 0.0,
+        "Sortino": 0.0,
+        "Max_Drawdown": 0.0,
+        "Calmar": 0.0,
+        "VaR_95": 0.0,
+        "CVaR_95": 0.0,
+        "Deflated_Sharpe": 0.0,
+        "Sharpe_Probabilistic_Score": 0.0,
+        "Exposure": 0.0,
+        "Active_Bars": 0,
+        "Signal_Count": 0,
+        "Days_In_Market": 0,
+        "Trade_Count": 0,
+        "Turnover": 0.0,
+        "Win_Rate": 0.0,
+        "Avg_Trade_Return": 0.0,
+        "Avg_Holding_Period": 0.0,
+        "Profit_Factor": 0.0,
+        "Avg_Win": 0.0,
+        "Avg_Loss": 0.0,
+        "Expectancy": 0.0,
+        "Cost_Drag": 0.0,
+        "Commission_Drag": 0.0,
+        "Slippage_Drag": 0.0,
+        "Entry_Cost_Drag": 0.0,
+        "Exit_Cost_Drag": 0.0,
+        "Trade_Efficiency": 0.0,
+        "Initial_Capital": round(initial_capital, 2),
+        "End_Capital": round(initial_capital, 2),
+        "Profit_TL": 0.0,
+        "BuyHold_Return": 0.0,
+        "BuyHold_VaR_95": 0.0,
+        "BuyHold_CVaR_95": 0.0,
+        "BuyHold_End_Capital": round(initial_capital, 2),
+        "BuyHold_Profit_TL": 0.0,
+        "BuyHold_Sharpe": 0.0,
+        "Beats_BuyHold_NetReturn": False,
+        "Omega_Ratio": 0.0,
+        "Recovery_Factor": 0.0,
+        "Max_Consecutive_Loss": 0,
+        "Information_Ratio": 0.0,
+        "Risk_Free_Unavailable": bool(risk_free_unavailable),
+        "Risk_Free_Annual_Used": None if risk_free_unavailable else float(risk_free_annual),
+        "Sharpe_Warning": "risk_free_unavailable" if risk_free_unavailable else "",
+    }
+
+
+def _exposure_and_turnover(equity_curve: pd.DataFrame) -> tuple[float, int, int, int, float]:
+    """(exposure%, active_bars, signal_count, days_in_market, turnover)."""
+    position = equity_curve["Position"].to_numpy(dtype=float)
+    exposure = float(np.mean(position) * 100.0)
+    active_bars = int(np.sum(position > 0))
+    signal_count = int(np.sum(equity_curve["Signal"].to_numpy(dtype=float) > 0))
+    days_in_market = active_bars
+    if {"Entry_Event", "Exit_Event"}.issubset(equity_curve.columns):
+        turnover = float(equity_curve["Entry_Event"].sum() + equity_curve["Exit_Event"].sum())
+    else:
+        turnover = float(np.sum(np.abs(np.diff(np.concatenate(([0.0], position))))))
+    return exposure, active_bars, signal_count, days_in_market, turnover
+
+
+def _cost_drags(
+    equity_curve: pd.DataFrame, net_return: float
+) -> tuple[float, float, float, float, float, float]:
+    """(cost, commission, slippage, entry, exit, gross_return) — eksik kolon 0.0,
+    Gross_Return yoksa gross_return net_return'e düşer."""
+    def _col_sum(name: str) -> float:
+        return float(equity_curve[name].sum()) if name in equity_curve.columns else 0.0
+
+    cost_drag = _col_sum("Transaction_Cost")
+    commission_drag = _col_sum("Commission_Cost")
+    slippage_drag = _col_sum("Slippage_Cost")
+    entry_cost_drag = _col_sum("Entry_Transaction_Cost")
+    exit_cost_drag = _col_sum("Exit_Transaction_Cost")
+    if "Gross_Return" in equity_curve.columns:
+        gross_return = float(np.prod(1.0 + equity_curve["Gross_Return"].to_numpy(dtype=float)) - 1.0)
+    else:
+        gross_return = net_return
+    return cost_drag, commission_drag, slippage_drag, entry_cost_drag, exit_cost_drag, gross_return
+
+
+def _basic_trade_stats(trades: pd.DataFrame) -> tuple[int, float, float, float]:
+    """(trade_count, win_rate%, avg_trade_return, avg_holding_period); boşsa sıfır."""
+    trade_count = int(len(trades))
+    if trades.empty:
+        return trade_count, 0.0, 0.0, 0.0
+    win_rate = float((trades["Net_Return"] > 0).mean() * 100.0)
+    avg_trade_return = float(trades["Net_Return"].mean())
+    avg_holding_period = (
+        float(trades["Holding_Period"].mean()) if "Holding_Period" in trades.columns else 0.0
+    )
+    return trade_count, win_rate, avg_trade_return, avg_holding_period
+
+
 def summarize_backtest(
     backtest_result: Dict[str, Any],
     initial_capital: float = 100000.0,
@@ -127,70 +246,15 @@ def summarize_backtest(
     Returns:
         Metrik adı -> değer sözlüğü (`Risk_Free_Unavailable` bayrağı dahil).
     """
-    # Sprint 1 (2026-05-25) Plan A1.1: risk_free None ise fail-loud.
-    # _get_rf() macro cache + env yoksa None doner; o zaman Sharpe/Sortino
-    # NaN gelir ve "Risk_Free_Unavailable" bayragi metric'e eklenir.
-    risk_free_unavailable = False
-    if risk_free_annual is None:
-        risk_free_annual = _get_rf() if _get_rf is not None else None
-        if risk_free_annual is None:
-            risk_free_unavailable = True
+    # Sprint 1 (2026-05-25) Plan A1.1: risk_free None ise fail-loud — macro cache
+    # + env yoksa Sharpe/Sortino NaN gelir, "Risk_Free_Unavailable" bayragi eklenir.
+    risk_free_annual, risk_free_unavailable = _resolve_risk_free(risk_free_annual)
     equity_curve: pd.DataFrame = backtest_result["equity_curve"]
     trades: pd.DataFrame = backtest_result["trades"]
     model_name = backtest_result["model_name"]
 
     if equity_curve.empty:
-        return {
-            "Model": model_name,
-            "Net_Return": 0.0,
-            "Annualized_Return": 0.0,
-            "CAGR": 0.0,
-            "Volatility": 0.0,
-            "Sharpe": 0.0,
-            "Sortino": 0.0,
-            "Max_Drawdown": 0.0,
-            "Calmar": 0.0,
-            "VaR_95": 0.0,
-            "CVaR_95": 0.0,
-            "Deflated_Sharpe": 0.0,
-            "Sharpe_Probabilistic_Score": 0.0,
-            "Exposure": 0.0,
-            "Active_Bars": 0,
-            "Signal_Count": 0,
-            "Days_In_Market": 0,
-            "Trade_Count": 0,
-            "Turnover": 0.0,
-            "Win_Rate": 0.0,
-            "Avg_Trade_Return": 0.0,
-            "Avg_Holding_Period": 0.0,
-            "Profit_Factor": 0.0,
-            "Avg_Win": 0.0,
-            "Avg_Loss": 0.0,
-            "Expectancy": 0.0,
-            "Cost_Drag": 0.0,
-            "Commission_Drag": 0.0,
-            "Slippage_Drag": 0.0,
-            "Entry_Cost_Drag": 0.0,
-            "Exit_Cost_Drag": 0.0,
-            "Trade_Efficiency": 0.0,
-            "Initial_Capital": round(initial_capital, 2),
-            "End_Capital": round(initial_capital, 2),
-            "Profit_TL": 0.0,
-            "BuyHold_Return": 0.0,
-            "BuyHold_VaR_95": 0.0,
-            "BuyHold_CVaR_95": 0.0,
-            "BuyHold_End_Capital": round(initial_capital, 2),
-            "BuyHold_Profit_TL": 0.0,
-            "BuyHold_Sharpe": 0.0,
-            "Beats_BuyHold_NetReturn": False,
-            "Omega_Ratio": 0.0,
-            "Recovery_Factor": 0.0,
-            "Max_Consecutive_Loss": 0,
-            "Information_Ratio": 0.0,
-            "Risk_Free_Unavailable": bool(risk_free_unavailable),
-            "Risk_Free_Annual_Used": None if risk_free_unavailable else float(risk_free_annual),
-            "Sharpe_Warning": "risk_free_unavailable" if risk_free_unavailable else "",
-        }
+        return _empty_metrics(model_name, initial_capital, risk_free_unavailable, risk_free_annual)
 
     strategy_returns = equity_curve["Net_Return"].to_numpy(dtype=float)
     buy_hold_returns = equity_curve["Realized_Return"].to_numpy(dtype=float)
@@ -221,25 +285,17 @@ def summarize_backtest(
     recovery_factor = _recovery_factor(net_return, max_drawdown)
     max_consec_loss = _max_consecutive_loss(trades)
     information_ratio = _information_ratio(strategy_returns, buy_hold_returns)
-    exposure = float(np.mean(equity_curve["Position"].to_numpy(dtype=float)) * 100.0)
-    active_bars = int(np.sum(equity_curve["Position"].to_numpy(dtype=float) > 0))
-    signal_count = int(np.sum(equity_curve["Signal"].to_numpy(dtype=float) > 0))
-    days_in_market = active_bars
-    if {"Entry_Event", "Exit_Event"}.issubset(equity_curve.columns):
-        turnover = float(equity_curve["Entry_Event"].sum() + equity_curve["Exit_Event"].sum())
-    else:
-        turnover = float(np.sum(np.abs(np.diff(np.concatenate(([0.0], equity_curve["Position"].to_numpy(dtype=float)))))))
-    trade_count = int(len(trades))
-    win_rate = float((trades["Net_Return"] > 0).mean() * 100.0) if not trades.empty else 0.0
-    avg_trade_return = float(trades["Net_Return"].mean()) if not trades.empty else 0.0
-    avg_holding_period = float(trades["Holding_Period"].mean()) if not trades.empty and "Holding_Period" in trades.columns else 0.0
+    exposure, active_bars, signal_count, days_in_market, turnover = _exposure_and_turnover(equity_curve)
+    trade_count, win_rate, avg_trade_return, avg_holding_period = _basic_trade_stats(trades)
     profit_factor, avg_win, avg_loss, expectancy = _trade_quality_metrics(trades)
-    cost_drag = float(equity_curve["Transaction_Cost"].sum()) if "Transaction_Cost" in equity_curve.columns else 0.0
-    commission_drag = float(equity_curve["Commission_Cost"].sum()) if "Commission_Cost" in equity_curve.columns else 0.0
-    slippage_drag = float(equity_curve["Slippage_Cost"].sum()) if "Slippage_Cost" in equity_curve.columns else 0.0
-    entry_cost_drag = float(equity_curve["Entry_Transaction_Cost"].sum()) if "Entry_Transaction_Cost" in equity_curve.columns else 0.0
-    exit_cost_drag = float(equity_curve["Exit_Transaction_Cost"].sum()) if "Exit_Transaction_Cost" in equity_curve.columns else 0.0
-    gross_return = float(np.prod(1.0 + equity_curve["Gross_Return"].to_numpy(dtype=float)) - 1.0) if "Gross_Return" in equity_curve.columns else net_return
+    (
+        cost_drag,
+        commission_drag,
+        slippage_drag,
+        entry_cost_drag,
+        exit_cost_drag,
+        gross_return,
+    ) = _cost_drags(equity_curve, net_return)
     trade_efficiency = _trade_efficiency(net_return, gross_return, cost_drag, max_drawdown)
     end_capital = float(initial_capital * equity[-1])
     buy_hold_end_capital = float(initial_capital * buy_hold_equity[-1])

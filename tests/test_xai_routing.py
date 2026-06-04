@@ -1,19 +1,26 @@
 import numpy as np
 
+from src.pipeline.evaluation_services import EvaluationContext, EvaluationState
 from src.pipeline.metrics_reporter import _MetricsReporterMixin
 
 
 class _StubReporter(_MetricsReporterMixin):
     def __init__(self):
-        self.stock_symbol = "TEST"
-        self.feature_names = ["Close"]
-        self.dataset_metadata = {}
-        self.predictions = {"Model": np.array([1.0, 2.0])}
-        self.prediction_targets = {"Model": np.array([0.01, 0.02])}
-        self.y_true_aligned = np.array([1.1, 2.1])
-        self.quantile_predictions = {}
-        self.latest_backtest_results = {"wf": {"Model": {"ok": True}}}
-        self.xai_dir = "unused"
+        # Faz 3.4 (E1 DI): mixin artik self.ctx (READ-ONLY config) / self.state
+        # (mutable runtime) okur; stub bunlari gercek dataclass'larla kurar.
+        self.ctx = EvaluationContext(
+            stock_symbol="TEST",
+            feature_names=["Close"],
+            dataset_metadata={},
+            xai_dir="unused",
+        )
+        self.state = EvaluationState(
+            predictions={"Model": np.array([1.0, 2.0])},
+            prediction_targets={"Model": np.array([0.01, 0.02])},
+            y_true_aligned=np.array([1.1, 2.1]),
+            quantile_predictions={},
+            latest_backtest_results={"wf": {"Model": {"ok": True}}},
+        )
         self.writes = []
 
     def _write_xai_reports(self, payload, suffix: str) -> None:

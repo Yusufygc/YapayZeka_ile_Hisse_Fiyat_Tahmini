@@ -23,6 +23,7 @@ from src.utils.data_splitter import TimeSeriesSplitter
 
 
 class DataIngestionService(_OwnerBackedService):
+
     def run(self) -> None:
         print("\n" + "=" * 60)
         print("  ADIM 1 | Veri Yükleme & Özellik Mühendisliği (DataManager)")
@@ -50,45 +51,79 @@ class DataIngestionService(_OwnerBackedService):
         self.sector_mapping_report = sector_mapping.to_dict()
 
         # Teknik + makro özellikler (cache destekli)
+        self._engineer_features_cached(raw_df, macro_df, sector_mapping)
+
+        self.survivorship_bias_report = self._check_survivorship_bias()
+
+        self._print_ingestion_summary(macro_df)
+        self._refresh_dataset_metadata()
+
+    def _engineer_features_cached(self, raw_df, macro_df, sector_mapping) -> None:
+        """Teknik + makro özellikleri üretir (FeatureCache destekli) ve self.df,
+        feature_names/groups/pruning/sector raporlarını doldurur.
+
+        Cache hit → kayıtlı frame + metadata; miss → FeaturePipeline çalıştırır ve
+        cache'e yazar. Korelasyon-pruning fit'i final holdout'u hariç tutar
+        (`prune_fit_tail`) — feature-seçim sızıntısı önlemi.
+        """
         feature_cache_dir = os.path.join(self.project_root, "data", "feature_cache")
         _cache = FeatureCache(cache_dir=feature_cache_dir, ttl_hours=24.0)
         _cache_key = _cache.make_key(self.data_cfg.data_file, self.data_cfg)
         _cache_hit = _cache.get(_cache_key)
 
+        macro_expected = bool(self.data_cfg.use_macro)
+        macro_available = macro_df is not None and not macro_df.empty
+
         if _cache_hit is not None:
-            self.df, _meta = _cache_hit
-            self.feature_names = _meta["feature_names"]
-            self.feature_groups = _meta.get("feature_groups", {})
-            self.feature_pruning_report = _meta.get("feature_pruning_report", {})
-            self.sector_mapping_report = _meta.get(
-                "sector_mapping_report",
-                self.sector_mapping_report,
-            )
-            print("  [CACHE] Ozellik muhendisligi cache'den yuklendi.")
+            cached_df, _meta = _cache_hit
+            cached_names = _meta.get("feature_names", [])
+            # Self-heal: makro istendigi halde cache makro-yoksun bir frame iceriyorsa
+            # (gecmiste makro cekimi basarisiz olup degraded sonuc yazilmis olabilir),
+            # cache'i gecersiz say ve asagida yeniden uret. Bu, gecmiste zehirlenmis
+            # cache girdilerinden otomatik kurtulmayi saglar.
+            if macro_expected and not self._has_macro_features(cached_names):
+                _cache._evict(_cache_key)
+            else:
+                self.df = cached_df
+                self.feature_names = _meta["feature_names"]
+                self.feature_groups = _meta.get("feature_groups", {})
+                self.feature_pruning_report = _meta.get("feature_pruning_report", {})
+                self.sector_mapping_report = _meta.get(
+                    "sector_mapping_report",
+                    self.sector_mapping_report,
+                )
+                print("  [CACHE] Ozellik muhendisligi cache'den yuklendi.")
+                return
+
+        feature_pipeline = FeaturePipeline(
+            feature_mode=self.data_cfg.feature_mode,
+            prune_correlated_features=self.data_cfg.prune_correlated_features,
+            correlation_threshold=self.data_cfg.correlation_threshold,
+            lag_feature_count=self.data_cfg.lag_feature_count,
+        )
+        # Leakage onlemi: korelasyon pruning fit'i final holdout'u haric
+        # tutsun (feature-secim sizmasi onlemi). Holdout tail engineered
+        # frame'in sonundan kesilir; pruning de ayni tail'i corr'dan disar.
+        prune_fit_tail = int(
+            getattr(self, "validation_config", {}).get("final_holdout_size", 0) or 0
+        )
+        self.df = feature_pipeline.engineer_features(
+            raw_df,
+            macro_df=macro_df,
+            symbol=self.stock_symbol,
+            sector_mapping=sector_mapping,
+            prune_fit_tail=prune_fit_tail,
+        )
+        self.feature_names = feature_pipeline.feature_names
+        self.feature_groups = feature_pipeline.feature_groups
+        self.feature_pruning_report = feature_pipeline.pruning_report
+        self.sector_mapping_report = feature_pipeline.sector_mapping_report
+        if macro_expected and not macro_available:
+            # Makro istendi fakat alinamadi: degraded (makro-yoksun) frame'i cache'leme.
+            # Aksi halde gecici bir makro cekim hatasi cache'i zehirler ve sonraki
+            # kosular ayni anahtarla makrosuz frame'i geri okur.
+            print("  [CACHE] Makro istendi fakat alinamadi; degraded frame cache'lenmedi.")
         else:
-            feature_pipeline = FeaturePipeline(
-                feature_mode=self.data_cfg.feature_mode,
-                prune_correlated_features=self.data_cfg.prune_correlated_features,
-                correlation_threshold=self.data_cfg.correlation_threshold,
-                lag_feature_count=self.data_cfg.lag_feature_count,
-            )
-            # Leakage onlemi: korelasyon pruning fit'i final holdout'u haric
-            # tutsun (feature-secim sizmasi onlemi). Holdout tail engineered
-            # frame'in sonundan kesilir; pruning de ayni tail'i corr'dan disar.
-            prune_fit_tail = int(
-                getattr(self, "validation_config", {}).get("final_holdout_size", 0) or 0
-            )
-            self.df = feature_pipeline.engineer_features(
-                raw_df,
-                macro_df=macro_df,
-                symbol=self.stock_symbol,
-                sector_mapping=sector_mapping,
-                prune_fit_tail=prune_fit_tail,
-            )
-            self.feature_names = feature_pipeline.feature_names
-            self.feature_groups = feature_pipeline.feature_groups
-            self.feature_pruning_report = feature_pipeline.pruning_report
-            self.sector_mapping_report = feature_pipeline.sector_mapping_report
             _cache.put(
                 _cache_key,
                 self.df,
@@ -100,9 +135,15 @@ class DataIngestionService(_OwnerBackedService):
                 },
             )
 
-        self.survivorship_bias_report = self._check_survivorship_bias()
+    @staticmethod
+    def _has_macro_features(feature_names) -> bool:
+        """feature_names icinde en az bir makro ozellik var mi? (cache self-heal icin)."""
+        macro_names = set(MacroPipeline.macro_feature_names(include_rates=True))
+        return any(name in macro_names for name in (feature_names or []))
 
-        # Özet
+    def _print_ingestion_summary(self, macro_df) -> None:
+        """Veri boyutu, teknik/makro özellik sayıları, kurumsal aksiyon, pruning
+        ve eğitim penceresi özetini yazdırır (yan etkisiz, yalnız print)."""
         has_rel_str = "Relative_Strength" in self.feature_names
         has_sec_str = "Sector_Relative_Strength" in self.feature_names
         macro_base = len(MacroPipeline.macro_feature_names(include_rates=True))
@@ -145,7 +186,6 @@ class DataIngestionService(_OwnerBackedService):
                 f"{self.training_window_report.get('effective_date_end')}, "
                 f"{self.training_window_report.get('history_days')} satir)"
             )
-        self._refresh_dataset_metadata()
 
     def apply_training_window(self, raw_df: pd.DataFrame) -> pd.DataFrame:
         cfg = getattr(self, "data_cfg", self)
@@ -284,6 +324,7 @@ class DataIngestionService(_OwnerBackedService):
 
 
 class TensorPreparationService(_OwnerBackedService):
+
     def build_target_series(self, close_values: np.ndarray) -> np.ndarray:
         self._ensure_config_objects()
         if self.data_cfg.target_mode == "log_return":
@@ -517,6 +558,7 @@ class TensorPreparationService(_OwnerBackedService):
 
 
 class ValidationSplitService(_OwnerBackedService):
+
     def split_data(self, validation_mode: str) -> None:
         self._ensure_config_objects()
         splitter = importlib.import_module("src.pipeline.data_manager").TimeSeriesSplitter
@@ -663,6 +705,7 @@ class ValidationSplitService(_OwnerBackedService):
 
 
 class DataQualityReportingService(_OwnerBackedService):
+
     def check_survivorship_bias(self) -> dict:
         if self.df is None or self.df.empty:
             return {"survivorship_bias_warning": True, "status": "empty_dataset"}

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -20,17 +21,35 @@ _BASELINE_MODELS = {"Naive Last Value", "Naive Zero Return", "Naive Drift"}
 _DATE_AWARE_MODELS = {"Prophet", "Prophet-ML/DL Hybrid"}
 
 
-class _OwnerBackedForecastService:
-    def __init__(self, owner) -> None:
-        self._owner = owner
+@dataclass
+class ForecastContext:
+    """Forecast servisleri için açık READ-ONLY bağımlılık taşıyıcısı (Faz 5 DI).
 
-    def __getattr__(self, name: str):
-        return getattr(self._owner, name)
+    Owner-forward (`_OwnerBackedForecastService.__getattr__`) yerine geçer:
+    config/identity + `ForecastRunner` factory callable'ları + kardeş servis
+    referansları. Kardeş referanslar servisler kurulduktan sonra atanır.
+    """
+
+    project_root: str
+    db: Any
+    rules: Any
+    model_config: Any
+    persistence: Any
+    # ForecastRunner factory callable'ları (model_config'e bağlı; runner'da kalır).
+    make_model_instance: Callable[..., Any]
+    make_prophet: Callable[[list], Any]
+    target_to_price: Callable[[float, float, str], float]
+    # Kardeş servis referansları (servisler kurulduktan sonra runner tarafından bağlanır).
+    model_resolver: Any = None
+    data_preparation_service: Any = None
+    production_training_workflow: Any = None
+    latest_target_prediction_workflow: Any = None
+    forecast_point_generator: Any = None
 
 
-class ForecastSymbolWorkflow(_OwnerBackedForecastService):
-    def __init__(self, owner, result_cls) -> None:
-        super().__init__(owner)
+class ForecastSymbolWorkflow:
+    def __init__(self, ctx: ForecastContext, result_cls) -> None:
+        self.ctx = ctx
         self._result_cls = result_cls
 
     def run(
@@ -63,8 +82,8 @@ class ForecastSymbolWorkflow(_OwnerBackedForecastService):
             Forecast noktaları ve metadata içeren sonuç sözlüğü.
         """
         symbol = symbol.upper()
-        selection = self.model_resolver.resolve(symbol, force_model_name)
-        data_manager = self.data_preparation_service.prepare(
+        selection = self.ctx.model_resolver.resolve(symbol, force_model_name)
+        data_manager = self.ctx.data_preparation_service.prepare(
             symbol=symbol,
             data_file=data_file,
             target_mode=selection["target_mode"],
@@ -81,27 +100,27 @@ class ForecastSymbolWorkflow(_OwnerBackedForecastService):
                 data_manager=data_manager,
                 horizon_days=horizon_days,
             )
-        model, forecast_context = self.production_training_workflow.train(
+        model, forecast_context = self.ctx.production_training_workflow.train(
             selection["model_name"],
             data_manager,
             selection=selection,
         )
-        points = self.forecast_point_generator.roll_forward_recursive(
+        points = self.ctx.forecast_point_generator.roll_forward_recursive(
             model_name=selection["model_name"],
             model=model,
             context=forecast_context,
-            predictor=self.latest_target_prediction_workflow,
+            predictor=self.ctx.latest_target_prediction_workflow,
             horizon_days=horizon_days,
         )
         weekly_expected_return = (
             points[-1]["bounded_predicted_close"] / forecast_context["last_close"]
         ) - 1.0
-        trend_threshold = self.rules.trend_threshold(
+        trend_threshold = self.ctx.rules.trend_threshold(
             data_manager.df["Close"].tail(80).to_numpy(dtype=float),
             horizon_days=horizon_days,
         )
-        trend_label = self.rules.trend_label(weekly_expected_return, trend_threshold)
-        run_id = self.persistence.save_run(
+        trend_label = self.ctx.rules.trend_label(weekly_expected_return, trend_threshold)
+        run_id = self.ctx.persistence.save_run(
             stock_symbol=symbol,
             model_name=selection["model_name"],
             source_experiment_id=selection["source_experiment_id"],
@@ -147,7 +166,7 @@ class ForecastSymbolWorkflow(_OwnerBackedForecastService):
         member_points: Dict[str, list[dict[str, Any]]] = {}
         source_ids: list[int] = []
         for member in members:
-            member_exp = self.model_resolver.latest_member_experiment(symbol, member)
+            member_exp = self.ctx.model_resolver.latest_member_experiment(symbol, member)
             if member_exp is None:
                 raise ForecastArtifactError(
                     f"Ensemble member artifact experiment bulunamadi: {member}"
@@ -162,20 +181,20 @@ class ForecastSymbolWorkflow(_OwnerBackedForecastService):
                 "model_path": member_exp.get("model_path", ""),
                 "dataset_hash": member_exp.get("dataset_hash"),
             }
-            model, context = self.production_training_workflow.train(
+            model, context = self.ctx.production_training_workflow.train(
                 member,
                 data_manager,
                 selection=member_selection,
             )
-            member_points[member] = self.forecast_point_generator.roll_forward_recursive(
+            member_points[member] = self.ctx.forecast_point_generator.roll_forward_recursive(
                 model_name=member,
                 model=model,
                 context=context,
-                predictor=self.latest_target_prediction_workflow,
+                predictor=self.ctx.latest_target_prediction_workflow,
                 horizon_days=horizon_days,
             )
 
-        points = self.forecast_point_generator.combine_member_points(
+        points = self.ctx.forecast_point_generator.combine_member_points(
             member_points=member_points,
             weights=weights,
             method=method,
@@ -184,15 +203,15 @@ class ForecastSymbolWorkflow(_OwnerBackedForecastService):
         )
         last_close = float(data_manager.df["Close"].iloc[-1])
         weekly_expected_return = (points[-1]["bounded_predicted_close"] / last_close) - 1.0
-        trend_threshold = self.rules.trend_threshold(
+        trend_threshold = self.ctx.rules.trend_threshold(
             data_manager.df["Close"].tail(80).to_numpy(dtype=float),
             horizon_days=horizon_days,
         )
-        trend_label = self.rules.trend_label(weekly_expected_return, trend_threshold)
-        agreement = self.forecast_point_generator.member_direction_agreement(member_points)
+        trend_label = self.ctx.rules.trend_label(weekly_expected_return, trend_threshold)
+        agreement = self.ctx.forecast_point_generator.member_direction_agreement(member_points)
         metadata = dict(metadata)
         metadata["source_experiment_ids"] = source_ids
-        run_id = self.persistence.save_run(
+        run_id = self.ctx.persistence.save_run(
             stock_symbol=symbol,
             model_name=selection["model_name"],
             source_experiment_id=selection["source_experiment_id"],
@@ -223,21 +242,49 @@ class ForecastSymbolWorkflow(_OwnerBackedForecastService):
         )
 
 
-class BestModelResolver(_OwnerBackedForecastService):
+class BestModelResolver:
+    def __init__(self, ctx: ForecastContext) -> None:
+        self.ctx = ctx
+
     def resolve(self, symbol: str, force_model_name: str | None = None) -> Dict[str, Any]:
         """Forecast için kullanılacak model + mod (target/feature/scaling) seçimini döner.
 
         `force_model_name` verilmezse kayıtlı best model kullanılır.
         """
-        best = self.db.get_best_model(symbol)
+        best = self.ctx.db.get_best_model(symbol)
         if force_model_name:
+            # Once zorlanan modele ait, artifact dosyasi diskte mevcut olan en guncel
+            # deneyi ara. Bulunursa forecast dogrudan o artifact'i yukler (model_path
+            # dolu) ve egitim konfigurasyonu (target/feature/scaling/dataset_hash) o
+            # deneyden gelir. Aksi halde eski davranis korunur: best metadata ile devam
+            # edilir, model_path bos kalir (artifact'i olmayan model zorlanmissa cagiran
+            # taraf net hata verir).
+            member = self.latest_member_experiment(symbol, force_model_name)
+            if member is not None:
+                return {
+                    "model_name": force_model_name,
+                    "source_experiment_id": member.get("id"),
+                    "target_mode": member.get("target_mode", "log_return"),
+                    "feature_mode": member.get(
+                        "feature_mode",
+                        self.ctx.model_config.model_settings.get(
+                            "feature_mode", "stationary_features"
+                        ),
+                    ),
+                    "scaling_mode": member.get(
+                        "scaling_mode", "robust_x_standard_y_clip"
+                    ),
+                    "model_path": member.get("model_path", ""),
+                    "dataset_hash": member.get("dataset_hash"),
+                    "ensemble_metadata": None,
+                }
             return {
                 "model_name": force_model_name,
                 "source_experiment_id": None if best is None else best.get("experiment_id"),
                 "target_mode": (
                     "log_return" if best is None else best.get("target_mode", "log_return")
                 ),
-                "feature_mode": self.model_config.model_settings.get(
+                "feature_mode": self.ctx.model_config.model_settings.get(
                     "feature_mode", "stationary_features"
                 ),
                 "scaling_mode": (
@@ -265,7 +312,7 @@ class BestModelResolver(_OwnerBackedForecastService):
             "ensemble_metadata": self._parse_ensemble_metadata(best.get("ensemble_metadata_json")),
         }
         if model_name in _BASELINE_MODELS:
-            replacement = self._best_trainable_experiment(symbol)
+            replacement = self.best_trainable_experiment(symbol)
             if replacement is None:
                 raise ValueError(
                     f"{symbol} icin baseline/ensemble disinda train edilebilir model bulunamadi. "
@@ -300,7 +347,7 @@ class BestModelResolver(_OwnerBackedForecastService):
 
     def best_trainable_experiment(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Ensemble/baseline dışı, en yüksek composite_score'lu deneyi döner (yoksa None)."""
-        rows = self.db.get_experiments(stock_symbol=symbol, limit=500)
+        rows = self.ctx.db.get_experiments(stock_symbol=symbol, limit=500)
         candidates = [
             row
             for row in rows
@@ -315,7 +362,7 @@ class BestModelResolver(_OwnerBackedForecastService):
 
     def latest_member_experiment(self, symbol: str, model_name: str) -> Optional[Dict[str, Any]]:
         """Model adı için artifact dosyası mevcut olan en güncel deneyi döner (yoksa None)."""
-        rows = self.db.get_experiments(stock_symbol=symbol, model_name=model_name, limit=100)
+        rows = self.ctx.db.get_experiments(stock_symbol=symbol, model_name=model_name, limit=100)
         candidates = [
             row
             for row in rows
@@ -326,7 +373,10 @@ class BestModelResolver(_OwnerBackedForecastService):
         return max(candidates, key=lambda row: str(row.get("trained_at") or ""))
 
 
-class ForecastDataPreparationService(_OwnerBackedForecastService):
+class ForecastDataPreparationService:
+    def __init__(self, ctx: ForecastContext) -> None:
+        self.ctx = ctx
+
     def prepare(
         self,
         *,
@@ -357,8 +407,8 @@ class ForecastDataPreparationService(_OwnerBackedForecastService):
         data_manager = DataManager(
             data_cfg=data_cfg,
             val_cfg=ValidationConfig(validation_mode="single_split"),
-            models_dir=os.path.join(self.project_root, "outputs", symbol, "forecast_models"),
-            macro_cache_dir=os.path.join(self.project_root, "data", "macro"),
+            models_dir=os.path.join(self.ctx.project_root, "outputs", symbol, "forecast_models"),
+            macro_cache_dir=os.path.join(self.ctx.project_root, "data", "macro"),
         )
         data_manager.ingest_and_engineer()
         if data_manager.df is None or data_manager.df.empty:
@@ -366,7 +416,10 @@ class ForecastDataPreparationService(_OwnerBackedForecastService):
         return data_manager
 
 
-class ProductionTrainingWorkflow(_OwnerBackedForecastService):
+class ProductionTrainingWorkflow:
+    def __init__(self, ctx: ForecastContext) -> None:
+        self.ctx = ctx
+
     def train(
         self,
         model_name: str,
@@ -391,7 +444,7 @@ class ProductionTrainingWorkflow(_OwnerBackedForecastService):
         artifact = load_forecast_artifact_package(
             model_name=model_name,
             model_path=self._resolve_model_path(str(selection.get("model_path") or "")),
-            model_factory=lambda name: self._make_model_instance(name, stage="final"),
+            model_factory=lambda name: self.ctx.make_model_instance(name, stage="final"),
         )
         features = list(artifact.metadata.get("feature_names") or data_manager.feature_names)
         missing = [feature for feature in features if feature not in frame.columns]
@@ -436,7 +489,7 @@ class ProductionTrainingWorkflow(_OwnerBackedForecastService):
     def _resolve_model_path(self, model_path: str) -> str:
         if not model_path or os.path.isabs(model_path):
             return model_path
-        return os.path.join(self.project_root, model_path)
+        return os.path.join(self.ctx.project_root, model_path)
 
     @staticmethod
     def _clean_training_frame(data_manager: DataManager) -> pd.DataFrame:
@@ -477,18 +530,18 @@ class ProductionTrainingWorkflow(_OwnerBackedForecastService):
         scaler_X,
     ):
         if model_name == "Prophet":
-            model = self._make_prophet(data_manager.feature_names)
+            model = self.ctx.make_prophet(data_manager.feature_names)
             model.train(X_train, y_train, dates_train=frame["Date"].iloc[:-1])
             return model, None
         if model_name in _TREE_MODELS:
-            model = self._make_model_instance(model_name)
+            model = self.ctx.make_model_instance(model_name)
             model.train(X_train_s, y_train_s)
             return model, None
         if model_name in _SEQ_MODELS:
             return self._fit_sequence_model(
                 model_name, data_manager, X_all, X_train_s, y_train_s, scaler_X
             )
-        model = self._make_model_instance(model_name)
+        model = self.ctx.make_model_instance(model_name)
         model.train(X_train, y_train, dates_train=frame["Date"].iloc[:-1])
         return model, None
 
@@ -504,7 +557,7 @@ class ProductionTrainingWorkflow(_OwnerBackedForecastService):
         )
         if len(X_train_seq) == 0:
             raise ValueError(f"{model_name} icin sequence sayisi yetersiz.")
-        model = self._make_model_instance(model_name, stage="final")
+        model = self.ctx.make_model_instance(model_name, stage="final")
         model.train(X_train_seq, y_train_seq)
         latest_seq = X_all_s[-data_manager.data_cfg.time_steps :].reshape(
             1,
@@ -514,7 +567,10 @@ class ProductionTrainingWorkflow(_OwnerBackedForecastService):
         return model, latest_seq
 
 
-class LatestTargetPredictionWorkflow(_OwnerBackedForecastService):
+class LatestTargetPredictionWorkflow:
+    def __init__(self, ctx: ForecastContext) -> None:
+        self.ctx = ctx
+
     def predict(self, model_name: str, model: Any, context: Dict[str, Any]) -> float:
         """En son gözlem penceresinden tek-adım hedef tahmini üretir.
 
@@ -587,7 +643,10 @@ class LatestTargetPredictionWorkflow(_OwnerBackedForecastService):
         return {float(q): float(v) for q, v in zip(model_qs, last_row)}
 
 
-class ForecastPointGenerator(_OwnerBackedForecastService):
+class ForecastPointGenerator:
+    def __init__(self, ctx: ForecastContext) -> None:
+        self.ctx = ctx
+
     def combine_member_points(
         self,
         *,
@@ -605,7 +664,7 @@ class ForecastPointGenerator(_OwnerBackedForecastService):
         names = list(member_points)
         normalized = self._normalized_weights(names, weights)
         horizon = min(len(points) for points in member_points.values())
-        dates = self.rules.next_trading_days(last_observed_date, horizon)
+        dates = self.ctx.rules.next_trading_days(last_observed_date, horizon)
         previous_close = float(last_close)
         combined: list[dict[str, Any]] = []
         for idx in range(horizon):
@@ -619,7 +678,7 @@ class ForecastPointGenerator(_OwnerBackedForecastService):
                 agreement = max((signs > 0).sum(), (signs < 0).sum()) / float(len(signs))
                 if agreement < 0.6:
                     weighted_close = previous_close
-            bounded_close, band = self.rules.bound_forecast_price(weighted_close, previous_close)
+            bounded_close, band = self.ctx.rules.bound_forecast_price(weighted_close, previous_close)
             combined.append(
                 {
                     "target_date": dates[idx].strftime("%Y-%m-%d"),
@@ -683,7 +742,7 @@ class ForecastPointGenerator(_OwnerBackedForecastService):
         Returns:
             Horizon boyunca tarih/fiyat/getiri nokta sözlüklerinin listesi.
         """
-        dates = self.rules.next_trading_days(context["last_observed_date"], horizon_days)
+        dates = self.ctx.rules.next_trading_days(context["last_observed_date"], horizon_days)
         frame = context["feature_frame"].copy()
         points: list[dict[str, Any]] = []
         previous_close = float(context["last_close"])
@@ -691,12 +750,12 @@ class ForecastPointGenerator(_OwnerBackedForecastService):
         for idx, target_date in enumerate(dates, start=1):
             self._refresh_latest_context(context, frame, model_name)
             predicted_target = predictor.predict(model_name, model, context)
-            raw_close = self._target_to_price(
+            raw_close = self.ctx.target_to_price(
                 predicted_target,
                 previous_close,
                 target_mode,
             )
-            bounded_close, band = self.rules.bound_forecast_price(raw_close, previous_close)
+            bounded_close, band = self.ctx.rules.bound_forecast_price(raw_close, previous_close)
             predicted_return = (bounded_close / previous_close) - 1.0
             point: dict[str, Any] = {
                 "target_date": target_date.strftime("%Y-%m-%d"),
@@ -715,8 +774,8 @@ class ForecastPointGenerator(_OwnerBackedForecastService):
                 quantile_close: dict[str, float] = {}
                 quantile_returns: dict[str, float] = {}
                 for q, qval in quantile_targets.items():
-                    qc = self._target_to_price(float(qval), previous_close, target_mode)
-                    bounded_qc, _ = self.rules.bound_forecast_price(qc, previous_close)
+                    qc = self.ctx.target_to_price(float(qval), previous_close, target_mode)
+                    bounded_qc, _ = self.ctx.rules.bound_forecast_price(qc, previous_close)
                     label = f"p{int(round(q * 100))}"
                     quantile_close[label] = float(bounded_qc)
                     quantile_returns[label] = (
@@ -857,12 +916,12 @@ class ForecastPointGenerator(_OwnerBackedForecastService):
         Returns:
             Horizon boyunca tarih/fiyat/getiri nokta sözlüklerinin listesi.
         """
-        dates = self.rules.next_trading_days(last_observed_date, horizon_days)
+        dates = self.ctx.rules.next_trading_days(last_observed_date, horizon_days)
         points: list[dict[str, Any]] = []
         previous_close = float(last_close)
         for idx, target_date in enumerate(dates, start=1):
-            raw_close = self._target_to_price(predicted_target, previous_close, target_mode)
-            bounded_close, band = self.rules.bound_forecast_price(raw_close, previous_close)
+            raw_close = self.ctx.target_to_price(predicted_target, previous_close, target_mode)
+            bounded_close, band = self.ctx.rules.bound_forecast_price(raw_close, previous_close)
             predicted_return = (bounded_close / previous_close) - 1.0
             points.append(
                 {

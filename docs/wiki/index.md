@@ -2,7 +2,7 @@
 title: Wiki Index
 type: index
 status: active
-last_updated: 2026-05-25
+last_updated: 2026-06-01
 owner: llm
 ---
 
@@ -31,6 +31,8 @@ linked pages below.
 - [Staged Code Review Guide](code-review-stages.md): Project split into 8 dependency-ordered stages for staged code review; per-stage files, checklist, tests, and dependency notes.
 - [Code Quality and Refactoring](code-quality-and-refactoring.md): Code thresholds, file/class size limits, input validation guidelines, error handling, and datetime policy.
 - [Code Quality Audit (2026-05-31)](code-quality-audit.md): God-object/SOLID/DRY findings, bloated file/function metrics, and the phased docstring/comment plan.
+- [Staged Refactor Plan (2026-05-31)](refactor-plan.md): Per-stage god-object/complexity/SOLID-KISS-DRY findings mapped to the 8 review stages, behavior-preserving refactor actions, cross-cutting epics (owner-forward removal, DRY, god constructors), and risk-tiered execution order.
+- [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md): Tier 3'un kalan kismi — owner-forward magic'i tamamen kaldirip servisleri `EvaluationContext`/`EvaluationState` DI'ya cevirme; karakterizasyon testi stratejisi + 7 fazli plan. Dal: `refactor/e1-owner-forward-di`.
 - [Product Decision Support Design](product-decision-support-design.md): Desktop AI decision-support product boundary, target architecture, MVP scope, and phase roadmap.
 - [Analysis API Contract](analysis-api-contract.md): `GET /analysis/{symbol}` response schema, status codes, and confidence label definition.
 - [Confidence and Risk Policy](confidence-and-risk-policy.md): Confidence label derivation rules, signal-diagnosis mapping, eligibility status, and data-quality gates.
@@ -42,6 +44,25 @@ linked pages below.
 - The active orchestration facade is `ForecastingPipeline` in `src/pipeline/orchestrator.py`.
 - Main orchestration responsibilities are split across `DataManager`, `ModelTrainer`, and `EvaluationManager`.
 - Evaluation logic is now service-composed via `PredictionService`, `BacktestService`, `SignalCalibrationService`, and `MetricsReportingService`.
+- **Owner-forward removal (E1 epic, ✅ CLOSED 2026-06-01 on `refactor/e1-owner-forward-di`):**
+  all four evaluation services (`PredictionService`, `BacktestService`,
+  `SignalCalibrationService`, `MetricsReportingService`) were converted from
+  `_OwnerBackedService` (`__getattr__`/`__setattr__` forwarding) to explicit
+  `(ctx, state)` dependency injection (`EvaluationContext` read-only config +
+  `EvaluationState` mutable runtime). Faz 4 trimmed `EvaluationManager` to a
+  thinner orchestrator (deleted 10 dead delegations, 1035 → 979 lines). Faz 5
+  moved `ForecastRunner` to `ForecastContext` DI and **deleted**
+  `_OwnerBackedForecastService`. Faz 6 made the 4 `DataManager` services
+  fail-loud. Faz 7 (cleanup) deleted the temporary
+  `tools/owner_forward_inventory.py` and updated docs. The `_OwnerBackedService`
+  base is **intentionally retained**: it still backs 3 evaluation workflows, 3
+  training workflows, and the 4 `DataManager` services — all read+write shared
+  owner state (the service↔workflow integration contract). Converting those 10
+  classes to DI to fully delete the base is deferred to a **future epic (E1.x)**
+  per epic §1/§8 (high-regression-risk, training out of scope). All forwarded
+  writes are now fail-loud against typos; behavior unchanged, locked by golden
+  tests in `tests/test_owner_forward_contract.py`.
+  See [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md).
 - The default production candidate set is defined in `src/pipeline/model_scope.py`
   and the model registry; in the current source tree `TFT` is not registered and
   `src/models/tft_v2/` is absent.

@@ -256,6 +256,31 @@ class DataManager:
                 "wf_embargo_size": effective_wf_embargo_size,
                 "final_holdout_size": self.val_cfg.final_holdout_size,
             }
+        # Faz 6 (E1 owner-forward epiği): owner mutable runtime state'ini pre-init et.
+        # Üretim yolu (__init__) bu alanları zaten kurar; __new__ ile kurulan legacy
+        # test objelerinde eksik kaldıklarında owner-forward yazımları (DataManager
+        # servisleri) sessizce yeni attribute yaratırdı. Servislerdeki `_FAIL_LOUD`
+        # opt-out'u kaldırmadan önce burada hardening yapılır: her forward-write hedefi
+        # önceden var olur (hasattr-guard, test'in set ettiği değerleri ezmez).
+        state_defaults = {
+            "df": None,
+            "feature_names": [],
+            "tensors": {},
+            "wf_splits": [],
+            "selection_df": None,
+            "final_holdout_df": None,
+            "dataset_metadata": {},
+            "dataset_hash": "N/A",
+            "corporate_action_report": {},
+            "feature_groups": {},
+            "feature_pruning_report": {},
+            "sector_mapping_report": {},
+            "survivorship_bias_report": {},
+            "training_window_report": {},
+        }
+        for attr, default in state_defaults.items():
+            if not hasattr(self, attr):
+                setattr(self, attr, default)
 
     # ── Veri Yükleme & Özellik Mühendisliği ──────────────────────────────────
     def ingest_and_engineer(self) -> None:

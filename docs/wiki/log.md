@@ -1,3 +1,370 @@
+## [2026-06-02] Bugfix | run_id model slug MAX_PATH tasmasi (ALL_MODELS etiketi)
+
+EREGL'i tum modellerle (`--role candidate`, 14 model) egitince batch "1 hata" verdi:
+egitim + DB tamam ama son `model_result_exporter.export_walk_forward_results` adimi
+`FileNotFoundError [Errno 2]` ile coktu; run_all final-holdout + best-model secimine
+gecemeden abort oldu (`best_models` eski RF kaydinda kaldi).
+
+- **Kok neden:** Windows `MAX_PATH` (260). `_model_slug_for_run_id` 4+ model icin
+  `models-<A>-<B>-<C>-plusN-<sha8>` uretiyordu; uzun model adlariyla run klasor adi ~88
+  karakter -> per-model export yolu (`.../model_results/naive_last_value/metrics_walk_forward.json`)
+  267 karaktere ciktigi icin `open()` patladi (dizin 241'de makedirs gecmisti).
+- **Fix (`src/pipeline/orchestrator.py`):** (a) secim tum candidate setini kapsiyorsa
+  run_id slug = `ALL_MODELS`; (b) 4+ kismi liste -> gorunur isimler atilir,
+  `models<N>-<sha8>` kalir. Yeni `_covers_all_candidates` yardimcisi candidate kapsamini
+  kontrol eder. Tam yol ~210 (<260).
+- **Test:** `tests/test_run_id_naming.py` guncellendi (uzun-slug artik `models6-<hash>`,
+  yeni `ALL_MODELS` testi). Tam suite yesil (`.codex_tmp` kilidi disinda; temiz basetemp'le 42/42).
+- Davranis: yalniz run klasor *adi* degisti; per-model alt klasor yapisi
+  (`runs/<id>/model_results/<slug>/`) ayni.
+
+## [2026-06-02] Bugfix | Macro feature-cache zehirlenmesi + forced --model bos model_path
+
+E1 manuel testinde (EREGL forecast smoke) yuzeye cikan iki bagimsiz, E1-disi bug
+duzeltildi. Davranis-koruyan, her biri kendi testiyle kilitli.
+
+- **Bug 1 (macro -> feature-cache poisoning):** `macro_pipeline.py` runtime print'lerindeki
+  `→` karakteri Windows cp1252 stdout'a yazilirken `UnicodeEncodeError` firlatiyor;
+  `DataIngestionService._fetch_macro` bunu yutup bos df donuyor -> makrosuz frame
+  `use_macro=True` cache anahtari altina yaziliyor -> sonraki saglikli kosular cache
+  hit'te makrosuz frame aliyor. Fix: (1a) `→` -> `->` (macro prints); (1b)
+  `_engineer_features_cached`'e write-guard (makro istendi ama yoksa degraded frame
+  cache'lenmez) + read-side self-heal (`_has_macro_features` ile makro-yoksun zehirli
+  kayit evict edilir). Test: `tests/test_data_services.py` (2 yeni).
+- **Bug 2 (forced --model bos model_path):** `BestModelResolver.resolve(force_model_name)`
+  `model_path` dondurmuyordu -> `ProductionTrainingWorkflow.train` bos path'le artifact
+  yuklemeye calisip `artifact model file not found` firlatiyordu. Fix: force branch artik
+  `latest_member_experiment` ile artifact'i diskte mevcut en guncel deneyi bulup
+  `model_path` + egitim config'ini doldurur; artifact yoksa eski best-metadata fallback'i
+  korunur (geriye uyumlu, mevcut test gecer). Test: `tests/test_forecast_workflows.py` (1 yeni).
+- Canli dogrulama: forced LightGBM forecast green (run_id=108); cache temiz + `--use-macro`
+  (PYTHONUTF8 olmadan) RF forecast green (run_id=107) -> macro artik dusmuyor.
+- Tam suite **564 passed** (+3 yeni test). Guncellenen wiki: data-pipeline.md (cache guard),
+  persistence-and-api.md (forced --model), log.md.
+
+## [2026-06-01] Refactor (E1 Faz 7) | Temizlik & dokumantasyon — E1 EPIGI KAPANDI
+
+- Gecici AST envanter script'i tools/owner_forward_inventory.py silindi (hic commit
+  edilmemisti; untracked diskten kaldirildi).
+- Kod gercegi dogrulandi (kod > wiki): `_OwnerBackedForecastService` zaten Faz 5'te
+  silinmis. `_OwnerBackedService` ise CANLI — 3 eval workflow + 3 training workflow +
+  4 DataManager servisi miras aliyor, hepsi paylasilan owner state'i okur+yazar
+  (servis<->workflow entegrasyon sozlesmesi).
+- Epic'in orijinal "taban silindi" kabul kriteri REVIZE edildi: tabani silmek = bu 10
+  sinifi DI'ya cevirmek; epic §1 "big-bang yuksek risk" + §8 training kapsam-disi →
+  ayri gelecek epik (E1.x) olarak isaretlendi. Taban bilincli korundu; tum forward
+  yazimlar fail-loud (Faz 6).
+- Kod davranisi DEGISMEDI (sadece temp script + doc). Tam suite 561 passed, golden sabit.
+- Guncellenen wiki: architecture.md (E1 closed + gerekce), refactor-plan.md (E1 KAPANDI),
+  e1-owner-forward-epic.md (frontmatter status: done, §6 revize, Durum Faz 7),
+  index.md (durum), log.md.
+
+## [2026-06-01] Refactor (E1 Faz 6) | DataManager servisleri fail-loud guard'a alindi
+
+- 4 DataManager owner-forward servisinden (DataIngestionService,
+  TensorPreparationService, ValidationSplitService, DataQualityReportingService)
+  `_FAIL_LOUD = False` opt-out kaldirildi; artik ortak `_OwnerBackedService`
+  varsayilani (`_FAIL_LOUD = True`) gecerli — bilinmeyen owner attribute'una
+  forward yazim sessizce yaratmak yerine AttributeError firlatir.
+- Hardening: tum mutable runtime state `__init__`'te zaten pre-init; `__new__` ile
+  kurulan legacy test objeleri icin `_ensure_config_objects`'e mutable state
+  pre-init blogu eklendi (df, feature_names, tensors, wf_splits, selection_df,
+  final_holdout_df, dataset_metadata, dataset_hash, *_report; hasattr-guard).
+- `_OwnerBackedService` docstring/yorum guncellendi (DataManager artik hardened).
+- Davranis degismez. Tam suite 561 passed. Commit d4f9297. Kalan owner-forward:
+  yalniz `_OwnerBackedService` base + tukettigi evaluation/training workflow +
+  DataManager servis aileleri (taban kaldirma Faz 7'de degerlendirilir).
+- Guncellenen wiki: e1-owner-forward-epic.md (Durum), index.md (durum), log.md.
+
+## [2026-06-01] Refactor (E1 Faz 5) | ForecastRunner owner-forward'dan DI'ya (ForecastContext)
+
+- `_OwnerBackedForecastService` base sinifi silindi (read-only __getattr__ forward).
+- Yeni ForecastContext dataclass (forecasting/workflows.py): config (project_root,
+  db, rules, model_config, persistence) + factory callable'lari (make_model_instance,
+  make_prophet, target_to_price) + 5 kardes servis referansi.
+- 6 forecast servisi ctor'da (ctx) alir; govde self.X -> self.ctx.X. BestModelResolver
+  owner hop'u kendi metoduna indirildi (self.best_trainable_experiment).
+- ForecastRunner._init_workflows ctx kurar + kardes referanslari baglar; runner
+  test/public yuzeyi korundu. Stub-owner testlerine dokunulmadi.
+- Tam suite 561 passed, forecast golden degismedi. Commit 0806c11. Kalan owner-forward:
+  yalniz evaluation _OwnerBackedService (Faz 7). Sonraki: Faz 6 (DataManager guard).
+- Guncellenen wiki: e1-owner-forward-epic.md (Durum), index.md (durum), log.md.
+
+## [2026-06-01] Refactor (E1 Faz 4) | EvaluationManager ince orkestrator - olu delegasyonlar silindi
+
+- `EvaluationManager`'dan hicbir yerden cagrilmayan 10 olu servis delegasyonu
+  silindi (workflow/src/test = 0 referans; davranis degismez): _save_selected_models_plot,
+  _diagnostic_numeric, _diagnostic_float, _count_decision, _payload_expected_return,
+  _write_signal_gate_diagnostics, _write_shadow_backtest_reports, _signal_calibration_sort_key,
+  _write_signal_calibration_reports, _get_signal_calibration_decision_md.
+- Mixin ici self.X cagrilari ilgili servisin kendi metoduna cozuluyordu; manager
+  delegasyonu kullanilmiyordu. _filter_backtest_inputs_by_folds korundu (manager
+  _split_walk_forward_signal_sets dahili kullanir). Workflow forward (wf=1) ve
+  test-erisimli delegasyonlara dokunulmadi.
+- EvaluationManager 1035 -> 979 satir. Tam suite 561 passed, golden degismedi.
+  Commit 6d142ff. Sonraki: Faz 5 (ForecastRunner DI).
+- Guncellenen wiki: e1-owner-forward-epic.md (Durum), index.md (durum), log.md.
+
+## [2026-06-01] Refactor (E1 Faz 3.4) | MetricsReportingService owner-forward'dan DI'ya
+
+- `MetricsReportingService` `_OwnerBackedService` mirasindan `(ctx, state)` DI'ya
+  cevrildi (Faz 3 servis #4/4 — son servis). `_MetricsReporterMixin` govdesi
+  self.ctx.X (config: dataset_metadata, commission/slippage_bps, stock_symbol,
+  feature_names, xai_dir, write_xai_tables, write_markdown_reports) / self.state.X
+  (mutable: predictions, prediction_targets, quantile_predictions, y_true_aligned,
+  ensemble_weights, latest_backtest_results) kullanir.
+- `EvaluationContext`'e 2 XAI-yazim flag eklendi (write_xai_tables=False,
+  write_markdown_reports=True; default'lar eski getattr fallback'leriyle esit).
+  Manager'da 2 yeni context-backed property.
+- `tests/test_xai_routing.py` `_StubReporter` DI sekline (ctx/state) guncellendi.
+- 4 evaluation servisinin tamami artik DI. `_OwnerBackedService` yalnizca
+  workflow + `DataManager` servisleri tarafindan kullaniliyor (Faz 7 temizligi).
+- Davranis degismedi: golden (12) sabit, tam suite **561 passed**. Commit `398c82f`.
+- Guncellenen sayfalar: `e1-owner-forward-epic.md` (Durum Faz 3.4), `architecture.md`
+  (migration status), `index.md` (DI durum maddesi).
+
+## [2026-06-01] Refactor (E1 Faz 3.3) | SignalCalibrationService owner-forward'dan DI'ya
+
+- `SignalCalibrationService` `_OwnerBackedService` mirasindan `(ctx, state)` DI'ya
+  cevrildi (Faz 3 servis #3/4). `_SignalCalibratorMixin` govdesi self.ctx.X
+  (READ-ONLY config) / self.state.X (mutable runtime) kullanir.
+- `EvaluationContext`'e mixin + `signal_calibration/grid.apply_trial_policy`'nin
+  okudugu 9 exe_cfg flag eklendi (calibration_scope, require_oos_confirmation,
+  min_eval_excess_return/sharpe, objective, profile, sampler, seed, max_trials);
+  default'lar eski getattr fallback'leriyle birebir esit. `apply_trial_policy`
+  artik `self.ctx` alir. Manager'da 9 yeni context-backed property.
+- Davranis degismedi: golden karakterizasyon testleri (12) degismeden, tam suite
+  **561 passed**. Commit'lendi. Kalan: Faz 3.4 (MetricsReportingService).
+- Guncellenen sayfalar: `e1-owner-forward-epic.md` (Durum Faz 3.3), `architecture.md`
+  (migration status), `index.md` (DI durum maddesi).
+
+## [2026-06-01] Wiki bakim | E1 ilerlemesi tum sayfalara yansitildi
+
+- Kullanici istegi uzerine tum wiki tam kontrol edildi; E1 owner-forward
+  ilerlemesi (Faz 3.1/3.2 DI'ya gecti) bayat kalan sayfalara islendi.
+  `graphify`'a dokunulmadi.
+- `architecture.md`: "Evaluation Services: Owner-Forward -> Explicit DI (E1 epic,
+  in progress)" alt-bolumu eklendi; eski "owner-backed servisler" anlatimi guncel
+  duruma baglandi (Prediction/Backtest DI, Signal/Metrics hala owner-backed).
+  `last_updated` 2026-06-01; Related Pages'e epik linki.
+- `index.md`: Current Project State'e E1 DI gecis durumu maddesi + epik cross-link;
+  `last_updated` 2026-06-01.
+- `refactor-plan.md`: "Hala acik" maddesi "Ilerlemede" olarak guncellendi (Faz 0-3.2
+  tamam, kalan fazlar listelendi), epik cross-link; `last_updated` 2026-06-01.
+- `code-quality-audit.md`: B1 bulgusuna ileri-isaret notu (snapshot korundu,
+  aksiyon E1 epiginde yuruyor).
+- `e1-owner-forward-epic.md`: temel ilkedeki stale "549 test" -> "epik basinda 549,
+  guncelde 561".
+
+## [2026-06-01] Faz 3.2 | E1 owner-forward: BacktestService DI'ya gecti
+
+- **Faz 3 servis #2 tamamlandi** (`refactor/e1-owner-forward-di`). `BacktestService`
+  artik `_OwnerBackedService`'ten MIRAS ALMIYOR; ctor `(ctx, state)` DI alir.
+- `src/pipeline/backtest_runner.py` (`_BacktestRunnerMixin`): owner-forward erisimleri
+  acik hale getirildi — READ-ONLY `self.ctx.X` (commission_bps, slippage_bps,
+  initial_capital, backtest_enabled, signal_mode, dataset_metadata, outputs_dir,
+  stock_symbol + 6 yeni exe_cfg flag), mutable `self.state.X` (signal_config,
+  signal_threshold_source, latest_backtest_results, latest_backtest_metrics). Tum
+  defensive `getattr(self, "...")` formlari kaldirildi.
+- `src/pipeline/evaluation_services.py`: `EvaluationContext`'e BacktestService'in
+  okudugu 6 exe_cfg flag eklendi (READ-ONLY): `write_trade_logs`,
+  `signal_calibration_min_trades`, `signal_calibration_reject_behavior`,
+  `auto_signal_diagnostics`, `enable_gate_diagnostics`, `enable_shadow_backtests`.
+  Default'lar eski getattr fallback'leriyle birebir ayni (davranis korunur).
+- `src/pipeline/evaluation_manager.py`: bu 6 flag context-backed property'ye cevrildi
+  (`_init_execution_attrs`'taki mevcut atamalar setter uzerinden context'e akar);
+  `_init_services` `BacktestService(self.context, self.state)` enjekte ediyor
+  (kalan 2 servis hala owner-backed).
+- Tam suite **561 passed**, golden'lar degismeden gecti. Sonraki: Faz 3.3
+  (SignalCalibrationService).
+
+## [2026-06-01] Faz 3.1 | E1 owner-forward: PredictionService DI'ya gecti
+
+- **Faz 3 servis #1 tamamlandi** (`refactor/e1-owner-forward-di`). `PredictionService`
+  artik `_OwnerBackedService`'ten MIRAS ALMIYOR; ctor `(ctx, state)` DI alir
+  (`src/pipeline/evaluation_services.py`). `__getattr__`/`__setattr__` owner-forward
+  yolu bu servis icin devre disi.
+- `src/pipeline/prediction_engine.py` (`_PredictionEngineMixin`): owner-forward
+  edilen tum attribute erisimleri acik hale getirildi — READ-ONLY config/identity
+  `self.ctx.X` (`dataset_metadata`, `ensemble_enabled`, `selected_models`), mutable
+  runtime cikti `self.state.X` (`predictions`, `prediction_targets`,
+  `quantile_predictions`, `single_backtest_inputs`, `latest_tensors`,
+  `ensemble_weights`, `ensemble_weight_scope`, `y_true_aligned`,
+  `y_true_target_aligned`, `prev_close_aligned`). `getattr(self, "...")` defensive
+  formlar ve gereksiz `ensemble_weight_scope` hasattr guard'i kaldirildi (state
+  alani `default_factory` ile her zaman dict).
+- `src/pipeline/evaluation_manager.py`: `_init_services` artik
+  `PredictionService(self.context, self.state)` enjekte ediyor (digerleri hala
+  owner-backed). Servis ctx/state nesnelerini cache'ler; init sonrasi
+  `manager.state`/`manager.context` yeniden atanmadigi dogrulandi (sadece
+  `_init_context_and_state`, servislerden once).
+- `tests/test_prediction_date_aware.py` yeni DI ctor'a uyarlandi (SimpleNamespace
+  owner -> `EvaluationContext`+`EvaluationState`); golden contract testleri
+  (`test_owner_forward_contract.py`) DEGISMEDI ve gecti.
+- Tam suite **561 passed**. Sonraki: Faz 3.2 (BacktestService).
+
+## [2026-06-01] Faz 2 | E1 owner-forward: EvaluationContext tam tasima
+
+- **Faz 2 tamamlandi** (`refactor/e1-owner-forward-di`). Servislerin owner'dan
+  OKUDUGU tum READ-ONLY config/identity attribute'lari artik `EvaluationContext`'te
+  yasiyor. `src/pipeline/evaluation_services.py`: `EvaluationContext` tum alanlari
+  default'lu hale getirildi (lazy/`__new__` icin) + 9 turetilmis READ-ONLY alan
+  eklendi (`ensemble_enabled`, `selected_models`, `backtest_enabled`,
+  `commission_bps`, `slippage_bps`, `initial_capital`, `signal_mode`,
+  `default_signal_config`, `xai_dir`).
+- `src/pipeline/evaluation_manager.py`: 19 config/identity attribute (10 base +
+  9 turetilmis) context-backed **property**'ye cevrildi
+  (`manager.X` <-> `manager.context.X`). `__init__`'teki duz `self.stock_symbol = ...`
+  atamalari kaldirildi; base alanlar context constructor'da, turetilmis alanlar
+  `_init_model_attrs`/`_init_execution_attrs`/`_init_signal_calibration_state`/
+  `_init_mutable_state` icindeki mevcut atamalar uzerinden (property setter ile)
+  context'e yazilir — mixin govdesine yine DOKUNULMADI (Faz 3'te `self.ctx.X`).
+- `context` lazy property: `state` ile ayni gerekce; `__new__` ile kurulan
+  mekanizma testleri (`test_phase8_acceptance` `manager.outputs_dir = ...`,
+  `commission_bps = ...` vb.) ilk eriste bos `EvaluationContext()` alir; testlere
+  dokunulmadi.
+- Mixin/workflow tarafinda bu attribute'lara YAZIM yok (AST + grep dogrulandi) —
+  gercekten READ-ONLY; context'e tasima davranisi degistirmez.
+- Davranis korundu: tam suite **561 passed**, karakterizasyon golden'lari
+  (`test_owner_forward_contract.py`, ozellikle `test_initial_signal_state_golden`:
+  `default_signal_config == signal_config`, `xai_dir == outputs_dir/xai`)
+  degismeden gecti. Sonraki: Faz 3 (mixin -> davranis-sahibi servis, en riskli).
+
+## [2026-06-01] Faz 1 | E1 owner-forward: EvaluationState tam tasima
+
+- **Faz 1 tamamlandi** (`refactor/e1-owner-forward-di`). EvaluationManager'in tum
+  mutable evaluation state'i artik `EvaluationState`'te yasiyor.
+  `src/pipeline/evaluation_services.py`: `EvaluationState` 7 alanla genisletildi
+  (`ensemble_weight_scope`, `y_true_aligned`, `y_true_target_aligned`,
+  `prev_close_aligned`, `signal_config`, `signal_threshold_source`,
+  `signal_threshold_calibration_summary`).
+- `src/pipeline/evaluation_manager.py`: 16 mutable attribute state-backed
+  **property**'ye cevrildi (`manager.X` <-> `manager.state.X`). Owner-forward
+  servisler/workflow'lar `setattr(owner, X, ...)` ile yazdiginda yazim property
+  setter'i uzerinden state'e gider — mixin govdesine DOKUNULMADI (Faz 3'te
+  `self.state.X`'e gececek). `__init__` yeniden siralandi: `_init_context_and_state`
+  artik ONCE calisir (bos `EvaluationState()` kurar), state'e yazan `_init_*`'ler
+  sonra. Eski "state init'ten dict referanslari kopyalama" kaldirildi.
+- `state` lazy property: `__new__` ile `__init__`'i atlayan mekanizma testleri
+  (`test_reporting_metrics`, `test_phase8_acceptance`, ...) icin ilk eriste
+  otomatik `EvaluationState()` kurar; gercek `__init__` zaten explicit kurar.
+  Bu sayede mekanizma testlerine dokunulmadan suite yesil kaldi.
+- Davranis korundu: karakterizasyon golden'lari (`test_owner_forward_contract.py`,
+  12 test) degismeden gecti. Tam suite **561 passed**. Sonraki: Faz 2
+  (`EvaluationContext` tam tasima — READ-ONLY config/identity attribute'lari).
+
+## [2026-06-01] Faz 0 | E1 owner-forward karakterizasyon + envanter
+
+- **Faz 0 tamamlandi** (`refactor/e1-owner-forward-di`). Karakterizasyon golden'lari
+  `tests/test_owner_forward_contract.py` (12 test): davranis-seviyesi, mekanizma
+  degil — owner-forward servisler DI'ya cevrilirken DEGISMEZ referans. Kapsam:
+  kurulus state golden'i, `manager` <-> `manager.state` alias kimligi, paylasilan
+  mutable state iki-yonlu mutasyon, servis-kompozisyonu uzerinden saf hesaplamalar
+  (`_target_to_price`/`_weighted_average`/`_base_predictions_for_ensemble`),
+  determinizm.
+- Owner read/write envanteri `tools/owner_forward_inventory.py` (gecici AST araci,
+  Faz 7'de silinir) ile cikarildi; MUTABLE -> `EvaluationState`, READ-ONLY ->
+  `EvaluationContext` siniflandirmasi `e1-owner-forward-epic.md` §8'e islendi.
+  Faz 1'de state'e tasinacak yeni alanlar: `y_true_aligned`,
+  `y_true_target_aligned`, `prev_close_aligned`, `ensemble_weight_scope`,
+  `signal_config`, `signal_threshold_source`, `signal_threshold_calibration_summary`.
+- Tam suite **561 passed** (temiz `--basetemp`). NOT: `.codex_tmp/pytest` baska
+  process'e kilitliyken `tmp_path` kullanan testlerde 46 ERROR (WinError 5) cevresel
+  — koddan degil; `--basetemp` override ile temiz gecer.
+
+## [2026-06-01] Ekle | E1 owner-forward kaldirma epik plani + yeni dal
+
+- `docs/wiki/e1-owner-forward-epic.md` olusturuldu: tam owner-forward kaldirma
+  (mixin -> EvaluationContext/EvaluationState DI), 2 taban + 3 owner state yuzeyi
+  envanteri, korunacak invariantlar (leakage/determinizm/monkeypatch namespace),
+  karakterizasyon testi stratejisi (test_owner_forward_contract.py), 7 fazli plan,
+  kabul kriterleri + rollback.
+- Yeni dal `refactor/e1-owner-forward-di` acildi (yeni session burada Faz 0'dan
+  baslar). index.md link tablosu guncellendi.
+
+## [2026-06-01] Refactor | Tier 3 mimari (E3 god ctor + E1 owner-forward guard)
+
+- **E3 god constructor** (commit 1e5c4be): `ForecastingPipeline.__init__` ve
+  `EvaluationManager.__init__` attribute-grup yardimcilarina bolundu
+  (`_init_config_attrs`/`_init_run_identity`/`_init_collaborators`;
+  `_init_model_attrs`/`_init_execution_attrs`/`_init_signal_calibration_state`/
+  `_init_mutable_state`/`_init_context_and_state`). Davranis + cagri sirasi
+  (signal_threshold_metadata erken servis init dahil) birebir korundu.
+- **E1 owner-forward fail-loud** (commit a541a10): `_OwnerBackedService.__setattr__`
+  artik var-olan-owner-attribute (veya bildirilmis lazy `ensemble_weight_scope`)
+  disindaki yazimda AttributeError firlatir -> B1 sessiz-typo encapsulation acigi
+  kapandi. Guard opt-in (`_FAIL_LOUD`): evaluation servisleri + workflow'larda
+  aktif; DataManager servis ailesi (4 sinif) permissive birakildi (owner state
+  yuzeyi henuz sertlestirilmedi). `ensemble_weight_scope` EvaluationManager'da
+  pre-init edildi.
+- **Ertelendi:** tam owner-forward kaldirma (mixin -> davranis-sahibi DI servis,
+  ~4500 satir, leakage/sozlesme riski) ve `forecasting/workflows`'un ayri
+  `_OwnerBackedForecastService` base'i. Bagimsiz buyuk epik; karakterizasyon
+  testi sart.
+- Test: tum suite yesil (549). Guard fonksiyonel dogrulandi (typo yakalandi).
+
+## [2026-05-31] Refactor | Tier 2 dosya/sorumluluk bolme (5 commit)
+
+- `analysis_service.build`: iki refresh dali `_try_refresh_and_rebuild`'e DRY.
+- `api/main.py` (425->~340L): POST /run job tracker yeni `pipeline_jobs.py`'ye
+  tasindi; main artik yalniz route katmani.
+- `macro_pipeline`: global-gosterge dongusu `_refresh_global_daily_frames`'e.
+  Bulgu: 29 metod ama kohezyon yuksek -> zorla file-split yok.
+- `data_services`: `run` (123->~30L) iki helper'a bolundu. Bulgu: paket-split
+  GUVENSIZ (testler load_data/DataUpdater/FeatureCache monkeypatch ediyor);
+  in-place decomposition secildi. prepare_tensors (scaling) ertelendi.
+- `signal_calibrator` (997L): bulgu -> zaten yogun decompose (grid logic
+  calibration_grid.py'de). Zararli god object degil; esas borc owner-forward
+  mixin (B1/E1). Zorla split YAPILMADI; E1/Tier 3'e ertelendi.
+- Ilke: buyuk dosya != kotu dosya. Kozmetik LOC-azaltma icin zorla bolme yok.
+- Her commit davranis-koruyan; ilgili test suitleri yesil. Sirada Tier 3 (E1/E3).
+
+## [2026-05-31] Refactor | Tier 1 E2 DRY birlestirmeleri
+
+- **Ikiz ensemble builder:** prediction_engine `_add_single_split_ensembles`
+  (CXTY 51->17) + `_add_walk_forward_ensembles` (CXTY 58->21); ~140 satir kopya
+  cekirdek `_compute_ensemble_blends`'e cikarildi, ortak payload dilimleme
+  `_slice_template_payload`'a alindi. Cash-gate length-guard ortaklasti.
+- **Tree tune_and_train:** yeni `src/models/_tuning.py` (`run_optuna_study` +
+  `stability_adjusted_cv_objective`). XGBoost + Random Forest ortak cekirdegi
+  kullanir; ~50 satir x2 kopya silindi.
+- **3x run() workflow:** guclu ikiz OLMADIGI tespit edildi; zorla template-method
+  KASITLI uygulanmadi (B1 kozmetik-SRP tuzagi). Yalniz metadata-attach ciftleri
+  `_attach_score_metadata`/`_attach_guard_metadata`'ya alindi.
+- Davranis korundu (leakage/determinizm/Optuna warm-start). py_compile + 114 test
+  + tune_and_train fonksiyonel smoke yesil. Sirada Tier 2 (dosya bolme).
+
+## [2026-05-31] Refactor | Tier 0 fonksiyon parcalama (davranis-koruyan)
+
+- `refactor-plan.md` Tier 0 uygulandi: 7 yuksek-karmasiklik fonksiyon helper'lara
+  bolundu. CXTY hepsinde hedefe (<12) indi:
+  `walk_forward_splits` 27→6, `WalkForwardValidator.run` 28→7 (171→43L),
+  `summarize_backtest` 27→10 (193→130L), `compute_market_regime` 33→4,
+  `compute_regime_context` 24→7, `compute_confidence` 41→11 (143→84L),
+  `batch.main` 37→6 (150→38L).
+- Davranis degismedi (leakage/determinizm/sys.exit/warnings semantigi korundu);
+  py_compile + 121 ilgili test yesil.
+- CLAUDE.md auto-refresh kurali graphify'dan WIKI guncellemesine cevrildi
+  (graphify auto-trigger kaldirildi).
+- Sirada Tier 1 (E2 DRY birlestirmeleri).
+
+## [2026-05-31] Ekle | Asamali refactor plani (8 asama, davranis-koruyan)
+
+- Yeni sayfa `docs/wiki/refactor-plan.md`: [code-review-stages.md] 8 asamasina
+  gore god-object / sismi dosya-fonksiyon / CXTY / SOLID-KISS-DRY bulgulari +
+  davranis-koruyan refactor aksiyonlari. `index.md`'ye link eklendi.
+- Taze AST taramasi (per-stage LOC/CXTY/god-class). En kritik: CXTY
+  `_add_walk_forward_ensembles` 58 / `_add_single_split_ensembles` 51
+  (prediction_engine), `compute_confidence` 41, `batch.main` 37,
+  `compute_market_regime` 33. En buyuk dosya `signal_calibrator.py` 997L; en
+  buyuk class `_SignalCalibratorMixin` 34m/898L.
+- Caprez-kesen epikler: E1 owner-forward kaldirma (evaluation_services +
+  forecasting/workflows, B1), E2 DRY (ikiz ensemble builder + 3x run() + tree
+  tune_and_train), E3 god constructor (orchestrator/evaluation_manager __init__).
+- Uygulama sirasi risk-ayarli 4 tier: Tier0 fonksiyon parcalama (dusuk risk) →
+  Tier1 DRY → Tier2 dosya bolme → Tier3 mimari (en son). Henuz uygulanmadi.
+- Docstring Faz 3-4 refactor sonrasina ertelendi (yapi degisecek).
+
 ## [2026-05-31] Ekle | Kod kalitesi denetimi + docstring plani (Faz 1)
 
 - Yeni sayfa `docs/wiki/code-quality-audit.md`: god-object/SOLID/DRY bulgulari +

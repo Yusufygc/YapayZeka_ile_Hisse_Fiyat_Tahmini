@@ -119,8 +119,7 @@ class XGBoostModel(BaseModel):
         -------
         dict  En iyi hiperparametreler.
         """
-        import optuna
-        optuna.logging.set_verbosity(optuna.logging.WARNING)
+        from ._tuning import run_optuna_study, stability_adjusted_cv_objective
 
         y_flat = y_train.ravel()
         tscv = TimeSeriesSplit(n_splits=n_splits)
@@ -138,65 +137,27 @@ class XGBoostModel(BaseModel):
                 "reg_lambda": trial.suggest_float("reg_lambda", 0.5, 2.0),
             }
 
-            sharpe_scores = []
-            for train_idx, val_idx in tscv.split(X_train):
-                X_tr, X_val = X_train[train_idx], X_train[val_idx]
-                y_tr, y_val = y_flat[train_idx], y_flat[val_idx]
-
+            def _fit_predict(X_tr, y_tr, X_val, y_val):
                 model = XGBRegressor(
                     **params,
                     random_state=random_state,
                     objective="reg:squarederror",
                     early_stopping_rounds=20,
                 )
-                model.fit(
-                    X_tr, y_tr,
-                    eval_set=[(X_val, y_val)],
-                    verbose=False,
-                )
-                preds = model.predict(X_val)
-                signals = np.sign(preds)
-                fold_ret = signals * y_val
-                denom = float(np.std(fold_ret, ddof=0))
-                fold_sharpe = float(np.mean(fold_ret) / denom * np.sqrt(252)) if denom > 1e-9 else -1.0
-                sharpe_scores.append(fold_sharpe)
+                model.fit(X_tr, y_tr, eval_set=[(X_val, y_val)], verbose=False)
+                return model.predict(X_val)
 
-            mean_s = float(np.mean(sharpe_scores))
-            std_s = float(np.std(sharpe_scores, ddof=0)) if len(sharpe_scores) > 1 else 0.0
-            return -(mean_s - 0.5 * std_s)
+            return stability_adjusted_cv_objective(X_train, y_flat, tscv, _fit_predict)
 
-        # ── Optuna çalıştır ──────────────────────────────────────────────────
-        print(f"  [Optuna] {n_trials} deneme başlatılıyor ({n_splits}-fold TSCV)...")
-        # Warm-start: SQLite backend varsa onceki denemeleri yukle
-        if study_storage is None:
-            optuna_dir = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                "data",
-                "optuna",
-            )
-            os.makedirs(optuna_dir, exist_ok=True)
-            optuna_path = os.path.join(optuna_dir, "optuna_studies.db")
-            study_storage = f"sqlite:///{optuna_path.replace(os.sep, '/')}"
-        _storage = study_storage
-        _study_name = study_name or f"xgb_{self.__class__.__name__}"
-        try:
-            study = optuna.create_study(
-                direction="minimize",
-                sampler=optuna.samplers.TPESampler(seed=random_state),
-                storage=_storage,
-                study_name=_study_name,
-                load_if_exists=True,
-            )
-        except Exception:
-            # Storage hatasi durumunda hafiza ici fallback
-            study = optuna.create_study(
-                direction="minimize",
-                sampler=optuna.samplers.TPESampler(seed=random_state),
-            )
-        study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
-
-        self.best_params = study.best_params
-        best_obj = study.best_value
+        self.best_params, best_obj = run_optuna_study(
+            objective,
+            n_trials=n_trials,
+            n_splits=n_splits,
+            random_state=random_state,
+            study_name=study_name or f"xgb_{self.__class__.__name__}",
+            log_prefix="Optuna",
+            study_storage=study_storage,
+        )
         print(f"  [Optuna] En iyi stability-adj objective: {best_obj:.4f}")
         print(f"  [Optuna] En iyi parametreler: {self.best_params}")
 

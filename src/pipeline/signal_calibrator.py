@@ -97,7 +97,15 @@ def _risk_adjusted_score(
 
 
 class _SignalCalibratorMixin:
-    """Mixin: sinyal esik kalibrasyonu ve grid search optimizasyonu."""
+    """Mixin: sinyal esik kalibrasyonu ve grid search optimizasyonu.
+
+    Faz 3.3 (E1 owner-forward epiği): owner-forward kaldırıldı. Servis
+    bağımlılıkları açıkça enjekte edilir — READ-ONLY config/identity ``self.ctx``
+    (EvaluationContext: calibration_scope, commission/slippage/initial_capital,
+    outputs_dir, default_signal_config, dataset_metadata, signal_calibration_*
+    flag'leri), mutable runtime ``self.state`` (EvaluationState: signal_config,
+    signal_threshold_source, signal_threshold_calibration_summary).
+    """
 
     # ------------------------------------------------------------------ #
     #  Leakage guard                                                       #
@@ -114,7 +122,7 @@ class _SignalCalibratorMixin:
         Herhangi bir baska deger (ornegin "all" ya da "holdout")
         RuntimeError firlatir ve pipeline'i durdurur.
         """
-        scope = getattr(self, "calibration_scope", "wf_train")
+        scope = self.ctx.calibration_scope
         if scope not in _VALID_CALIBRATION_SCOPES:
             raise RuntimeError(
                 f"Gecersiz calibration_scope={scope!r}. "
@@ -127,43 +135,43 @@ class _SignalCalibratorMixin:
     # ------------------------------------------------------------------ #
 
     def _signal_threshold_metadata(self) -> Dict[str, Any]:
-        cfg = asdict(self.signal_config)
-        scope = getattr(self, "calibration_scope", "wf_train")
+        cfg = asdict(self.state.signal_config)
+        scope = self.ctx.calibration_scope
         return {
             "phase": "phase6_backtest_standard",
-            "source": self.signal_threshold_source,
+            "source": self.state.signal_threshold_source,
             "calibration_scope": scope,
             "selection_scope": (
                 "walk_forward_calibration_folds"
-                if self.signal_threshold_source != "default_config"
+                if self.state.signal_threshold_source != "default_config"
                 else "configured_defaults"
             ),
             "active_from_stage": (
                 "walk_forward_backtest_signal_filtering"
-                if self.signal_threshold_source != "default_config"
+                if self.state.signal_threshold_source != "default_config"
                 else "initial_signal_filtering"
             ),
             "final_holdout_optimized": False,
             "quality_thresholds": {
-                "quality_gate_mode": self.signal_config.quality_gate_mode,
-                "min_directional_accuracy": self.signal_config.min_directional_accuracy,
-                "max_rmse_vs_benchmark": self.signal_config.max_rmse_vs_benchmark,
-                "min_composite_score": self.signal_config.min_composite_score,
+                "quality_gate_mode": self.state.signal_config.quality_gate_mode,
+                "min_directional_accuracy": self.state.signal_config.min_directional_accuracy,
+                "max_rmse_vs_benchmark": self.state.signal_config.max_rmse_vs_benchmark,
+                "min_composite_score": self.state.signal_config.min_composite_score,
             },
             "default_quality_thresholds": {
-                "quality_gate_mode": self.default_signal_config.quality_gate_mode,
-                "min_directional_accuracy": self.default_signal_config.min_directional_accuracy,
-                "max_rmse_vs_benchmark": self.default_signal_config.max_rmse_vs_benchmark,
-                "min_composite_score": self.default_signal_config.min_composite_score,
+                "quality_gate_mode": self.ctx.default_signal_config.quality_gate_mode,
+                "min_directional_accuracy": self.ctx.default_signal_config.min_directional_accuracy,
+                "max_rmse_vs_benchmark": self.ctx.default_signal_config.max_rmse_vs_benchmark,
+                "min_composite_score": self.ctx.default_signal_config.min_composite_score,
             },
             "full_signal_config": cfg,
             "execution_policy": "decision_applies_to_aligned_next_bar_return",
             "cost_policy": {
-                "commission_bps": self.commission_bps,
-                "slippage_bps": self.slippage_bps,
+                "commission_bps": self.ctx.commission_bps,
+                "slippage_bps": self.ctx.slippage_bps,
                 "entry_exit_accounted_separately": True,
             },
-            "calibration_summary": self.signal_threshold_calibration_summary,
+            "calibration_summary": self.state.signal_threshold_calibration_summary,
         }
 
     # ------------------------------------------------------------------ #
@@ -178,21 +186,21 @@ class _SignalCalibratorMixin:
 
         rows = []
         for model_name, model_rows in wf_fold_metrics.items():
-            if model_name in self.signal_config.benchmark_only_models:
+            if model_name in self.state.signal_config.benchmark_only_models:
                 continue
             rows.extend(model_rows)
 
         if len(rows) < 3:
-            self.signal_threshold_source = "default_config"
-            self.signal_threshold_calibration_summary = {
+            self.state.signal_threshold_source = "default_config"
+            self.state.signal_threshold_calibration_summary = {
                 "status": "skipped_insufficient_calibration_folds",
                 "fold_metric_rows": len(rows),
                 "calibration_fold_count": len({row.get("Fold") for row in rows}),
                 "active_from_stage": "initial_signal_filtering",
-                "calibration_scope": getattr(self, "calibration_scope", "wf_train"),
+                "calibration_scope": self.ctx.calibration_scope,
                 "final_holdout_used": False,
             }
-            self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
+            self.ctx.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
             return
 
         calibration_df = pd.DataFrame(rows)
@@ -200,9 +208,9 @@ class _SignalCalibratorMixin:
         rmse_values = pd.to_numeric(calibration_df.get("RMSE_vs_benchmark"), errors="coerce").dropna()
         composite_values = pd.to_numeric(calibration_df.get("Composite_Score"), errors="coerce").dropna()
 
-        min_directional_accuracy = self.default_signal_config.min_directional_accuracy
-        max_rmse_vs_benchmark = self.default_signal_config.max_rmse_vs_benchmark
-        min_composite_score = self.default_signal_config.min_composite_score
+        min_directional_accuracy = self.ctx.default_signal_config.min_directional_accuracy
+        max_rmse_vs_benchmark = self.ctx.default_signal_config.max_rmse_vs_benchmark
+        min_composite_score = self.ctx.default_signal_config.min_composite_score
 
         if not dir_values.empty:
             min_directional_accuracy = max(min_directional_accuracy, float(dir_values.quantile(0.25)))
@@ -212,26 +220,26 @@ class _SignalCalibratorMixin:
             HARD_FLOOR = 30.0
             min_composite_score = max(HARD_FLOOR, float(composite_values.quantile(0.25)))
 
-        self.signal_config = replace(
-            self.signal_config,
+        self.state.signal_config = replace(
+            self.state.signal_config,
             min_directional_accuracy=round(min_directional_accuracy, 2),
             max_rmse_vs_benchmark=round(max_rmse_vs_benchmark, 4),
             min_composite_score=round(min_composite_score, 4),
         )
-        self.signal_threshold_source = "walk_forward_calibration_folds"
-        self.signal_threshold_calibration_summary = {
+        self.state.signal_threshold_source = "walk_forward_calibration_folds"
+        self.state.signal_threshold_calibration_summary = {
             "status": "applied",
             "fold_metric_rows": int(len(rows)),
             "calibration_fold_count": int(calibration_df["Fold"].nunique()) if "Fold" in calibration_df.columns else None,
             "dir_acc_q25": round(float(dir_values.quantile(0.25)), 4) if not dir_values.empty else None,
             "rmse_vs_benchmark_q75": round(float(rmse_values.quantile(0.75)), 4) if not rmse_values.empty else None,
             "composite_score_q25": round(float(composite_values.quantile(0.25)), 4) if not composite_values.empty else None,
-            "calibration_scope": getattr(self, "calibration_scope", "wf_train"),
+            "calibration_scope": self.ctx.calibration_scope,
             "calibration_set": "walk_forward_folds_only",
             "active_from_stage": "walk_forward_backtest_signal_filtering",
             "final_holdout_used": False,
         }
-        self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
+        self.ctx.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
 
     # ------------------------------------------------------------------ #
     #  Execution-parameter calibration (grid search over WF backtests)   #
@@ -248,23 +256,23 @@ class _SignalCalibratorMixin:
         # Leakage guard: yalnizca wf_train kapsaminda calisir
         self._assert_wf_train_scope()
 
-        target_mode = self.dataset_metadata.get("target_mode", "log_return")
+        target_mode = self.ctx.dataset_metadata.get("target_mode", "log_return")
         candidates = [
             name
             for name in wf_backtest_inputs
-            if name not in self.signal_config.benchmark_only_models
+            if name not in self.state.signal_config.benchmark_only_models
         ]
         if not candidates:
-            self.signal_threshold_calibration_summary.update({
+            self.state.signal_threshold_calibration_summary.update({
                 "execution_calibration_status": "skipped_no_non_benchmark_models",
-                "calibration_scope": getattr(self, "calibration_scope", "wf_train"),
+                "calibration_scope": self.ctx.calibration_scope,
                 "final_holdout_used": False,
             })
-            self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
+            self.ctx.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
             return {}
 
-        base_cfg = self.signal_config
-        configured_min_trades = int(getattr(self, "signal_calibration_min_trades", 6) or 6)
+        base_cfg = self.state.signal_config
+        configured_min_trades = int(self.ctx.signal_calibration_min_trades or 6)
         min_trade_count = max(configured_min_trades, 3 * len(candidates))
         rows = []
         config_by_trial: Dict[int, SignalConfig] = {}
@@ -300,7 +308,7 @@ class _SignalCalibratorMixin:
             min_trade_count=min_trade_count,
         )
 
-        require_oos = bool(getattr(self, "signal_calibration_require_oos_confirmation", True))
+        require_oos = bool(self.ctx.signal_calibration_require_oos_confirmation)
         oos_status = self._apply_oos_confirmation_to_signal_rows(
             rows=rows,
             require_oos=require_oos,
@@ -330,8 +338,8 @@ class _SignalCalibratorMixin:
             rejection_active=rejection_active,
         )
 
-        self.signal_config = best_config
-        self.signal_threshold_source = "walk_forward_signal_rejected" if rejection_active else "walk_forward_signal_calibration"
+        self.state.signal_config = best_config
+        self.state.signal_threshold_source = "walk_forward_signal_rejected" if rejection_active else "walk_forward_signal_calibration"
         no_trade_trials = int(sum(int(row.get("Total_Trade_Count", 0) or 0) == 0 for row in rows))
         self._update_signal_execution_calibration_summary(
             rows=rows,
@@ -344,7 +352,7 @@ class _SignalCalibratorMixin:
             rejection_active=rejection_active,
             no_trade_trials=no_trade_trials,
         )
-        self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
+        self.ctx.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
 
         decision_md = self._get_signal_calibration_decision_md(active_row)
         self._write_signal_calibration_reports(calibration_df, decision_md, suffix=suffix)
@@ -584,7 +592,7 @@ class _SignalCalibratorMixin:
         rejection_active: bool,
         no_trade_trials: int,
     ) -> None:
-        self.signal_threshold_calibration_summary.update({
+        self.state.signal_threshold_calibration_summary.update({
             "execution_calibration_status": "rejected_no_valid_oos_trial" if rejection_active else "applied",
             "execution_calibration_trials": int(len(rows)),
             "grid_size": int(grid_metadata["grid_size"]),
@@ -597,14 +605,14 @@ class _SignalCalibratorMixin:
             "coverage_status": grid_metadata["coverage_status"],
             "oos_confirmation_status": oos_status,
             "oos_confirmation_required": require_oos,
-            "oos_min_eval_excess_return": float(getattr(self, "signal_calibration_min_eval_excess_return", 0.0)),
-            "oos_min_eval_sharpe": float(getattr(self, "signal_calibration_min_eval_sharpe", 0.0)),
-            "reject_behavior": getattr(self, "signal_calibration_reject_behavior", "no_trade"),
+            "oos_min_eval_excess_return": float(self.ctx.signal_calibration_min_eval_excess_return),
+            "oos_min_eval_sharpe": float(self.ctx.signal_calibration_min_eval_sharpe),
+            "reject_behavior": self.ctx.signal_calibration_reject_behavior,
             "execution_calibration_models": candidates,
             "execution_calibration_min_trade_count": int(min_trade_count),
-            "execution_calibration_objective": getattr(self, "signal_calibration_objective", "risk_adjusted"),
+            "execution_calibration_objective": self.ctx.signal_calibration_objective,
             "execution_calibration_set": "walk_forward_backtest_inputs_only",
-            "calibration_scope": getattr(self, "calibration_scope", "wf_train"),
+            "calibration_scope": self.ctx.calibration_scope,
             "final_holdout_used": False,
             "no_trade_trials": no_trade_trials,
             "selected_meets_min_trade_count": bool(active_row.get("Meets_Min_Trade_Count", False)) if active_row else False,
@@ -617,14 +625,14 @@ class _SignalCalibratorMixin:
 
     def _selected_execution_params_snapshot(self) -> Dict[str, Any]:
         return {
-            "min_directional_accuracy": self.signal_config.min_directional_accuracy,
-            "volatility_multiplier": self.signal_config.volatility_multiplier,
-            "entry_cost_multiplier": self.signal_config.entry_cost_multiplier,
-            "min_entry_threshold": self.signal_config.min_entry_threshold,
-            "max_holding_bars": self.signal_config.max_holding_bars,
-            "take_profit_vol_multiplier": self.signal_config.take_profit_vol_multiplier,
-            "stop_loss_vol_multiplier": self.signal_config.stop_loss_vol_multiplier,
-            "quality_gate_mode": self.signal_config.quality_gate_mode,
+            "min_directional_accuracy": self.state.signal_config.min_directional_accuracy,
+            "volatility_multiplier": self.state.signal_config.volatility_multiplier,
+            "entry_cost_multiplier": self.state.signal_config.entry_cost_multiplier,
+            "min_entry_threshold": self.state.signal_config.min_entry_threshold,
+            "max_holding_bars": self.state.signal_config.max_holding_bars,
+            "take_profit_vol_multiplier": self.state.signal_config.take_profit_vol_multiplier,
+            "stop_loss_vol_multiplier": self.state.signal_config.stop_loss_vol_multiplier,
+            "quality_gate_mode": self.state.signal_config.quality_gate_mode,
         }
 
     # ------------------------------------------------------------------ #
@@ -639,7 +647,7 @@ class _SignalCalibratorMixin:
         self,
         grid: list[Dict[str, float | int]],
     ) -> tuple[list[Dict[str, float | int]], Dict[str, Any]]:
-        return calibration_grid.apply_trial_policy(self, grid)
+        return calibration_grid.apply_trial_policy(self.ctx, grid)
 
     @staticmethod
     def _grid_param_key(params: Dict[str, float | int]) -> tuple:
@@ -785,15 +793,15 @@ class _SignalCalibratorMixin:
                     model_name=model_name,
                     validation_mode=validation_mode,
                     target_mode=target_mode,
-                    commission_bps=self.commission_bps,
-                    slippage_bps=self.slippage_bps,
+                    commission_bps=self.ctx.commission_bps,
+                    slippage_bps=self.ctx.slippage_bps,
                     signal_mode="professional",
                     signal_config=cfg,
                     model_metrics=model_metrics_by_model.get(model_name, {}),
                 )
                 summaries.append(summarize_backtest(
                     result,
-                    initial_capital=self.initial_capital,
+                    initial_capital=self.ctx.initial_capital,
                     trial_count=trial_count,
                 ))
             except Exception as exc:
@@ -848,8 +856,8 @@ class _SignalCalibratorMixin:
         eval_sharpe = float(np.nanmean(sharpes))
         eval_drawdown = float(np.nanmean(drawdowns))
 
-        min_excess = float(getattr(self, "signal_calibration_min_eval_excess_return", 0.0))
-        min_sharpe = float(getattr(self, "signal_calibration_min_eval_sharpe", 0.0))
+        min_excess = float(self.ctx.signal_calibration_min_eval_excess_return)
+        min_sharpe = float(self.ctx.signal_calibration_min_eval_sharpe)
         reasons = []
         if eval_excess <= min_excess:
             reasons.append("eval_excess_return_below_min")
@@ -911,7 +919,7 @@ class _SignalCalibratorMixin:
         *,
         suffix: str = "",
     ) -> None:
-        outputs_dir = getattr(self, "outputs_dir", "")
+        outputs_dir = self.ctx.outputs_dir
         if not outputs_dir:
             return
         try:
@@ -933,7 +941,7 @@ class _SignalCalibratorMixin:
             print(f"  [WARN] Signal calibration raporu kaydedilemedi: {exc}")
 
     def _get_signal_calibration_decision_md(self, best_row: Dict[str, Any] | None) -> str:
-        scope = getattr(self, "calibration_scope", "wf_train")
+        scope = self.ctx.calibration_scope
         handle = StringIO()
         handle.write("# Signal Calibration Decision v2\n\n")
         handle.write(f"- Calibration scope: {scope}\n")

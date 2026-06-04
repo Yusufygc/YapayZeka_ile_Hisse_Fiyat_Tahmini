@@ -64,74 +64,12 @@ class EvaluationManager:
         model_cfg: ModelConfig,
         stock_db: Optional[StockModelDB] = None,
     ):
-        self.stock_symbol = stock_symbol
-        self.outputs_dir = outputs_dir
-        self.models_dir = models_dir
-        self.tracker = tracker
-        self.feature_names = feature_names
-        self.dataset_hash = dataset_hash
-        self.dataset_metadata = dataset_metadata
-
-        self.exe_cfg = exe_cfg
-        self.model_cfg = model_cfg
-
-        # --- model attributes ------------------------------------------
-        self.selected_models = set(self.model_cfg.selected_models) if self.model_cfg.selected_models else None
-        self.ensemble_enabled = self.model_cfg.ensemble_enabled
-
-        # --- execution attributes --------------------------------------
-        self.backtest_enabled = self.exe_cfg.backtest_enabled
-        self.commission_bps = self.exe_cfg.commission_bps
-        self.slippage_bps = self.exe_cfg.slippage_bps
-        self.initial_capital = self.exe_cfg.initial_capital
-        self.signal_mode = self.exe_cfg.signal_mode
-        self.signal_config = self.exe_cfg.signal_config
-        self.calibration_scope: str = self.exe_cfg.calibration_scope
-        self.signal_calibration_train_ratio = self.exe_cfg.signal_calibration_train_ratio
-        self.min_signal_evaluation_folds = self.exe_cfg.min_signal_evaluation_folds
-        self.enable_signal_execution_calibration = self.exe_cfg.enable_signal_execution_calibration
-        self.enable_gate_diagnostics = self.exe_cfg.enable_gate_diagnostics
-        self.enable_shadow_backtests = self.exe_cfg.enable_shadow_backtests
-        self.signal_calibration_max_trials = self.exe_cfg.signal_calibration_max_trials
-        self.signal_calibration_profile = self.exe_cfg.signal_calibration_profile
-        self.signal_calibration_sampler = self.exe_cfg.signal_calibration_sampler
-        self.signal_calibration_seed = self.exe_cfg.signal_calibration_seed
-        self.signal_calibration_objective = self.exe_cfg.signal_calibration_objective
-        self.signal_calibration_min_trades = self.exe_cfg.signal_calibration_min_trades
-        self.signal_calibration_require_oos_confirmation = self.exe_cfg.signal_calibration_require_oos_confirmation
-        self.signal_calibration_min_eval_excess_return = self.exe_cfg.signal_calibration_min_eval_excess_return
-        self.signal_calibration_min_eval_sharpe = self.exe_cfg.signal_calibration_min_eval_sharpe
-        self.signal_calibration_reject_behavior = self.exe_cfg.signal_calibration_reject_behavior
-        self.auto_signal_diagnostics = self.exe_cfg.auto_signal_diagnostics
-        self.report_detail_level = self.exe_cfg.report_detail_level
-        self.write_text_reports = self.exe_cfg.write_text_reports
-        self.write_markdown_reports = self.exe_cfg.write_markdown_reports
-        self.write_xai_tables = self.exe_cfg.write_xai_tables
-        self.write_trade_logs = self.exe_cfg.write_trade_logs
-
-        self.stock_db = stock_db
-
-        # --- signal calibration state ----------------------------------
-        self.default_signal_config = self.signal_config
-        self.signal_threshold_source = "default_config"
-        self.signal_threshold_calibration_summary: Dict[str, Any] = {}
-        self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
-
-        # --- mutable prediction state ----------------------------------
-        self.predictions: Dict[str, np.ndarray] = {}
-        self.prediction_targets: Dict[str, np.ndarray] = {}
-        self.quantile_predictions: Dict[str, np.ndarray] = {}
-        self.single_backtest_inputs: Dict[str, Dict[str, Any]] = {}
-        self.y_true_aligned: Optional[np.ndarray] = None
-        self.y_true_target_aligned: Optional[np.ndarray] = None
-        self.prev_close_aligned: Optional[np.ndarray] = None
-        self.xai_dir = os.path.join(self.outputs_dir, "xai")
-        self.latest_tensors: Dict[str, Any] = {}
-        self.latest_backtest_results: Dict[str, Any] = {}
-        self.latest_backtest_metrics: Dict[str, Any] = {}
-        self.latest_model_metrics: Dict[str, Any] = {}
-        self.ensemble_weights: Dict[str, Dict[str, float]] = {}
-        self.context = EvaluationContext(
+        # Faz 1+2: context + (boş) state ÖNCE kurulur. READ-ONLY config/identity
+        # artık EvaluationContext'te, mutable runtime state EvaluationState'te yaşar;
+        # manager property'leri bunlara forward eder. Bu yüzden context/state'e yazan
+        # _init_* metotlarından önce gelmeli. (Eskiden burada yapılan düz
+        # self.stock_symbol = ... atamaları context constructor'a taşındı.)
+        self._init_context_and_state(
             stock_symbol=stock_symbol,
             outputs_dir=outputs_dir,
             models_dir=models_dir,
@@ -143,24 +81,543 @@ class EvaluationManager:
             model_cfg=model_cfg,
             stock_db=stock_db,
         )
-        self.state = EvaluationState(
-            predictions=self.predictions,
-            prediction_targets=self.prediction_targets,
-            quantile_predictions=self.quantile_predictions,
-            single_backtest_inputs=self.single_backtest_inputs,
-            latest_tensors=self.latest_tensors,
-            latest_backtest_results=self.latest_backtest_results,
-            latest_backtest_metrics=self.latest_backtest_metrics,
-            latest_model_metrics=self.latest_model_metrics,
-            ensemble_weights=self.ensemble_weights,
-        )
+        self._init_model_attrs()
+        self._init_execution_attrs()
+        # signal threshold metadata triggers an early service init (uses
+        # signal_calibration_service); call order preserved intentionally.
+        self._init_signal_calibration_state()
+        self._init_mutable_state()
         self._init_services()
 
+    def _init_model_attrs(self) -> None:
+        self.selected_models = set(self.model_cfg.selected_models) if self.model_cfg.selected_models else None
+        self.ensemble_enabled = self.model_cfg.ensemble_enabled
+
+    def _init_execution_attrs(self) -> None:
+        e = self.exe_cfg
+        self.backtest_enabled = e.backtest_enabled
+        self.commission_bps = e.commission_bps
+        self.slippage_bps = e.slippage_bps
+        self.initial_capital = e.initial_capital
+        self.signal_mode = e.signal_mode
+        self.signal_config = e.signal_config
+        self.calibration_scope: str = e.calibration_scope
+        self.signal_calibration_train_ratio = e.signal_calibration_train_ratio
+        self.min_signal_evaluation_folds = e.min_signal_evaluation_folds
+        self.enable_signal_execution_calibration = e.enable_signal_execution_calibration
+        self.enable_gate_diagnostics = e.enable_gate_diagnostics
+        self.enable_shadow_backtests = e.enable_shadow_backtests
+        self.signal_calibration_max_trials = e.signal_calibration_max_trials
+        self.signal_calibration_profile = e.signal_calibration_profile
+        self.signal_calibration_sampler = e.signal_calibration_sampler
+        self.signal_calibration_seed = e.signal_calibration_seed
+        self.signal_calibration_objective = e.signal_calibration_objective
+        self.signal_calibration_min_trades = e.signal_calibration_min_trades
+        self.signal_calibration_require_oos_confirmation = e.signal_calibration_require_oos_confirmation
+        self.signal_calibration_min_eval_excess_return = e.signal_calibration_min_eval_excess_return
+        self.signal_calibration_min_eval_sharpe = e.signal_calibration_min_eval_sharpe
+        self.signal_calibration_reject_behavior = e.signal_calibration_reject_behavior
+        self.auto_signal_diagnostics = e.auto_signal_diagnostics
+        self.report_detail_level = e.report_detail_level
+        self.write_text_reports = e.write_text_reports
+        self.write_markdown_reports = e.write_markdown_reports
+        self.write_xai_tables = e.write_xai_tables
+        self.write_trade_logs = e.write_trade_logs
+
+    def _init_signal_calibration_state(self) -> None:
+        self.default_signal_config = self.signal_config
+        self.signal_threshold_source = "default_config"
+        self.signal_threshold_calibration_summary: Dict[str, Any] = {}
+        self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
+
+    def _init_mutable_state(self) -> None:
+        # Faz 1: predictions/.../y_true_* artik EvaluationState varsayilanlarinda.
+        # Faz 2: xai_dir READ-ONLY olarak EvaluationContext'e gider; bu atama
+        # context-backed property setter uzerinden context'e yazilir.
+        self.xai_dir = os.path.join(self.outputs_dir, "xai")
+
+    def _init_context_and_state(self, **kwargs: Any) -> None:
+        # Context yalnizca base identity/cfg kwarg'lariyla kurulur; turetilmis
+        # READ-ONLY alanlar (selected_models, ensemble_enabled, backtest_enabled,
+        # commission_bps, slippage_bps, initial_capital, signal_mode,
+        # default_signal_config, xai_dir) asagidaki _init_* metotlarinda
+        # context-backed property setter'lari uzerinden context'e yazilir.
+        self.context = EvaluationContext(**kwargs)
+        # Bos state; tüm mutable alanlar dataclass varsayilanlarindan gelir ve
+        # manager property'leri (asagida) bu nesneye forward eder.
+        self.state = EvaluationState()
+
+    # ------------------------------------------------------------------ #
+    #  READ-ONLY config/identity property forward'lari (Faz 2)            #
+    #                                                                     #
+    #  manager.X  <->  manager.context.X. Owner-forward servisleri/       #
+    #  workflow'lari getattr ile okur; bu getter'lar okumayı context'e    #
+    #  yönlendirir, böylece context tek READ-ONLY config kaynaktir.       #
+    #  Faz 3'te servisler dogrudan self.ctx.X kullanacak.                 #
+    # ------------------------------------------------------------------ #
+
+    @property
+    def context(self) -> EvaluationContext:
+        # Lazy: state ile ayni gerekce — __new__ ile kurulan mekanizma testleri
+        # ilk erisimde bos EvaluationContext alir. Gercek __init__ explicit kurar.
+        ctx = self.__dict__.get("_context")
+        if ctx is None:
+            ctx = EvaluationContext()
+            self.__dict__["_context"] = ctx
+        return ctx
+
+    @context.setter
+    def context(self, value: EvaluationContext) -> None:
+        self.__dict__["_context"] = value
+
+    @property
+    def stock_symbol(self) -> str:
+        return self.context.stock_symbol
+
+    @stock_symbol.setter
+    def stock_symbol(self, value: str) -> None:
+        self.context.stock_symbol = value
+
+    @property
+    def outputs_dir(self) -> str:
+        return self.context.outputs_dir
+
+    @outputs_dir.setter
+    def outputs_dir(self, value: str) -> None:
+        self.context.outputs_dir = value
+
+    @property
+    def models_dir(self) -> str:
+        return self.context.models_dir
+
+    @models_dir.setter
+    def models_dir(self, value: str) -> None:
+        self.context.models_dir = value
+
+    @property
+    def tracker(self) -> Any:
+        return self.context.tracker
+
+    @tracker.setter
+    def tracker(self, value: Any) -> None:
+        self.context.tracker = value
+
+    @property
+    def feature_names(self) -> list:
+        return self.context.feature_names
+
+    @feature_names.setter
+    def feature_names(self, value: list) -> None:
+        self.context.feature_names = value
+
+    @property
+    def dataset_hash(self) -> str:
+        return self.context.dataset_hash
+
+    @dataset_hash.setter
+    def dataset_hash(self, value: str) -> None:
+        self.context.dataset_hash = value
+
+    @property
+    def dataset_metadata(self) -> Dict[str, Any]:
+        return self.context.dataset_metadata
+
+    @dataset_metadata.setter
+    def dataset_metadata(self, value: Dict[str, Any]) -> None:
+        self.context.dataset_metadata = value
+
+    @property
+    def exe_cfg(self) -> Any:
+        return self.context.exe_cfg
+
+    @exe_cfg.setter
+    def exe_cfg(self, value: Any) -> None:
+        self.context.exe_cfg = value
+
+    @property
+    def model_cfg(self) -> Any:
+        return self.context.model_cfg
+
+    @model_cfg.setter
+    def model_cfg(self, value: Any) -> None:
+        self.context.model_cfg = value
+
+    @property
+    def stock_db(self) -> Any:
+        return self.context.stock_db
+
+    @stock_db.setter
+    def stock_db(self, value: Any) -> None:
+        self.context.stock_db = value
+
+    @property
+    def ensemble_enabled(self) -> bool:
+        return self.context.ensemble_enabled
+
+    @ensemble_enabled.setter
+    def ensemble_enabled(self, value: bool) -> None:
+        self.context.ensemble_enabled = value
+
+    @property
+    def selected_models(self) -> Optional[set]:
+        return self.context.selected_models
+
+    @selected_models.setter
+    def selected_models(self, value: Optional[set]) -> None:
+        self.context.selected_models = value
+
+    @property
+    def backtest_enabled(self) -> bool:
+        return self.context.backtest_enabled
+
+    @backtest_enabled.setter
+    def backtest_enabled(self, value: bool) -> None:
+        self.context.backtest_enabled = value
+
+    @property
+    def commission_bps(self) -> float:
+        return self.context.commission_bps
+
+    @commission_bps.setter
+    def commission_bps(self, value: float) -> None:
+        self.context.commission_bps = value
+
+    @property
+    def slippage_bps(self) -> float:
+        return self.context.slippage_bps
+
+    @slippage_bps.setter
+    def slippage_bps(self, value: float) -> None:
+        self.context.slippage_bps = value
+
+    @property
+    def initial_capital(self) -> float:
+        return self.context.initial_capital
+
+    @initial_capital.setter
+    def initial_capital(self, value: float) -> None:
+        self.context.initial_capital = value
+
+    @property
+    def signal_mode(self) -> str:
+        return self.context.signal_mode
+
+    @signal_mode.setter
+    def signal_mode(self, value: str) -> None:
+        self.context.signal_mode = value
+
+    @property
+    def default_signal_config(self) -> Any:
+        return self.context.default_signal_config
+
+    @default_signal_config.setter
+    def default_signal_config(self, value: Any) -> None:
+        self.context.default_signal_config = value
+
+    @property
+    def xai_dir(self) -> str:
+        return self.context.xai_dir
+
+    @xai_dir.setter
+    def xai_dir(self, value: str) -> None:
+        self.context.xai_dir = value
+
+    # Faz 3.2: BacktestService'in okudugu exe_cfg flag'leri context'e tasindi.
+    @property
+    def write_trade_logs(self) -> bool:
+        return self.context.write_trade_logs
+
+    @write_trade_logs.setter
+    def write_trade_logs(self, value: bool) -> None:
+        self.context.write_trade_logs = value
+
+    @property
+    def signal_calibration_min_trades(self) -> int:
+        return self.context.signal_calibration_min_trades
+
+    @signal_calibration_min_trades.setter
+    def signal_calibration_min_trades(self, value: int) -> None:
+        self.context.signal_calibration_min_trades = value
+
+    @property
+    def signal_calibration_reject_behavior(self) -> str:
+        return self.context.signal_calibration_reject_behavior
+
+    @signal_calibration_reject_behavior.setter
+    def signal_calibration_reject_behavior(self, value: str) -> None:
+        self.context.signal_calibration_reject_behavior = value
+
+    @property
+    def auto_signal_diagnostics(self) -> bool:
+        return self.context.auto_signal_diagnostics
+
+    @auto_signal_diagnostics.setter
+    def auto_signal_diagnostics(self, value: bool) -> None:
+        self.context.auto_signal_diagnostics = value
+
+    @property
+    def enable_gate_diagnostics(self) -> bool:
+        return self.context.enable_gate_diagnostics
+
+    @enable_gate_diagnostics.setter
+    def enable_gate_diagnostics(self, value: bool) -> None:
+        self.context.enable_gate_diagnostics = value
+
+    @property
+    def enable_shadow_backtests(self) -> bool:
+        return self.context.enable_shadow_backtests
+
+    @enable_shadow_backtests.setter
+    def enable_shadow_backtests(self, value: bool) -> None:
+        self.context.enable_shadow_backtests = value
+
+    # Faz 3.3: SignalCalibrationService'in okudugu exe_cfg flag'leri context'e tasindi.
+    @property
+    def calibration_scope(self) -> str:
+        return self.context.calibration_scope
+
+    @calibration_scope.setter
+    def calibration_scope(self, value: str) -> None:
+        self.context.calibration_scope = value
+
+    @property
+    def signal_calibration_require_oos_confirmation(self) -> bool:
+        return self.context.signal_calibration_require_oos_confirmation
+
+    @signal_calibration_require_oos_confirmation.setter
+    def signal_calibration_require_oos_confirmation(self, value: bool) -> None:
+        self.context.signal_calibration_require_oos_confirmation = value
+
+    @property
+    def signal_calibration_min_eval_excess_return(self) -> float:
+        return self.context.signal_calibration_min_eval_excess_return
+
+    @signal_calibration_min_eval_excess_return.setter
+    def signal_calibration_min_eval_excess_return(self, value: float) -> None:
+        self.context.signal_calibration_min_eval_excess_return = value
+
+    @property
+    def signal_calibration_min_eval_sharpe(self) -> float:
+        return self.context.signal_calibration_min_eval_sharpe
+
+    @signal_calibration_min_eval_sharpe.setter
+    def signal_calibration_min_eval_sharpe(self, value: float) -> None:
+        self.context.signal_calibration_min_eval_sharpe = value
+
+    @property
+    def signal_calibration_objective(self) -> str:
+        return self.context.signal_calibration_objective
+
+    @signal_calibration_objective.setter
+    def signal_calibration_objective(self, value: str) -> None:
+        self.context.signal_calibration_objective = value
+
+    @property
+    def signal_calibration_profile(self) -> str:
+        return self.context.signal_calibration_profile
+
+    @signal_calibration_profile.setter
+    def signal_calibration_profile(self, value: str) -> None:
+        self.context.signal_calibration_profile = value
+
+    @property
+    def signal_calibration_sampler(self) -> str:
+        return self.context.signal_calibration_sampler
+
+    @signal_calibration_sampler.setter
+    def signal_calibration_sampler(self, value: str) -> None:
+        self.context.signal_calibration_sampler = value
+
+    @property
+    def signal_calibration_seed(self) -> int:
+        return self.context.signal_calibration_seed
+
+    @signal_calibration_seed.setter
+    def signal_calibration_seed(self, value: int) -> None:
+        self.context.signal_calibration_seed = value
+
+    @property
+    def signal_calibration_max_trials(self) -> Optional[int]:
+        return self.context.signal_calibration_max_trials
+
+    @signal_calibration_max_trials.setter
+    def signal_calibration_max_trials(self, value: Optional[int]) -> None:
+        self.context.signal_calibration_max_trials = value
+
+    # Faz 3.4: MetricsReportingService'in (XAI yazimi) okudugu exe_cfg flag'leri context'e tasindi.
+    @property
+    def write_xai_tables(self) -> bool:
+        return self.context.write_xai_tables
+
+    @write_xai_tables.setter
+    def write_xai_tables(self, value: bool) -> None:
+        self.context.write_xai_tables = value
+
+    @property
+    def write_markdown_reports(self) -> bool:
+        return self.context.write_markdown_reports
+
+    @write_markdown_reports.setter
+    def write_markdown_reports(self, value: bool) -> None:
+        self.context.write_markdown_reports = value
+
+    # ------------------------------------------------------------------ #
+    #  Mutable state property forward'lari (Faz 1)                        #
+    #                                                                     #
+    #  manager.X  <->  manager.state.X. Owner-forward servisleri/         #
+    #  workflow'lari `setattr(owner, X, ...)` ile yazar; bu setter'lar    #
+    #  yazımı state'e yönlendirir, böylece state tek mutable kaynaktir.   #
+    #  Faz 3'te servisler dogrudan self.state.X kullanacak.               #
+    # ------------------------------------------------------------------ #
+
+    @property
+    def state(self) -> EvaluationState:
+        # Lazy: __init__'i atlayan (`__new__`) manuel kurulumlar veya erken
+        # erişim için bir EvaluationState garanti eder. Gerçek __init__ zaten
+        # _init_context_and_state'te explicit kurar (setter), lazy yol tetiklenmez.
+        st = self.__dict__.get("_state")
+        if st is None:
+            st = EvaluationState()
+            self.__dict__["_state"] = st
+        return st
+
+    @state.setter
+    def state(self, value: EvaluationState) -> None:
+        self.__dict__["_state"] = value
+
+    @property
+    def predictions(self) -> Dict[str, np.ndarray]:
+        return self.state.predictions
+
+    @predictions.setter
+    def predictions(self, value: Dict[str, np.ndarray]) -> None:
+        self.state.predictions = value
+
+    @property
+    def prediction_targets(self) -> Dict[str, np.ndarray]:
+        return self.state.prediction_targets
+
+    @prediction_targets.setter
+    def prediction_targets(self, value: Dict[str, np.ndarray]) -> None:
+        self.state.prediction_targets = value
+
+    @property
+    def quantile_predictions(self) -> Dict[str, np.ndarray]:
+        return self.state.quantile_predictions
+
+    @quantile_predictions.setter
+    def quantile_predictions(self, value: Dict[str, np.ndarray]) -> None:
+        self.state.quantile_predictions = value
+
+    @property
+    def single_backtest_inputs(self) -> Dict[str, Dict[str, Any]]:
+        return self.state.single_backtest_inputs
+
+    @single_backtest_inputs.setter
+    def single_backtest_inputs(self, value: Dict[str, Dict[str, Any]]) -> None:
+        self.state.single_backtest_inputs = value
+
+    @property
+    def latest_tensors(self) -> Dict[str, Any]:
+        return self.state.latest_tensors
+
+    @latest_tensors.setter
+    def latest_tensors(self, value: Dict[str, Any]) -> None:
+        self.state.latest_tensors = value
+
+    @property
+    def latest_backtest_results(self) -> Dict[str, Any]:
+        return self.state.latest_backtest_results
+
+    @latest_backtest_results.setter
+    def latest_backtest_results(self, value: Dict[str, Any]) -> None:
+        self.state.latest_backtest_results = value
+
+    @property
+    def latest_backtest_metrics(self) -> Dict[str, Any]:
+        return self.state.latest_backtest_metrics
+
+    @latest_backtest_metrics.setter
+    def latest_backtest_metrics(self, value: Dict[str, Any]) -> None:
+        self.state.latest_backtest_metrics = value
+
+    @property
+    def latest_model_metrics(self) -> Dict[str, Any]:
+        return self.state.latest_model_metrics
+
+    @latest_model_metrics.setter
+    def latest_model_metrics(self, value: Dict[str, Any]) -> None:
+        self.state.latest_model_metrics = value
+
+    @property
+    def ensemble_weights(self) -> Dict[str, Dict[str, float]]:
+        return self.state.ensemble_weights
+
+    @ensemble_weights.setter
+    def ensemble_weights(self, value: Dict[str, Dict[str, float]]) -> None:
+        self.state.ensemble_weights = value
+
+    @property
+    def ensemble_weight_scope(self) -> Dict[str, str]:
+        return self.state.ensemble_weight_scope
+
+    @ensemble_weight_scope.setter
+    def ensemble_weight_scope(self, value: Dict[str, str]) -> None:
+        self.state.ensemble_weight_scope = value
+
+    @property
+    def y_true_aligned(self) -> Optional[np.ndarray]:
+        return self.state.y_true_aligned
+
+    @y_true_aligned.setter
+    def y_true_aligned(self, value: Optional[np.ndarray]) -> None:
+        self.state.y_true_aligned = value
+
+    @property
+    def y_true_target_aligned(self) -> Optional[np.ndarray]:
+        return self.state.y_true_target_aligned
+
+    @y_true_target_aligned.setter
+    def y_true_target_aligned(self, value: Optional[np.ndarray]) -> None:
+        self.state.y_true_target_aligned = value
+
+    @property
+    def prev_close_aligned(self) -> Optional[np.ndarray]:
+        return self.state.prev_close_aligned
+
+    @prev_close_aligned.setter
+    def prev_close_aligned(self, value: Optional[np.ndarray]) -> None:
+        self.state.prev_close_aligned = value
+
+    @property
+    def signal_config(self) -> Any:
+        return self.state.signal_config
+
+    @signal_config.setter
+    def signal_config(self, value: Any) -> None:
+        self.state.signal_config = value
+
+    @property
+    def signal_threshold_source(self) -> str:
+        return self.state.signal_threshold_source
+
+    @signal_threshold_source.setter
+    def signal_threshold_source(self, value: str) -> None:
+        self.state.signal_threshold_source = value
+
+    @property
+    def signal_threshold_calibration_summary(self) -> Dict[str, Any]:
+        return self.state.signal_threshold_calibration_summary
+
+    @signal_threshold_calibration_summary.setter
+    def signal_threshold_calibration_summary(self, value: Dict[str, Any]) -> None:
+        self.state.signal_threshold_calibration_summary = value
+
     def _init_services(self) -> None:
-        self.prediction_service = PredictionService(self)
-        self.backtest_service = BacktestService(self)
-        self.signal_calibration_service = SignalCalibrationService(self)
-        self.metrics_reporting_service = MetricsReportingService(self)
+        self.prediction_service = PredictionService(self.context, self.state)
+        self.backtest_service = BacktestService(self.context, self.state)
+        self.signal_calibration_service = SignalCalibrationService(self.context, self.state)
+        self.metrics_reporting_service = MetricsReportingService(self.context, self.state)
         self.single_split_workflow = SingleSplitEvaluationWorkflow(self)
         self.walk_forward_workflow = WalkForwardEvaluationWorkflow(self)
         self.final_holdout_workflow = FinalHoldoutEvaluationWorkflow(self)
@@ -215,16 +672,6 @@ class EvaluationManager:
             wf_backtest_inputs,
         )
 
-    def _save_selected_models_plot(
-        self,
-        y_true: np.ndarray,
-        predictions: Dict[str, np.ndarray],
-        save_path: str,
-        title: str,
-    ) -> None:
-        self._ensure_services()
-        return self.prediction_service._save_selected_models_plot(y_true, predictions, save_path, title)
-
     def _predict_single_model(self, model_name: str, model: Any, tensors: dict):
         self._ensure_services()
         return self.prediction_service._predict_single_model(model_name, model, tensors)
@@ -232,22 +679,6 @@ class EvaluationManager:
     def generate_predictions(self, trained_models: dict, tensors: dict):
         self._ensure_services()
         return self.prediction_service.generate_predictions(trained_models, tensors)
-
-    @staticmethod
-    def _diagnostic_numeric(frame: pd.DataFrame, column: str) -> np.ndarray:
-        return BacktestService._diagnostic_numeric(frame, column)
-
-    @staticmethod
-    def _diagnostic_float(value: Any) -> float:
-        return BacktestService._diagnostic_float(value)
-
-    @staticmethod
-    def _count_decision(frame: pd.DataFrame, decision: str) -> int:
-        return BacktestService._count_decision(frame, decision)
-
-    @staticmethod
-    def _payload_expected_return(payload: Dict[str, Any], target_mode: str) -> np.ndarray:
-        return BacktestService._payload_expected_return(payload, target_mode)
 
     def _get_shadow_backtests(
         self,
@@ -300,14 +731,6 @@ class EvaluationManager:
             suffix=suffix,
             target_mode=target_mode,
         )
-
-    def _write_signal_gate_diagnostics(self, diagnostics: pd.DataFrame, suffix: str) -> None:
-        self._ensure_services()
-        return self.backtest_service._write_signal_gate_diagnostics(diagnostics, suffix)
-
-    def _write_shadow_backtest_reports(self, shadow_results: Dict[str, Any], suffix: str) -> None:
-        self._ensure_services()
-        return self.backtest_service._write_shadow_backtest_reports(shadow_results, suffix)
 
     def _run_backtests(
         self,
@@ -379,31 +802,9 @@ class EvaluationManager:
             min_trade_count=min_trade_count,
         )
 
-    @staticmethod
-    def _signal_calibration_sort_key(row: Dict[str, Any]) -> tuple:
-        return SignalCalibrationService._signal_calibration_sort_key(row)
-
     @classmethod
     def _select_signal_calibration_row(cls, rows: list[Dict[str, Any]]) -> Dict[str, Any] | None:
         return SignalCalibrationService._select_signal_calibration_row(rows)
-
-    def _write_signal_calibration_reports(
-        self,
-        calibration_df: pd.DataFrame,
-        decision_md: str,
-        *,
-        suffix: str = "",
-    ) -> None:
-        self._ensure_services()
-        return self.signal_calibration_service._write_signal_calibration_reports(
-            calibration_df,
-            decision_md,
-            suffix=suffix,
-        )
-
-    def _get_signal_calibration_decision_md(self, best_row: Dict[str, Any] | None) -> str:
-        self._ensure_services()
-        return self.signal_calibration_service._get_signal_calibration_decision_md(best_row)
 
     @staticmethod
     def _attach_composite_scores(metrics_dict: Dict[str, Dict[str, float]]) -> Dict[str, Dict[str, float]]:

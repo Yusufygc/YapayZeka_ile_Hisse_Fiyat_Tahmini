@@ -2,7 +2,7 @@
 title: Architecture
 type: concept
 status: active
-last_updated: 2026-05-20
+last_updated: 2026-06-01
 owner: llm
 source_count: 14
 ---
@@ -66,6 +66,41 @@ facades still own state and preserve existing method names such as
 `ingest_and_engineer`, `split_data`, `prepare_tensors`, `train_*`, and
 `evaluate_*`. This keeps compatibility while reducing the complexity of the
 three largest pipeline files.
+
+### Evaluation Services: Owner-Forward → Explicit DI (E1 epic, closed)
+
+The original evaluation services (`PredictionService`, `BacktestService`,
+`SignalCalibrationService`, `MetricsReportingService`) were *owner-backed*:
+they inherited `_OwnerBackedService`, whose `__getattr__`/`__setattr__` forwarded
+every attribute access to the owning `EvaluationManager`. The
+[E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md) replaces that "magic"
+with explicit dependency injection: each service takes `(ctx, state)` in its
+constructor, where `EvaluationContext` is the read-only config/identity bag and
+`EvaluationState` is the mutable runtime-output bag (both in
+`evaluation_services.py`). The mixin bodies now read/write `self.ctx.X` /
+`self.state.X` instead of forwarding to the owner.
+
+Migration status (2026-06-01, E1 closed at Faz 7): all four evaluation services —
+`PredictionService` (Faz 3.1), `BacktestService` (Faz 3.2),
+`SignalCalibrationService` (Faz 3.3) and `MetricsReportingService` (Faz 3.4) —
+are converted to DI and no longer inherit `_OwnerBackedService`. `ForecastRunner`
+moved to `ForecastContext` DI and `_OwnerBackedForecastService` was deleted
+(Faz 5). The four `DataManager` services were made fail-loud (Faz 6).
+
+`_OwnerBackedService` is **intentionally retained** as the forwarding base for
+the remaining owner-forward consumers: the three evaluation workflows
+(`SingleSplit/WalkForward/FinalHoldout EvaluationWorkflow`), the three training
+workflows (`FinalHoldout/SingleSplit/WalkForward TrainingWorkflow`), and the four
+`DataManager` services — all of which both read and write shared owner state
+(the service↔workflow integration contract). Converting those 10 classes to DI
+is a large, high-regression-risk effort the epic deliberately deferred (§1 / §8,
+training is out of E1 scope); it is tracked as a **future epic** rather than
+forced into Faz 7. All forwarded writes are now fail-loud against typos.
+
+`EvaluationManager` still exposes `manager.X ⇄ manager.context.X` /
+`manager.state.X` property forwards so the workflows keep reading the same
+context/state. Behavior is unchanged and locked by characterization golden tests
+(`tests/test_owner_forward_contract.py`).
 
 ## Operational Hardening Phase
 
@@ -192,7 +227,17 @@ data/optuna/                 Optuna warm-start SQLite files
 tools/reports/               local report generation helpers
 ```
 
-The run id includes timestamp, symbol, validation mode, and a compact selected-model slug.
+The run id includes timestamp, symbol, validation mode, and a compact selected-model slug
+(`ForecastingPipeline._model_slug_for_run_id`). Slug rules:
+
+- selection covers all production candidates -> `ALL_MODELS`;
+- no explicit selection -> `models-All`;
+- 1 model -> `model-<Name>`; 2-3 -> `models-<A>-<B>-<C>`;
+- 4+ partial -> `models<N>-<sha8>` (visible names dropped).
+
+The 4+ and `ALL_MODELS` slugs stay short on purpose: long model-name lists previously
+pushed per-model export paths past the Windows 260-char `MAX_PATH` limit, aborting
+all-models runs in `model_result_exporter` (2026-06-02 fix).
 
 ## Important Invariants
 
@@ -210,4 +255,5 @@ The run id includes timestamp, symbol, validation mode, and a compact selected-m
 - [Validation and Backtesting](validation-and-backtesting.md)
 - [Persistence and API](persistence-and-api.md)
 - [Testing and Quality](testing-and-quality.md)
+- [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md)
 

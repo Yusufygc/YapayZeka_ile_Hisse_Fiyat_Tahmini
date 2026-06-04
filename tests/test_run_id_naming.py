@@ -18,13 +18,22 @@ class RunIdNamingTests(unittest.TestCase):
 
         self.assertEqual(slug, "models-XGBoost-RandomForest-LightGBMReturn")
 
-    def test_long_model_slug_is_capped_but_identifiable(self):
+    def test_long_model_slug_is_count_plus_hash(self):
+        # 4+ kismi liste: gorunur isimler atilir, kisa adet+hash kalir.
+        # Boylece Windows MAX_PATH (260) tasmasi olmaz.
         slug = ForecastingPipeline._model_slug_for_run_id(
             ["Prophet", "XGBoost", "Random Forest", "LightGBM Return", "LSTM", "ARIMA"]
         )
 
-        self.assertTrue(slug.startswith("models-Prophet-XGBoost-RandomForest-plus3-"))
-        self.assertLessEqual(len(slug), 60)
+        self.assertTrue(slug.startswith("models6-"))
+        self.assertLessEqual(len(slug), 20)
+
+    def test_all_candidates_slug_is_all_models(self):
+        from src.pipeline.model_scope import candidate_models
+
+        slug = ForecastingPipeline._model_slug_for_run_id(list(candidate_models()))
+
+        self.assertEqual(slug, "ALL_MODELS")
 
 
 if __name__ == "__main__":

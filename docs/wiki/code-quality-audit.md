@@ -50,6 +50,13 @@ Aksiyon (ayrı/büyük refactor — bu denetimde uygulanmaz): owner-forward yeri
 açık bağımlılık enjeksiyonu (`EvaluationContext` + dar protokoller);
 mixin'leri davranış-sahibi servislere dönüştür.
 
+> Güncelleme (2026-06-01): bu aksiyon artık
+> [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md) altında
+> `refactor/e1-owner-forward-di` dalında yürüyor. `PredictionService` ve
+> `BacktestService` `(ctx, state)` DI'ya çevrildi (owner-forward miras kalktı);
+> `SignalCalibrationService`/`MetricsReportingService` ve `forecasting/workflows`
+> hâlâ owner-backed. Bu denetim metrikleri ölçüm anının (2026-05-31) snapshot'ıdır.
+
 ### B2 — Şişkin dosyalar (16 dosya >500 satır, 6 dosya >700)
 
 | LOC | Dosya | Not |

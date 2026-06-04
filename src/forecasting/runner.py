@@ -20,6 +20,7 @@ from src.forecasting.bist_rules import BistMarketRules
 from src.forecasting.persistence import ForecastPersistence
 from src.forecasting.workflows import (
     BestModelResolver,
+    ForecastContext,
     ForecastDataPreparationService,
     ForecastPointGenerator,
     ForecastSymbolWorkflow,
@@ -64,12 +65,32 @@ class ForecastRunner:
         self._init_workflows()
 
     def _init_workflows(self) -> None:
-        self.model_resolver = BestModelResolver(self)
-        self.data_preparation_service = ForecastDataPreparationService(self)
-        self.production_training_workflow = ProductionTrainingWorkflow(self)
-        self.latest_target_prediction_workflow = LatestTargetPredictionWorkflow(self)
-        self.forecast_point_generator = ForecastPointGenerator(self)
-        self.symbol_workflow = ForecastSymbolWorkflow(self, ForecastResult)
+        # Faz 5 (E1 owner-forward epiği): owner-forward (`_OwnerBackedForecastService`)
+        # yerine açık DI. ForecastContext READ-ONLY config + factory callable'ları
+        # (model_config'e bağlı, runner'da kalır) + kardeş servis referanslarını taşır.
+        ctx = ForecastContext(
+            project_root=self.project_root,
+            db=self.db,
+            rules=self.rules,
+            model_config=self.model_config,
+            persistence=self.persistence,
+            make_model_instance=self._make_model_instance,
+            make_prophet=self._make_prophet,
+            target_to_price=ForecastRunner._target_to_price,
+        )
+        self.context = ctx
+        self.model_resolver = BestModelResolver(ctx)
+        self.data_preparation_service = ForecastDataPreparationService(ctx)
+        self.production_training_workflow = ProductionTrainingWorkflow(ctx)
+        self.latest_target_prediction_workflow = LatestTargetPredictionWorkflow(ctx)
+        self.forecast_point_generator = ForecastPointGenerator(ctx)
+        self.symbol_workflow = ForecastSymbolWorkflow(ctx, ForecastResult)
+        # Kardeş servis referanslarını context'e bağla (servisler birbirini ctx üzerinden çağırır).
+        ctx.model_resolver = self.model_resolver
+        ctx.data_preparation_service = self.data_preparation_service
+        ctx.production_training_workflow = self.production_training_workflow
+        ctx.latest_target_prediction_workflow = self.latest_target_prediction_workflow
+        ctx.forecast_point_generator = self.forecast_point_generator
 
     def _ensure_workflows(self) -> None:
         if not all(

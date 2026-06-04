@@ -128,102 +128,13 @@ class WalkForwardValidator:
         all_strategy_returns: List[np.ndarray] = []
 
         for idx, split in enumerate(splits):
-            if verbose:
-                print(f"\n  [INFO] Walk-Forward Window {idx + 1}/{len(splits)} (Split Index: {split['split_idx']})")
-                print(f"         Train points: {len(split['train'])}, Test points: {len(split['test'])}")
-                print(
-                    f"         Train dates : {split.get('train_date_start')} -> {split.get('train_date_end')} | "
-                    f"Test dates: {split.get('test_date_start')} -> {split.get('test_date_end')}"
-                )
-
-            train_df = split["train"]
-            test_df = split["test"]
-            context_df = split.get("embargo_context")
-
-            (
-                X_train,
-                y_train,
-                X_test,
-                y_test,
-                scaler_y,
-                y_test_price,
-                prev_close_test,
-                dates_test,
-                prediction_dates_test,
-                y_test_target,
-                market_regime_test,
-            ) = self.preprocessor(train_df, test_df, context_df=context_df)
-
-            model = self.model_initializer()
-            dates_train = train_df["Date"].values if "Date" in train_df.columns else None
-            model.train(X_train, y_train, dates_train=dates_train)
-
-            dates_test_raw = test_df["Date"].values if "Date" in test_df.columns else None
-            preds = model.predict(X_test, dates_test=dates_test_raw)
-
-            inner = getattr(model, "model", model)
-            fi = getattr(inner, "feature_importances_", None)
-            if fi is not None:
-                self.feature_importances.append(np.asarray(fi, dtype=float))
-
-            if scaler_y is not None and np.asarray(preds).ndim > 0:
-                preds_target = scaler_y.inverse_transform(np.asarray(preds).reshape(-1, 1)).ravel()
-            else:
-                preds_target = np.asarray(preds).ravel()
-
-            min_len = min(
-                len(preds_target),
-                len(y_test_price),
-                len(prev_close_test),
-                len(dates_test),
-                len(prediction_dates_test),
-                len(y_test_target),
-                len(market_regime_test),
-            )
-            preds_target_aligned = preds_target[-min_len:]
-            prev_close_aligned = np.asarray(prev_close_test).ravel()[-min_len:]
-            y_true_final = np.asarray(y_test_price).ravel()[-min_len:]
-            y_true_target_aligned = np.asarray(y_test_target).ravel()[-min_len:]
-            dates_aligned = np.asarray(dates_test)[-min_len:]
-            prediction_dates_aligned = np.asarray(prediction_dates_test)[-min_len:]
-            market_regime_aligned = np.asarray(market_regime_test).ravel()[-min_len:]
-            preds_final = self._target_to_price(preds_target_aligned, prev_close_aligned)
-
-            metrics = compute_financial_metrics(
-                y_true_final,
-                preds_final,
-                y_true_target=y_true_target_aligned,
-                y_pred_target=preds_target_aligned,
-                prev_close=prev_close_aligned,
-                target_mode=self.target_mode,
+            metrics, fold_strategy_returns, record = self._run_single_fold(
+                split, idx, len(splits), verbose
             )
             all_metrics.append(metrics)
-
-            # Sprint 3 A3.3: fold strategy returns concat-Sharpe icin biriktir.
-            fold_strategy_returns = _compute_strategy_returns(
-                y_true_target_aligned,
-                preds_target_aligned,
-                y_true_final,
-                prev_close_aligned,
-                self.target_mode,
-            )
             if fold_strategy_returns.size > 0:
                 all_strategy_returns.append(fold_strategy_returns)
-
-            self.results.append({
-                "split_idx": split["split_idx"],
-                "dates": dates_aligned.tolist(),
-                "prediction_dates": prediction_dates_aligned.tolist(),
-                "market_regime": market_regime_aligned.tolist(),
-                "prev_close": prev_close_aligned.tolist(),
-                "y_true_price": y_true_final.tolist(),
-                "y_true_target": y_true_target_aligned.tolist(),
-                "y_pred_price": preds_final.tolist(),
-                "y_pred_target": preds_target_aligned.tolist(),
-                "metrics": metrics,
-                "y_true": y_true_final.tolist(),
-                "y_pred": preds_final.tolist(),
-            })
+            self.results.append(record)
 
         if self.feature_importances:
             shapes = {arr.shape[0] for arr in self.feature_importances}
@@ -231,50 +142,164 @@ class WalkForwardValidator:
                 self.mean_feature_importance = np.vstack(self.feature_importances).mean(axis=0)
 
         if all_metrics:
-            # Numeric-only mean (skip None, booleans, strings).
-            def _safe_mean(values):
-                arr = [v for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
-                if not arr:
-                    return float("nan")
-                return float(np.mean(arr))
-
-            avg_metrics = {key: _safe_mean([m.get(key) for m in all_metrics]) for key in all_metrics[0].keys()}
-
-            # Sprint 3 A3.3: concat-Sharpe + bootstrap %95 CI.
-            if all_strategy_returns:
-                concat_returns = np.concatenate(all_strategy_returns)
-                # Risk-free rate fetched once for concat (Sprint 1 A1.1 fail-loud uyumlu).
-                try:
-                    rf = get_current_risk_free_rate()
-                except Exception:
-                    rf = None
-                if rf is not None and concat_returns.size > 0:
-                    sharpe_concat = _annualized_sharpe(concat_returns, rf)
-                    ci_low, ci_high = _bootstrap_sharpe_ci(concat_returns, rf)
-                else:
-                    sharpe_concat = float("nan")
-                    ci_low = float("nan")
-                    ci_high = float("nan")
-                avg_metrics["Sharpe_Concat"] = sharpe_concat
-                avg_metrics["Sharpe_CI_95_Low"] = ci_low
-                avg_metrics["Sharpe_CI_95_High"] = ci_high
-                avg_metrics["Concat_Returns_N"] = int(concat_returns.size)
-            else:
-                avg_metrics["Sharpe_Concat"] = float("nan")
-                avg_metrics["Sharpe_CI_95_Low"] = float("nan")
-                avg_metrics["Sharpe_CI_95_High"] = float("nan")
-                avg_metrics["Concat_Returns_N"] = 0
-
-            self.aggregated_metrics = avg_metrics
-            if verbose:
-                print("\n  [INFO] Walk-Forward Complete. Average Metrics:")
-                for key, value in avg_metrics.items():
-                    if isinstance(value, (int, float)):
-                        print(f"         {key}: {value:.4f}")
-                    else:
-                        print(f"         {key}: {value}")
+            self.aggregated_metrics = self._aggregate_metrics(
+                all_metrics, all_strategy_returns, verbose
+            )
 
         return {
             "window_results": self.results,
             "average_metrics": self.aggregated_metrics,
         }
+
+    def _run_single_fold(self, split: Dict, idx: int, total: int, verbose: bool):
+        """Tek walk-forward penceresini eğitir/değerlendirir (leakage-free).
+
+        Scaler fit yalnızca train dilimine; model sıfırdan kurulur. Feature
+        importance side-effect olarak `self.feature_importances`'a eklenir.
+
+        Returns:
+            (metrics, fold_strategy_returns, result_record) üçlüsü.
+        """
+        if verbose:
+            print(f"\n  [INFO] Walk-Forward Window {idx + 1}/{total} (Split Index: {split['split_idx']})")
+            print(f"         Train points: {len(split['train'])}, Test points: {len(split['test'])}")
+            print(
+                f"         Train dates : {split.get('train_date_start')} -> {split.get('train_date_end')} | "
+                f"Test dates: {split.get('test_date_start')} -> {split.get('test_date_end')}"
+            )
+
+        train_df = split["train"]
+        test_df = split["test"]
+        context_df = split.get("embargo_context")
+
+        (
+            X_train,
+            y_train,
+            X_test,
+            y_test,
+            scaler_y,
+            y_test_price,
+            prev_close_test,
+            dates_test,
+            prediction_dates_test,
+            y_test_target,
+            market_regime_test,
+        ) = self.preprocessor(train_df, test_df, context_df=context_df)
+
+        model = self.model_initializer()
+        dates_train = train_df["Date"].values if "Date" in train_df.columns else None
+        model.train(X_train, y_train, dates_train=dates_train)
+
+        dates_test_raw = test_df["Date"].values if "Date" in test_df.columns else None
+        preds = model.predict(X_test, dates_test=dates_test_raw)
+
+        inner = getattr(model, "model", model)
+        fi = getattr(inner, "feature_importances_", None)
+        if fi is not None:
+            self.feature_importances.append(np.asarray(fi, dtype=float))
+
+        if scaler_y is not None and np.asarray(preds).ndim > 0:
+            preds_target = scaler_y.inverse_transform(np.asarray(preds).reshape(-1, 1)).ravel()
+        else:
+            preds_target = np.asarray(preds).ravel()
+
+        min_len = min(
+            len(preds_target),
+            len(y_test_price),
+            len(prev_close_test),
+            len(dates_test),
+            len(prediction_dates_test),
+            len(y_test_target),
+            len(market_regime_test),
+        )
+        preds_target_aligned = preds_target[-min_len:]
+        prev_close_aligned = np.asarray(prev_close_test).ravel()[-min_len:]
+        y_true_final = np.asarray(y_test_price).ravel()[-min_len:]
+        y_true_target_aligned = np.asarray(y_test_target).ravel()[-min_len:]
+        dates_aligned = np.asarray(dates_test)[-min_len:]
+        prediction_dates_aligned = np.asarray(prediction_dates_test)[-min_len:]
+        market_regime_aligned = np.asarray(market_regime_test).ravel()[-min_len:]
+        preds_final = self._target_to_price(preds_target_aligned, prev_close_aligned)
+
+        metrics = compute_financial_metrics(
+            y_true_final,
+            preds_final,
+            y_true_target=y_true_target_aligned,
+            y_pred_target=preds_target_aligned,
+            prev_close=prev_close_aligned,
+            target_mode=self.target_mode,
+        )
+
+        # Sprint 3 A3.3: fold strategy returns concat-Sharpe icin biriktir.
+        fold_strategy_returns = _compute_strategy_returns(
+            y_true_target_aligned,
+            preds_target_aligned,
+            y_true_final,
+            prev_close_aligned,
+            self.target_mode,
+        )
+
+        record = {
+            "split_idx": split["split_idx"],
+            "dates": dates_aligned.tolist(),
+            "prediction_dates": prediction_dates_aligned.tolist(),
+            "market_regime": market_regime_aligned.tolist(),
+            "prev_close": prev_close_aligned.tolist(),
+            "y_true_price": y_true_final.tolist(),
+            "y_true_target": y_true_target_aligned.tolist(),
+            "y_pred_price": preds_final.tolist(),
+            "y_pred_target": preds_target_aligned.tolist(),
+            "metrics": metrics,
+            "y_true": y_true_final.tolist(),
+            "y_pred": preds_final.tolist(),
+        }
+        return metrics, fold_strategy_returns, record
+
+    def _aggregate_metrics(
+        self, all_metrics: List[Dict], all_strategy_returns: List[np.ndarray], verbose: bool
+    ) -> Dict[str, Any]:
+        """Fold metriklerini sayısal-ortalar + concat-Sharpe & bootstrap %95 CI ekler."""
+
+        # Numeric-only mean (skip None, booleans, strings).
+        def _safe_mean(values):
+            arr = [v for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
+            if not arr:
+                return float("nan")
+            return float(np.mean(arr))
+
+        avg_metrics = {key: _safe_mean([m.get(key) for m in all_metrics]) for key in all_metrics[0].keys()}
+
+        # Sprint 3 A3.3: concat-Sharpe + bootstrap %95 CI.
+        if all_strategy_returns:
+            concat_returns = np.concatenate(all_strategy_returns)
+            # Risk-free rate fetched once for concat (Sprint 1 A1.1 fail-loud uyumlu).
+            try:
+                rf = get_current_risk_free_rate()
+            except Exception:
+                rf = None
+            if rf is not None and concat_returns.size > 0:
+                sharpe_concat = _annualized_sharpe(concat_returns, rf)
+                ci_low, ci_high = _bootstrap_sharpe_ci(concat_returns, rf)
+            else:
+                sharpe_concat = float("nan")
+                ci_low = float("nan")
+                ci_high = float("nan")
+            avg_metrics["Sharpe_Concat"] = sharpe_concat
+            avg_metrics["Sharpe_CI_95_Low"] = ci_low
+            avg_metrics["Sharpe_CI_95_High"] = ci_high
+            avg_metrics["Concat_Returns_N"] = int(concat_returns.size)
+        else:
+            avg_metrics["Sharpe_Concat"] = float("nan")
+            avg_metrics["Sharpe_CI_95_Low"] = float("nan")
+            avg_metrics["Sharpe_CI_95_High"] = float("nan")
+            avg_metrics["Concat_Returns_N"] = 0
+
+        if verbose:
+            print("\n  [INFO] Walk-Forward Complete. Average Metrics:")
+            for key, value in avg_metrics.items():
+                if isinstance(value, (int, float)):
+                    print(f"         {key}: {value:.4f}")
+                else:
+                    print(f"         {key}: {value}")
+
+        return avg_metrics

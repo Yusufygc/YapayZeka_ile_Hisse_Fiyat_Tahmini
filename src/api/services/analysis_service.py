@@ -77,6 +77,44 @@ class AnalysisService:
 
         return StockModelDB(self._db_path)
 
+    def _try_refresh_and_rebuild(self, *, db, symbol, best, generated_at, reason):
+        """Refresh job kuyruğa alır; tamamlandıysa state'i yeniden yükleyip dolu
+        forecast response döner, aksi halde caller'ın fallback'e gitmesi için
+        ``(job, None)`` döner.
+
+        `build`'in missing-forecast ve stale-data dallarının paylaştığı çekirdek
+        (DRY): her ikisi de aynı queue → completed → reload → rebuild akışını izler.
+
+        Returns:
+            (job, AnalysisResponse | None).
+        """
+        job = _queue_refresh(
+            db=db,
+            project_root=self._project_root,
+            outputs_base=self._outputs_base,
+            start_background=self._enable_background_refresh,
+            wait_timeout_seconds=self._refresh_wait_timeout_seconds,
+            symbol=symbol,
+            best=best,
+            reason=reason,
+        )
+        if _job_status(job) == "completed":
+            refreshed = _reload_forecast_state(service=self, symbol=symbol, fallback_best=best)
+            if refreshed is not None:
+                r_db, r_best, r_forecast = refreshed
+                return job, _build_forecast_response(
+                    db=r_db,
+                    symbol=symbol,
+                    generated_at=generated_at,
+                    best=r_best,
+                    forecast_row=r_forecast,
+                    outputs_base=self._outputs_base,
+                    refresh_job=job,
+                    refresh_reason=reason,
+                    project_root=self._project_root,
+                )
+        return job, None
+
     def build(self, symbol: str) -> AnalysisResponse:
         """Sembol için tam analiz yanıtını (model + forecast + confidence) kurar.
 
@@ -118,35 +156,15 @@ class AnalysisService:
             latest_observed_date=None if latest is None else latest.date,
         )
         if forecast_row is None:
-            job = _queue_refresh(
+            job, response = self._try_refresh_and_rebuild(
                 db=db,
-                project_root=self._project_root,
-                outputs_base=self._outputs_base,
-                start_background=self._enable_background_refresh,
-                wait_timeout_seconds=self._refresh_wait_timeout_seconds,
                 symbol=symbol,
                 best=best,
+                generated_at=generated_at,
                 reason="missing_forecast_for_best_model",
             )
-            if _job_status(job) == "completed":
-                refreshed = _reload_forecast_state(
-                    service=self,
-                    symbol=symbol,
-                    fallback_best=best,
-                )
-                if refreshed is not None:
-                    db, best, forecast_row = refreshed
-                    return _build_forecast_response(
-                        db=db,
-                        symbol=symbol,
-                        generated_at=generated_at,
-                        best=best,
-                        forecast_row=forecast_row,
-                        outputs_base=self._outputs_base,
-                        refresh_job=job,
-                        refresh_reason="missing_forecast_for_best_model",
-                        project_root=self._project_root,
-                    )
+            if response is not None:
+                return response
             return AnalysisResponse(
                 symbol=symbol,
                 analysis_status="no_forecast",
@@ -163,35 +181,15 @@ class AnalysisService:
         freshness = compute_freshness(last_observed)
         stale_job = None
         if freshness.status == "stale_data":
-            stale_job = _queue_refresh(
+            stale_job, response = self._try_refresh_and_rebuild(
                 db=db,
-                project_root=self._project_root,
-                outputs_base=self._outputs_base,
-                start_background=self._enable_background_refresh,
-                wait_timeout_seconds=self._refresh_wait_timeout_seconds,
                 symbol=symbol,
                 best=best,
+                generated_at=generated_at,
                 reason="stale_market_data",
             )
-            if _job_status(stale_job) == "completed":
-                refreshed = _reload_forecast_state(
-                    service=self,
-                    symbol=symbol,
-                    fallback_best=best,
-                )
-                if refreshed is not None:
-                    db, best, forecast_row = refreshed
-                    return _build_forecast_response(
-                        db=db,
-                        symbol=symbol,
-                        generated_at=generated_at,
-                        best=best,
-                        forecast_row=forecast_row,
-                        outputs_base=self._outputs_base,
-                        refresh_job=stale_job,
-                        refresh_reason="stale_market_data",
-                        project_root=self._project_root,
-                    )
+            if response is not None:
+                return response
 
         return _build_forecast_response(
             db=db,

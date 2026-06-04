@@ -76,6 +76,38 @@ def test_model_resolver_forced_model_uses_best_metadata_when_available(tmp_path)
     assert selection["source_experiment_id"] is not None
 
 
+def test_model_resolver_forced_model_loads_member_artifact(tmp_path):
+    """Zorlanan modelin diskte artifact'i varsa resolve model_path'i doldurur."""
+    runner = _runner(tmp_path)
+    art_dir = os.path.join(str(tmp_path), "models")
+    os.makedirs(art_dir, exist_ok=True)
+    art_path = os.path.join(art_dir, "ridge_return_final_holdout_model.pkl")
+    with open(art_path, "wb") as fh:
+        fh.write(b"dummy-artifact")
+
+    runner.db.log_experiment(
+        "TEST",
+        "Ridge Return",
+        {"RMSE": 1.0, "MAE": 1.0, "MAPE": 1.0, "Dir_Acc": 60.0, "Sharpe": 0.5, "Hit_Rate": 55.0},
+        model_path=art_path,
+        validation_mode="final_holdout",
+        dataset_metadata={
+            "target_mode": "log_return",
+            "feature_mode": "stationary_features",
+            "scaling_mode": "robust_x_standard_y_clip",
+        },
+        is_production_candidate=True,
+        selection_source="test",
+    )
+
+    selection = runner.model_resolver.resolve("TEST", force_model_name="Ridge Return")
+
+    # Bug fix: forced model artifact'i bulundugunda model_path bos kalmaz.
+    assert selection["model_name"] == "Ridge Return"
+    assert selection["model_path"] == art_path
+    assert selection["source_experiment_id"] is not None
+
+
 def test_recursive_forecast_updates_feature_state_between_horizons(tmp_path):
     runner = _runner(tmp_path)
     generator = runner.forecast_point_generator

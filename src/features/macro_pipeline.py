@@ -248,7 +248,7 @@ class MacroPipeline:
             fetch_start = (existing["Date"].max() + timedelta(days=1)).strftime("%Y-%m-%d")
 
         fetch_end = (datetime.today() + timedelta(days=1)).strftime("%Y-%m-%d")
-        print(f"  [MACRO] {key} güncelleniyor: {fetch_start} → bugün ...")
+        print(f"  [MACRO] {key} güncelleniyor: {fetch_start} -> bugün ...")
 
         new_data = self._download_yfinance(ticker, fetch_start, fetch_end, value_name=key)
         if new_data is not None and not new_data.empty:
@@ -282,7 +282,7 @@ class MacroPipeline:
             df["Date"] = pd.to_datetime(df["Date"]).dt.normalize()
             return df
         except ImportError:
-            print("  [MACRO] pandas_datareader yüklü değil → pip install pandas-datareader")
+            print("  [MACRO] pandas_datareader yüklü değil -> pip install pandas-datareader")
             return None
         except Exception as exc:
             print(f"  [MACRO] FRED {series_id}: {exc}")
@@ -476,17 +476,7 @@ class MacroPipeline:
         bist100_df = self._filter_macro_frame(bist100_df, buf, e)
 
         # Faz 4.1: Genişletilmiş global göstergeler (try/except — her biri opsiyonel)
-        _global_keys = ["EURTRY", "VIX", "GOLD_USD", "OIL_USD", "DXY", "US10Y"]
-        _global_dfs = {}
-        for _gkey in _global_keys:
-            try:
-                if self._is_stale(_gkey, _STALE_DAYS_DAILY):
-                    self._update_daily_cache(_gkey, buf_daily)
-                _gdf = self._load_cache(_gkey)
-                if _gdf is not None and not _gdf.empty:
-                    _global_dfs[_gkey] = self._filter_macro_frame(_gdf, buf, e)
-            except Exception as _exc:
-                print(f"  [MACRO] {_gkey} atlanıyor: {_exc}")
+        _global_dfs = self._refresh_global_daily_frames(buf_daily, buf, e)
 
         # ── Aylık veriler (EVDS/FRED) ─────────────────────────────────────────
         self._refresh_monthly_caches(buf_monthly)
@@ -544,6 +534,25 @@ class MacroPipeline:
         for key in _MONTHLY_SERIES_KEYS:
             if self._is_stale(key, _STALE_DAYS_MONTHLY):
                 self._update_monthly_cache(key, buffer_start)
+
+    def _refresh_global_daily_frames(self, buf_daily: str, buf, e) -> dict:
+        """Faz 4.1 genişletilmiş global günlük göstergeleri yeniler + filtreler.
+
+        EURTRY/VIX/GOLD_USD/OIL_USD/DXY/US10Y; her biri opsiyonel — biri
+        başarısız olursa atlanır (sütun oluşmaz). Returns: {key: filtreli df}.
+        """
+        global_keys = ["EURTRY", "VIX", "GOLD_USD", "OIL_USD", "DXY", "US10Y"]
+        global_dfs: dict = {}
+        for gkey in global_keys:
+            try:
+                if self._is_stale(gkey, _STALE_DAYS_DAILY):
+                    self._update_daily_cache(gkey, buf_daily)
+                gdf = self._load_cache(gkey)
+                if gdf is not None and not gdf.empty:
+                    global_dfs[gkey] = self._filter_macro_frame(gdf, buf, e)
+            except Exception as exc:
+                print(f"  [MACRO] {gkey} atlanıyor: {exc}")
+        return global_dfs
 
     def _load_required_daily_frames(self) -> tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
         return self._load_cache("USDTRY"), self._load_cache("BIST100")

@@ -29,6 +29,56 @@ def _resolve_wf_embargo_size(raw_value, time_steps: int) -> int:
         return max(_MIN_AUTO_EMBARGO_SIZE, int(time_steps))
     return value
 
+
+def _resolve_split_count(
+    n: int, n_splits: int, min_train_size: int, test_size: int, embargo_size: int
+) -> int:
+    """Veri yetmezse ``n_splits``'i mümkün olan en yükseğe indirir.
+
+    Hiç geçerli pencere kurulamıyorsa 0 döner. Davranış orijinaldekiyle aynı —
+    sadece yetersizlik dalı ana döngüden ayrıldı (karmaşıklık azaltma).
+    """
+    min_required = min_train_size + embargo_size + (n_splits * test_size)
+    if n >= min_required:
+        return n_splits
+    print(
+        f"[WARNING] Not enough data for {n_splits} splits with test_size={test_size} "
+        f"and min_train_size={min_train_size}."
+    )
+    max_possible_splits = (n - min_train_size - embargo_size) // test_size
+    if max_possible_splits < 1:
+        print(
+            "[WARNING] No valid walk-forward split can be created "
+            f"(rows={n}, required_for_one_split={min_train_size + embargo_size + test_size})."
+        )
+        return 0
+    adjusted = min(n_splits, max_possible_splits)
+    print(f"[WARNING] Adjusted n_splits to {adjusted}.")
+    return adjusted
+
+
+def _window_bounds(
+    n: int, i: int, test_size: int, embargo_size: int, max_train_size: int | None
+) -> Tuple[int, int, int, int]:
+    """Sondan ``i``'inci pencerenin (train_start, train_end, test_start, test_end)
+    indekslerini döner. ``max_train_size`` None → expanding, int → sliding window."""
+    test_start = n - (i * test_size)
+    train_end = max(0, test_start - embargo_size)
+    test_end = test_start + test_size
+    if max_train_size is not None:
+        train_start = max(0, train_end - max_train_size)  # sliding: son N satır
+    else:
+        train_start = 0  # expanding: tüm geçmiş
+    return train_start, train_end, test_start, test_end
+
+
+def _first_last_date(frame: pd.DataFrame):
+    """(ilk, son) Date değeri; Date kolonu yoksa ya da frame boşsa (None, None)."""
+    if "Date" not in frame.columns or frame.empty:
+        return None, None
+    return frame["Date"].iloc[0], frame["Date"].iloc[-1]
+
+
 class TimeSeriesSplitter:
     """
     Handles robust train/test splitting for time series to prevent data leakage.
@@ -85,42 +135,27 @@ class TimeSeriesSplitter:
             df = df.sort_values(by="Date").reset_index(drop=True)
 
         n = len(df)
-        splits = []
         embargo_size = max(0, int(embargo_size))
+        n_splits = _resolve_split_count(n, n_splits, min_train_size, test_size, embargo_size)
+        if n_splits < 1:
+            return []
 
-        total_test_size = n_splits * test_size
-        min_required = min_train_size + embargo_size + total_test_size
-        if n < min_required:
-            print(f"[WARNING] Not enough data for {n_splits} splits with test_size={test_size} and min_train_size={min_train_size}.")
-            max_possible_splits = (n - min_train_size - embargo_size) // test_size
-            if max_possible_splits < 1:
-                print(
-                    "[WARNING] No valid walk-forward split can be created "
-                    f"(rows={n}, required_for_one_split={min_train_size + embargo_size + test_size})."
-                )
-                return []
-            n_splits = min(n_splits, max_possible_splits)
-            print(f"[WARNING] Adjusted n_splits to {n_splits}.")
-
+        splits = []
         for i in range(n_splits, 0, -1):
-            test_start = n - (i * test_size)
-            train_end = max(0, test_start - embargo_size)
-            embargo_start = train_end
-            embargo_end = test_start
-            test_end = test_start + test_size
-
-            if max_train_size is not None:
-                # Sliding window: yalnızca son max_train_size satırı kullan
-                train_start = max(0, train_end - max_train_size)
-            else:
-                # Expanding window: 0'dan train_end'e kadar tüm geçmiş
-                train_start = 0
+            train_start, train_end, test_start, test_end = _window_bounds(
+                n, i, test_size, embargo_size, max_train_size
+            )
+            embargo_start, embargo_end = train_end, test_start
 
             train_df = df.iloc[train_start:train_end].copy()
             embargo_df = df.iloc[embargo_start:embargo_end].copy()
-            test_df  = df.iloc[test_start:test_end].copy()
+            test_df = df.iloc[test_start:test_end].copy()
             if len(train_df) < min_train_size or len(test_df) < test_size:
                 continue
+
+            train_date_start, train_date_end = _first_last_date(train_df)
+            embargo_date_start, embargo_date_end = _first_last_date(embargo_df)
+            test_date_start, test_date_end = _first_last_date(test_df)
 
             splits.append({
                 "split_idx":   n_splits - i + 1,
@@ -135,12 +170,12 @@ class TimeSeriesSplitter:
                 "test_start": test_start,
                 "test_end":    test_end,
                 "embargo_size": embargo_size,
-                "train_date_start": train_df["Date"].iloc[0] if "Date" in train_df.columns and not train_df.empty else None,
-                "train_date_end": train_df["Date"].iloc[-1] if "Date" in train_df.columns and not train_df.empty else None,
-                "embargo_date_start": embargo_df["Date"].iloc[0] if "Date" in embargo_df.columns and not embargo_df.empty else None,
-                "embargo_date_end": embargo_df["Date"].iloc[-1] if "Date" in embargo_df.columns and not embargo_df.empty else None,
-                "test_date_start": test_df["Date"].iloc[0] if "Date" in test_df.columns and not test_df.empty else None,
-                "test_date_end": test_df["Date"].iloc[-1] if "Date" in test_df.columns and not test_df.empty else None,
+                "train_date_start": train_date_start,
+                "train_date_end": train_date_end,
+                "embargo_date_start": embargo_date_start,
+                "embargo_date_end": embargo_date_end,
+                "test_date_start": test_date_start,
+                "test_date_end": test_date_end,
             })
 
         return splits
