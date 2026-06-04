@@ -381,6 +381,56 @@ scoring batch → `PeerStore`. Runs even when Claude is closed.
 - Idempotent: re-running on same data makes a new run_id; API reads latest —
   harmless. The trading-day gate already prevents pointless weekend/holiday runs.
 
+## Faz 9 — Deep + Ensemble PoC (2026-06-05, branch `feat/e2-deep-ensemble`)
+
+Kol A (tek-hisse) derin model overfit'inin kök sebebi **veri açlığı** mıydı
+testi: derin modeli tek hisse yerine **pooled** evrende eğit, LightGBM ile aynı
+cross-sectional görevde kıyasla. Hepsi AYNI panel snapshot + AYNI purged date-WF
+fold + AYNI metrik (günlük cross-sectional IC/ICIR, `pooled_oos` harness). Adil
+kıyas için LightGBM baseline her koşuda yeniden hesaplandı (data/ CSV'leri
+tazelendiği için tarihsel 1.55 ile kıyas haksız olurdu).
+
+Araçlar (tools/, gitignore whitelist'li, src'ye/teste dokunmaz):
+- `tools/e2_poc_deep_ic.py` — `TorchMLPModel` (embedding'li feedforward MLP,
+  sklearn-vari fit/predict → harness uyumlu). Kategorik `symbol_id`/`sector_code`
+  öğrenilen embedding (LGB native categorical'a adil karşılık); sayısal feature
+  train-only standardize (leakage yok, fit içinde). LGB vs DEEP-MLP tek koşu.
+- `tools/e2_poc_deep_seedvar.py` — MLP'yi N seed koşar, ICIR dağılımı vs
+  deterministik LGB; kazanç gerçek mi gürültü mü verdict.
+- `tools/e2_poc_deep_ensemble.py` — LGB pred + çok-seed MLP avg pred → tarih-içi
+  pct-rank ağırlıklı blend; 50/50, 30/70, 70/30 kıyas.
+
+Neden MLP, LSTM değil: mevcut feature'lar zaten zamansal özet (lag/momentum/MA).
+Sequence LSTM ancak ham seri ile değer katar = büyük redesign. MLP "NN bu
+feature'lardan trees'ten fazlasını çıkarır mı"yı doğrudan/hızlı/leak-safe ölçer.
+
+**Sonuçlar (full evren: 580 sym, 1.204M satır, 2856 tarih, 378 OOS gün, h=5,
+CS+CSFEAT, target_cs):**
+
+- **Adım A (IC + seed-varyans):** LGB ICIR 1.553 (deterministik). MLP 5 seed:
+  1.554 / 1.574 / 1.597 / 1.635 / 1.717 → **mean 1.615 ± 0.057**, 5/5 seed ≥ LGB.
+  Verdict: **deep kazancı gerçek (gürültü değil) ama marjinal (+%4 ICIR)**.
+  Overfit YOK — std dar, %IC>0 ≥94. Kök sebep doğrulandı: tek-hisse çöküşü
+  **veri açlığıydı**; pooling (1.2M satır) derin modeli doyurdu.
+- **Adım B (ensemble):**
+
+  | model | IC | ICIR | %IC>0 |
+  |---|---|---|---|
+  | LightGBM | 0.099 | 1.553 | 93.9 |
+  | DEEP-MLP (3-seed avg) | 0.116 | 1.645 | 94.7 |
+  | **ENSEMBLE 30LGB/70MLP** | **0.118** | **1.670** | 95.5 |
+  | ENSEMBLE 50/50 | 0.115 | 1.665 | 96.0 |
+
+  Ensemble ikisini de geçti: LGB'ye karşı **ICIR +%7.5, IC +%18**. Multi-seed MLP
+  avg (1.645) tek en iyi seedi (1.635) geçti (varyans söndü). En iyi karışım MLP
+  ağırlıklı (30/70) — MLP daha güçlü bacak, LGB %30 ile decorrelated katkı verir.
+
+**Hüküm:** Tek-model deep production'a değmez (+%4 için torch nondeterminizmi).
+**Ensemble production'a değer** (+%18 IC ranking sinyali; maliyet ~4× hesap ama
+gece offline batch'te kabul edilebilir; 3-seed avg nondeterminizmi söndürür).
+Karar: ensemble'ı serving'e bağla (`nightly_scoring` → peer_score ensemble'dan).
+Sequence LSTM (D) ham-seri 3. bacak adayı olarak **en sona ertelendi**.
+
 ## Faz 0 Findings (2026-06-02)
 
 Audit of all 592 stock CSVs in `data/` via `tools/e2_faz0_universe_audit.py`.

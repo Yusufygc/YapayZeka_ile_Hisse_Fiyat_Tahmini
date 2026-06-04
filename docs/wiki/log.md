@@ -1,3 +1,34 @@
+## [2026-06-05] E2 Faz 9 | Deep + Ensemble PoC (branch feat/e2-deep-ensemble)
+
+Kol A overfit'inin kök sebebi veri açlığı mıydı testi: derin model tek-hisse
+yerine pooled evrende, LightGBM ile aynı cross-sectional görevde (AYNI panel/
+fold/metrik) kıyaslandı.
+- Yeni araçlar (gitignore whitelist, src/test'e dokunmaz):
+  `tools/e2_poc_deep_ic.py` (embedding'li `TorchMLPModel`, harness-uyumlu),
+  `tools/e2_poc_deep_seedvar.py` (seed-varyans verdict),
+  `tools/e2_poc_deep_ensemble.py` (pct-rank blend).
+- Adım A: LGB ICIR 1.553 (det.); MLP 5 seed mean 1.615±0.057, 5/5 ≥ LGB →
+  deep kazancı gerçek ama marjinal (+%4), overfit YOK. Kök sebep doğrulandı:
+  tek-hisse çöküşü veri açlığıydı; pooling derin modeli doyurdu.
+- Adım B: ENSEMBLE (30LGB/70MLP) IC 0.118 / ICIR 1.670 → LGB'ye karşı IC +%18,
+  ICIR +%7.5; ensemble her iki bileşeni geçti. Multi-seed MLP avg tek seedi geçti.
+- Hüküm: tek-model deep production'a değmez; ensemble değer. Sıradaki: ensemble'ı
+  `nightly_scoring`'e bağla. Sequence LSTM (D) en sona ertelendi.
+- Wiki: `e2-pooled-global-model-epic.md` Faz 9 bölümü eklendi.
+
+## [2026-06-04] Branch temizligi | E1 main'e merge + stale dallar silindi
+
+Worktree temizligi yapildi (yalniz git-ref, kod davranisi degismedi):
+- `refactor/e1-owner-forward-di` main'e `--no-ff` merge edildi (merge commit
+  `c62b35d`), origin/main'e push edildi. main artik origin ile senkron (onceki
+  70 unpushed commit + e1'in 31'i birlikte gitti). E1 epigi tamamen icerildi.
+- Silinen stale dallar (lokal + github + tracking prune): `ModelUpdate`,
+  `sysUpdate`, `refactor/e1-owner-forward-di`. Hepsi `feat/e2`'nin
+  icerik-altkumesiydi, kayip is yok, conflict yok.
+- Kalan dallar: `feat/e2-pooled-global-model` (aktif), `main`.
+- `e1-owner-forward-epic.md` frontmatter: branch satirina "silindi; main'e
+  merge edildi c62b35d" notu eklendi.
+
 ## [2026-06-04] Wiki tam tazeleme + graphify kurali kaldirildi
 
 Graphify otomasyonu kaldirildi (token maliyeti). Onun bilgi-tabani isini artik

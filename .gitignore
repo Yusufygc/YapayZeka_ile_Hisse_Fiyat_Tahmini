@@ -21,6 +21,9 @@ tools/*
 !tools/e2_faz5_nightly_scoring.py
 !tools/e2_faz7_confidence_diracc.py
 !tools/e2_nightly_pipeline.py
+!tools/e2_poc_deep_ic.py
+!tools/e2_poc_deep_seedvar.py
+!tools/e2_poc_deep_ensemble.py
 .claude
 kalinanYer.md
 kalinanYer1.md
