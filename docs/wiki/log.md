@@ -1,3 +1,12 @@
+## [2026-06-05] E2 Faz 9 live | Gecelik job ensemble'a geçti
+
+Scheduled `ts_forecasting_nightly` artık ensemble koşar:
+- `scripts/nightly_serving.ps1` line 29 `--model ensemble` eklendi (Task Scheduler
+  action sabit, ps1 version-controlled).
+- Gece ~4× hesap, IC +%18 ranking sinyali. Smoke (20 sym, skip-data) exit=0,
+  "final ENSEMBLE (LGB + 3-seed MLP)", PeerStore yazıldı.
+- Wiki: e2 epic "Live job durumu" güncellendi.
+
 ## [2026-06-05] E2 Faz 9 Adım D | Sequence LSTM 3. bacak: denendi → RAF
 
 3. bacak adayı sequence LSTM (W=20 lookback) test edildi (branch feat/e2-deep-ensemble):

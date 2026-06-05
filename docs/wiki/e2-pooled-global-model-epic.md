@@ -455,9 +455,11 @@ PoC araçlarındaki MLP production'a taşındı + ensemble serving-uyumlu paketl
 - Testler: `tests/test_torch_mlp_model.py` (7) + `tests/test_ensemble_pooled_model.py`
   (6); `test_nightly_pipeline.py` model passthrough assert eklendi. Tümü yeşil.
   Ensemble nightly path uçtan uca smoke (30 sym, PeerStore'a yazıldı, trend dolu).
-- **Live job durumu:** scheduled `ts_forecasting_nightly` hâlâ `lgb` default'ta;
-  ensemble'a geçiş için pipeline'a `--model ensemble` geçmek (re-register) yeterli.
-  Kullanıcı kararına bırakıldı (gece ~4× hesap).
+- **Live job durumu (✅ ensemble 2026-06-05):** scheduled `ts_forecasting_nightly`
+  artık **ensemble** koşar. Geçiş `scripts/nightly_serving.ps1` içinde
+  `--model ensemble` eklenerek yapıldı (Task Scheduler action sabit kaldı → ps1
+  version-controlled). Gece ~4× hesap, IC +%18 ranking sinyali. Smoke (20 sym,
+  skip-data) uçtan uca exit=0, "final ENSEMBLE (LGB + 3-seed MLP)", PeerStore yazıldı.
 
 ### Adım D — Sequence LSTM 3. bacak (denendi → RAF, 2026-06-05)
 

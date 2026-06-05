@@ -26,7 +26,8 @@ $Log = Join-Path $LogDir "nightly_$Stamp.log"
     Out-File -FilePath $Log -Append -Encoding utf8
 
 # stdout + stderr (PS 5.1: *>>) log'a eklenir.
-& $Py "tools/e2_nightly_pipeline.py" --db "data/serving_pool.db" --boost 400 *>> $Log
+# --model ensemble (E2 Faz 9): LGB+MLP 2-bacak ensemble; ~4x gece hesap, IC +%18.
+& $Py "tools/e2_nightly_pipeline.py" --db "data/serving_pool.db" --boost 400 --model ensemble *>> $Log
 $rc = $LASTEXITCODE
 
 "==== nightly_serving bitis exit=$rc $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ====" |
