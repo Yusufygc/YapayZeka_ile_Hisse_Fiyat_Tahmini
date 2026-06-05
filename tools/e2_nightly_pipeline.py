@@ -3,7 +3,7 @@
 
 Tek giris noktasi: (a) BIST islem-gunu kapisi -> (b) evren-geneli artimli veri
 tazeleme (yfinance) -> (c) global model skorlama batch'i (PeerStore guncelle).
-Windows Task Scheduler her gun 03:00'te scripts/nightly_serving.ps1 ile cagirir.
+Windows Task Scheduler her gun 21:00'de (BIST kapanis sonrasi) scripts/nightly_serving.ps1 ile cagirir.
 
 Tasarim:
 - Veri tazeleme mevcut `DataUpdater.check_and_update` (graceful, per-symbol)

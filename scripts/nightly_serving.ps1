@@ -1,5 +1,5 @@
 # E2 Faz 8 - gecelik serving pipeline sarmalayicisi (Windows Task Scheduler hedefi).
-# Her gun 03:00'te calisir: islem-gunu kapisi -> veri tazeleme -> skorlama -> PeerStore.
+# Her gun 21:00'de calisir (BIST kapanis sonrasi): islem-gunu kapisi -> veri tazeleme -> skorlama -> PeerStore.
 # Cikti logs/nightly_<yyyyMMdd>.log dosyasina akar; 14 gunden eski loglar budanir.
 
 $ErrorActionPreference = "Stop"
