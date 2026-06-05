@@ -459,6 +459,52 @@ PoC araçlarındaki MLP production'a taşındı + ensemble serving-uyumlu paketl
   ensemble'a geçiş için pipeline'a `--model ensemble` geçmek (re-register) yeterli.
   Kullanıcı kararına bırakıldı (gece ~4× hesap).
 
+### Adım D — Sequence LSTM 3. bacak (denendi → RAF, 2026-06-05)
+
+Faz 9'da ertelenen sequence LSTM 3. bacak adayı test edildi. Soru: ham özellik
+**dizisini** (W=20 gün lookback) okuyan bir LSTM, tek-satır MLP / LGB'nin
+göremediği zamansal yapıdan ek cross-sectional sinyal çıkarır mı? Decorrelated 3.
+bacak = ensemble değeri (bireysel olarak geçmese bile).
+
+Araçlar (tools/, gitignore whitelist'li, src'ye/teste dokunmaz):
+- `tools/e2_poc_deep_lstm.py` — `SeqLSTMModel` (pooled sequence LSTM, GPU). Panel
+  `[Date, symbol]` sıralı → sembol filtreleyince date-artan; `build_lookback_index`
+  her satır için W-gün geçmiş pencere (global pozisyon) kurar, yetersiz geçmişli
+  satır atlanır. Sayısal feature train-only standardize (leakage yok; lookback
+  geçmiş **girdi**, target değil). Kategorik son adımda embedding. **Ayrı fold
+  döngüsü** gerekti: `evaluate_per_symbol` fit/predict'e yalnız satır-bazlı X/y
+  geçer, symbol/Date kimliğini siler; LSTM per-symbol pencere ister. LGB de aynı
+  döngüde, aynı geçerli-satır evreninde (W history olan satırlar) → birebir adil IC.
+- `tools/e2_poc_deep_ens3.py` — karar kapısı: tek fold döngüsünde LGB + MLP(3-seed)
+  + LSTM(2-seed), aynı satır evreni, within-date pct-rank blend; 2-bacak vs çeşitli
+  3-bacak kombolar.
+
+**Sonuçlar (full evren: 580 sym, 1.204M satır, 378 OOS gün, h=5, CS+CSFEAT):**
+
+- LSTM standalone (`e2_poc_deep_lstm`): IC 0.0992, **ICIR 1.599**, %IC>0 95.0.
+  LGB ile neredeyse eşit (1.557); 30-sembol smoke'taki büyük fark evren büyüyünce
+  kayboldu (az sembol = gürültülü IC). Pred rank corr LGB-LSTM 0.53 = decorrelated.
+- 3-bacak karar kapısı (`e2_poc_deep_ens3`):
+
+  | config | IC | ICIR | %IC>0 |
+  |---|---|---|---|
+  | LGB | 0.0995 | 1.557 | 94.2 |
+  | MLP | 0.1179 | 1.729 | 95.0 |
+  | LSTM | 0.1060 | 1.660 | 95.0 |
+  | 2-leg LGB+MLP (0.5/0.5) | 0.1163 | 1.715 | 95.2 |
+  | **3-leg equal (1/3)** | **0.1198** | **1.749** | 95.2 |
+
+  Pred corr: LGB-MLP 0.688, **LGB-LSTM 0.586** (en düşük), MLP-LSTM 0.711.
+
+**Hüküm — RAF:** 3-bacak best (equal) 2-bacağı **+%2 ICIR / +%3 IC** geçti =
+gerçek ama **marjinal** kazanç. LSTM en çok LGB'den decorrelated (0.586) ama MLP'ye
+yakın (0.711) → sinyalinin çoğunu MLP zaten veriyor. **Maliyet yüksek:** (1)
+`score_latest_universe` tek cross-section skorlar; LSTM her sembol için W=20 günlük
+lookback ister → serving refactor; (2) gecelik batch'e GPU bağımlılığı + sequence
+build (~2× ek hesap, ensemble zaten 4×). **%2 kazanç bu maliyeti haklı çıkarmıyor.**
+Karar: sequence LSTM **rafa** — 3. bacak kanıtlandı ama ekonomik değil. PoC araçları
+kayıt olarak repo'da kalır; serving 2-bacak (LGB+MLP) ensemble'da kalır.
+
 ## Faz 0 Findings (2026-06-02)
 
 Audit of all 592 stock CSVs in `data/` via `tools/e2_faz0_universe_audit.py`.

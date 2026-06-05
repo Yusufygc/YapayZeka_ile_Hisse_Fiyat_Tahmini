@@ -1,3 +1,16 @@
+## [2026-06-05] E2 Faz 9 Adım D | Sequence LSTM 3. bacak: denendi → RAF
+
+3. bacak adayı sequence LSTM (W=20 lookback) test edildi (branch feat/e2-deep-ensemble):
+- Yeni PoC araçları: `tools/e2_poc_deep_lstm.py` (`SeqLSTMModel` + `build_lookback_index`,
+  pooled sequence LSTM GPU, ayrı fold döngüsü — harness symbol/Date silyor), karar
+  kapısı `tools/e2_poc_deep_ens3.py` (LGB+MLP+LSTM aynı satır evreni, pct-rank blend).
+- Full evren (580 sym, 1.204M satır, 378 OOS gün): LSTM standalone ICIR 1.599
+  (≈LGB 1.557). 3-bacak best (equal) ICIR 1.749 vs 2-bacak (LGB+MLP) 1.715 = +%2.
+- Pred corr LGB-LSTM 0.586 (en düşük) ama MLP-LSTM 0.711 → LSTM sinyali MLP ile örtüşür.
+- **Hüküm RAF:** +%2 ICIR marjinal; maliyet yüksek (serving sequence-lookback refactor
+  + gece GPU bağımlılığı). Değmez. Serving 2-bacak (LGB+MLP) ensemble'da kalır. PoC
+  araçları kayıt olarak repo'da. Wiki: e2 epic "Adım D" bölümü.
+
 ## [2026-06-05] E2 Faz 9 serving | Ensemble production'a bağlandı
 
 PoC bulgusu serving'e taşındı (branch feat/e2-deep-ensemble):
