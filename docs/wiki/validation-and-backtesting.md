@@ -352,9 +352,34 @@ Production leader selection should consider only eligible production candidates,
 not benchmarks. This is explicitly covered by tests in
 `tests/test_model_scope_production.py`.
 
+## Pooled Cross-Sectional Validation (E2)
+
+The E2 pooled global model uses a different validation lens from the per-symbol
+splits above — cross-sectional, not absolute per-symbol:
+
+- **Group-purged date-based walk-forward** (`src/validation/pooled_cv.py`,
+  `PooledPurgedWalkForward`): splits are on **dates** across all symbols at once;
+  no cross-symbol same-date leakage, and the horizon is purged via
+  `target_date < window_start`.
+- **Per-symbol OOS aggregation** (`src/validation/pooled_oos.py`): pools fold
+  predictions, then reports the **daily cross-sectional IC** — within each date,
+  `spearman(pred, true)` across symbols — and **ICIR = mean/std**. Overlapping
+  h-day target windows inflate ICIR (autocorrelation), so
+  `daily_cross_sectional_ic(..., sample_gap_days=h)` sub-samples non-overlapping
+  dates for an honest ICIR.
+- **Segment stratification** (`src/validation/segment_ic.py`): IC/ICIR per
+  liquidity/volatility/sector bucket, feeding the serving confidence.
+- **Leak guard**: any `target*` column is excluded from features (regression test
+  `test_target_variants_never_become_features`).
+
+Current full-universe result: IC ≈ 0.099, ICIR ≈ 1.55. See
+[E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md) and
+[E2 Faz 2 Pooled CV Design](e2-faz2-pooled-cv-design.md).
+
 ## Related Pages
 
 - [Data Pipeline](data-pipeline.md)
 - [Model Catalog](model-catalog.md)
 - [Testing and Quality](testing-and-quality.md)
+- [E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md)
 

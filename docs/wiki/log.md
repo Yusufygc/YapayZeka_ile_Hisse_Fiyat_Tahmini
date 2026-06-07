@@ -1,3 +1,435 @@
+## [2026-06-05] E2 Faz 9 live | Gecelik job ensemble'a geçti
+
+Scheduled `ts_forecasting_nightly` artık ensemble koşar:
+- `scripts/nightly_serving.ps1` line 29 `--model ensemble` eklendi (Task Scheduler
+  action sabit, ps1 version-controlled).
+- Gece ~4× hesap, IC +%18 ranking sinyali. Smoke (20 sym, skip-data) exit=0,
+  "final ENSEMBLE (LGB + 3-seed MLP)", PeerStore yazıldı.
+- Wiki: e2 epic "Live job durumu" güncellendi.
+
+## [2026-06-05] E2 Faz 9 Adım D | Sequence LSTM 3. bacak: denendi → RAF
+
+3. bacak adayı sequence LSTM (W=20 lookback) test edildi (branch feat/e2-deep-ensemble):
+- Yeni PoC araçları: `tools/e2_poc_deep_lstm.py` (`SeqLSTMModel` + `build_lookback_index`,
+  pooled sequence LSTM GPU, ayrı fold döngüsü — harness symbol/Date silyor), karar
+  kapısı `tools/e2_poc_deep_ens3.py` (LGB+MLP+LSTM aynı satır evreni, pct-rank blend).
+- Full evren (580 sym, 1.204M satır, 378 OOS gün): LSTM standalone ICIR 1.599
+  (≈LGB 1.557). 3-bacak best (equal) ICIR 1.749 vs 2-bacak (LGB+MLP) 1.715 = +%2.
+- Pred corr LGB-LSTM 0.586 (en düşük) ama MLP-LSTM 0.711 → LSTM sinyali MLP ile örtüşür.
+- **Hüküm RAF:** +%2 ICIR marjinal; maliyet yüksek (serving sequence-lookback refactor
+  + gece GPU bağımlılığı). Değmez. Serving 2-bacak (LGB+MLP) ensemble'da kalır. PoC
+  araçları kayıt olarak repo'da. Wiki: e2 epic "Adım D" bölümü.
+
+## [2026-06-05] E2 Faz 9 serving | Ensemble production'a bağlandı
+
+PoC bulgusu serving'e taşındı (branch feat/e2-deep-ensemble):
+- Yeni production modülleri: `src/models/torch_mlp_model.py` (`TorchMLPModel`,
+  input-validation + fail-loud), `src/models/ensemble_pooled_model.py`
+  (`EnsemblePooledModel` = LGB + 3-seed MLP, tarih-içi pct-rank blend 50/50).
+- `tools/e2_faz5_nightly_scoring.py` `--model {lgb,ensemble}` (default lgb) +
+  `--mlp-epochs`; ensemble final skorlama, segment ICIR/confidence LGB-only (locked).
+- `tools/e2_nightly_pipeline.py` `--model` passthrough (scheduled job ensemble'a
+  geçebilir; default lgb, ~4× süre).
+- Testler: test_torch_mlp_model.py (7) + test_ensemble_pooled_model.py (6) +
+  nightly pipeline passthrough assert. Suite: 685 passed (1 ilgisiz fail:
+  test_leakage_guards BuyHold_Sharpe NaN — INTEREST_RATE.csv yok, risk-free
+  fail-loud; ayrı task açıldı).
+- Wiki: e2 epic Faz 9 "Serving entegrasyonu" + architecture.md model tablosu.
+- Live scheduled job hâlâ lgb default; ensemble'a geçiş kullanıcı kararına bırakıldı.
+
+## [2026-06-05] E2 Faz 9 | Deep + Ensemble PoC (branch feat/e2-deep-ensemble)
+
+Kol A overfit'inin kök sebebi veri açlığı mıydı testi: derin model tek-hisse
+yerine pooled evrende, LightGBM ile aynı cross-sectional görevde (AYNI panel/
+fold/metrik) kıyaslandı.
+- Yeni araçlar (gitignore whitelist, src/test'e dokunmaz):
+  `tools/e2_poc_deep_ic.py` (embedding'li `TorchMLPModel`, harness-uyumlu),
+  `tools/e2_poc_deep_seedvar.py` (seed-varyans verdict),
+  `tools/e2_poc_deep_ensemble.py` (pct-rank blend).
+- Adım A: LGB ICIR 1.553 (det.); MLP 5 seed mean 1.615±0.057, 5/5 ≥ LGB →
+  deep kazancı gerçek ama marjinal (+%4), overfit YOK. Kök sebep doğrulandı:
+  tek-hisse çöküşü veri açlığıydı; pooling derin modeli doyurdu.
+- Adım B: ENSEMBLE (30LGB/70MLP) IC 0.118 / ICIR 1.670 → LGB'ye karşı IC +%18,
+  ICIR +%7.5; ensemble her iki bileşeni geçti. Multi-seed MLP avg tek seedi geçti.
+- Hüküm: tek-model deep production'a değmez; ensemble değer. Sıradaki: ensemble'ı
+  `nightly_scoring`'e bağla. Sequence LSTM (D) en sona ertelendi.
+- Wiki: `e2-pooled-global-model-epic.md` Faz 9 bölümü eklendi.
+
+## [2026-06-04] Branch temizligi | E1 main'e merge + stale dallar silindi
+
+Worktree temizligi yapildi (yalniz git-ref, kod davranisi degismedi):
+- `refactor/e1-owner-forward-di` main'e `--no-ff` merge edildi (merge commit
+  `c62b35d`), origin/main'e push edildi. main artik origin ile senkron (onceki
+  70 unpushed commit + e1'in 31'i birlikte gitti). E1 epigi tamamen icerildi.
+- Silinen stale dallar (lokal + github + tracking prune): `ModelUpdate`,
+  `sysUpdate`, `refactor/e1-owner-forward-di`. Hepsi `feat/e2`'nin
+  icerik-altkumesiydi, kayip is yok, conflict yok.
+- Kalan dallar: `feat/e2-pooled-global-model` (aktif), `main`.
+- `e1-owner-forward-epic.md` frontmatter: branch satirina "silindi; main'e
+  merge edildi c62b35d" notu eklendi.
+
+## [2026-06-04] Wiki tam tazeleme + graphify kurali kaldirildi
+
+Graphify otomasyonu kaldirildi (token maliyeti). Onun bilgi-tabani isini artik
+yalniz `docs/wiki/` ustleniyor. Degisiklikler:
+- Global `~/.claude/CLAUDE.md`: `# graphify` blogu silindi (yalniz @RTK.md kaldi).
+- `RULES.md`: "Otomatik Wiki ve Graphify Guncelleme Kurali" -> "Otomatik Wiki
+  Guncelleme Kurali" (graphify cagrisi cikarildi, wiki-only). Not: RULES.md
+  gitignore'da (izlenmiyor), bu degisiklik yerel.
+- E2 Faz 5-8'i yansitacak sekilde TUM ilgili wiki sayfalari tazelendi:
+  `index.md` (E2 durumu "plan only" -> Faz 2-8 done), `architecture.md`
+  (E2 serving subsystem + nightly job + tech-stack), `persistence-and-api.md`
+  (PeerStore + peer_scores trend kolonlari + nightly), `analysis-api-contract.md`
+  (peer block + trend alanlari), `data-pipeline.md` (evren-geneli nightly
+  refresh), `validation-and-backtesting.md` (pooled group-purged CV + cross-
+  sectional IC/ICIR), `model-catalog.md` (pooled global model ailesi),
+  `confidence-and-risk-policy.md` (peer/segment confidence + gates),
+  `product-decision-support-design.md` (peer/trend ciktisi, durust cerceve),
+  `source-map.md` (src/serving + tools + scripts + serving_pool.db), 
+  `testing-and-quality.md` (E2 test dosyalari + 670 passed).
+- Commit + push: bu oturumun kodu (Faz 7b+8) zaten otomatik commit hook ile
+  324268a'da; origin ile 0/0 (push'lu). Branch merge YOK (kullanici talebi).
+
+## [2026-06-04] Faz 8 | Gecelik serving otomasyonu (veri taze kalsin)
+
+Serving DB'nin (data/serving_pool.db) bayatlamasini onlemek icin Windows gecelik
+gorevi. Akis: islem-gunu kapisi -> evren veri tazeleme -> skorlama -> PeerStore.
+- `tools/e2_nightly_pipeline.py` (YENI orkestrator): (a) `is_trading_day(d,"XIST")`
+  pandas-market-calendars ile BIST tatil-bilincli kapi; dun islem gunu degilse
+  skip+exit0. Lib/takvim hatasi -> hafta-ici fallback (Pzt-Cum), hafta sonu yine
+  kesilir. (b) `refresh_universe` data/*.csv dongusu + `DataUpdater.check_and_update`
+  (reuse, graceful) + updated/up_to_date/skipped/failed sayim. (c) skorlama
+  `tools/e2_faz5_nightly_scoring.py` subprocess ile (degismedi).
+- `scripts/nightly_serving.ps1`: Task Scheduler hedefi; dl_env python tam yol,
+  log logs/nightly_<tarih>.log, 14g+ log budama, exit kodu yansitma.
+- `scripts/register_nightly_task.ps1`: tek seferlik `schtasks /Create`
+  (ts_forecasting_nightly, gunluk 21:00, BIST kapanis sonrasi; -Time param).
+  Kaldirma: schtasks /Delete. Kapi hedefi saate gore: aksam(>=19)=bugun,
+  sabah=dun (`gate_target_date`). Saat 03:00->21:00 (kullanici talebi).
+- Bagimlilik: `pandas-market-calendars==4.4.0` requirements'ta vardi ama dl_env'de
+  YOK'tu -> kuruldu (XIST dogrulandi).
+- Testler: `tests/test_nightly_pipeline.py` (14, ag yok). Karar: kapsam veri+skor,
+  Task Scheduler 21:00, sadece islem gunleri. Wiki: e2 epic "Faz 8" bolumu.
+
+## [2026-06-03] Faz 7b | Trend egilimi (yukarı/yatay/aşağı) API'ye eklendi
+
+Faz 7 bulgusu urune cevrildi. Yeni `src/serving/trend_tendency.py`:
+`trend_from_peer(peer_percentile, universe_size)` -> TrendTendency(label, prob_up,
+expected_return). Etiket percentile bandindan (>=70 yukarı, <=30 aşağı, else yatay;
+ince evren/NaN -> belirsiz); prob_up+expected_return Faz 7 mutlak kalibrasyonundan
+(Q1..Q5 prob_up 0.435->0.541, exp -0.0066->+0.0090, h=5). Durust cerceve reasons'a
+gomulu (olasiliksal egilim, garanti degil; guven ayri yonetir).
+- `nightly_scoring.assemble_peer_table` 3 yeni kolon uretir (trend_cfg param).
+- `peer_store` 3 yeni peer_scores kolonu + idempotent `_migrate` (ALTER ADD COLUMN);
+  eski DB'ler (run_id<=2) yerinde yukseltilir, eski satirlarda NULL -> API None (zarif).
+- `PeerBlock` + `peer_service` trend alanlarini expose eder; mevcut mutlak
+  forecast/confidence dokunulmadi (additive).
+- Testler: test_trend_tendency.py (10) + nightly/store/service trend assert'leri.
+  Tam suite 659 passed.
+- Gecelik batch yeniden kosuldu -> peer_scores trend ile dolduruldu (desktop app
+  yukarı/yatay/aşağı + kalibre P(up) + beklenen getiri tuketebilir). Wiki:
+  e2-pooled-global-model-epic.md "Faz 7b" bolumu.
+
+## [2026-06-03] Faz 7 | Confidence-stratified MUTLAK yon isabeti olcumu
+
+`tools/e2_faz7_confidence_diracc.py`. Soru: serving confidence (segment composite
+ICIR x tradability) yuksek isimlerde mutlak yukari/asagi isabeti belirgin daha mi
+yuksek? Full-evren OOS (CS+CSFEAT h=5, 589 sym, 217444 satir, ICIR 1.55). Mutlak
+hedef geri eklendi; (fold,date) ici y_pred quintile; ekstrem-yon isabeti
+(Q5->yukari, Q1->asagi). base P(up)=0.498.
+- high (6426): dir_acc 0.571, Q5up 0.551, spread +0.0213
+- medium (167085): dir_acc 0.544, Q5up 0.541, spread +0.0137
+- low (43933): dir_acc 0.578, Q5up 0.542, spread +0.0211
+BULGU: confidence ham dir-acc'i MONOTON siralamiyor (low 0.578 ~ high 0.571 >
+medium 0.544). Sebep = Faz 6 gerginligi: en guclu sinyal en az likit isimlerde,
+tradability kapisi onlari low'a itiyor -> low = islem yapilamayan kagit edge.
+AMA aksiyon alinabilir (tradeable) evrende etiket CALISIYOR: high 0.571 > medium
+0.544 (+2.7pp); high Q5 kendi base'ine +7.8pp lift vs medium +3.5pp. KARAR:
+confidence `high` = tradeable + en isabetli = en iyi aksiyon sinyali; low'un
+yuksek isabeti dogru sekilde "islem zor" diye isaretli. Urun up/yatay/asagi
+ciktisi durust olasiliksal egilim olarak destekleniyor (garanti degil). Wiki:
+e2-pooled-global-model-epic.md "Faz 7" bolumu.
+
+## [2026-06-03] Faktor zenginlestirme | klasik faktorler ZARAR veriyor (negatif)
+
+Loader'a klasik causal cross-sectional faktorler eklendi (mom_21/63/126, rev_5,
+mom_63_voladj, hi_252_prox, liq_mom) -> add_cross_sectional_features ile rank/zscore.
+Subset (80) ve full-evren (589) AYNI-RUN deterministik kiyas:
+- full NO-FACTOR: IC +0.1164 ICIR 1.770 %>0 96.3
+- full +FACTORS:  IC +0.0983 ICIR 1.524 %>0 94.2
+Faktorler ICIR'i 1.77->1.52 DUSURDU. Sebep: FeaturePipeline stationary ozellikleri
+zaten momentum/return sinyalini tasiyor -> eklenen faktorler redundant + overfit
+yuzeyi. KARAR: faktor eklemesi geri alindi (loader temiz baseline). Hem horizon
+hem naif faktor kaldiraci negatif -> CS+CSFEAT h=5 baseline (ICIR ~1.55-1.77)
+saglam, naif eklemelerle gecilmiyor. (Not: NO-FACTOR 1.77 vs onceki canonical 1.55
+= kosu-arasi data-snapshot drifti; ayni-run ici kiyas gecerli.)
+
+## [2026-06-03] Horizon sweep | h=21 full-evrende h=5'i GECMIYOR (negatif)
+
+daily_cross_sectional_ic'e sample_gap_days (ortusmeyen ornekleme; h-gun hedef
+pencereleri ortustugu icin ardisik gun IC'si ICIR'i sisirir).
+Subset sweep (80 sembol) uzun horizonu cazip gosterdi (h=21 ICIR 1.18 vs h=5 0.93)
+AMA full-evren (589) bunu DOGRULAMADI:
+- h=21 ortusen IC +0.093 ICIR 1.605; ortusmeyen (gap=21) IC +0.095 ICIR 1.544 (n=26).
+- h=5 full: IC +0.099 ICIR 1.550.
+Ortusmeyen h=21 (1.54) ≈ h=5 (1.55); h=5 IC ortalamasi hafif daha yuksek. Subset
+ince cross-section yaniltmis. Bonus: autocorr sismesi ihmal edilebilir (1.605->
+1.544) -> h=5 ICIR 1.55 durust/saglam. KARAR: h=5'te kal, horizon kaldiraci tukendi
+-> zengin cross-sectional ozellik sirada. 1 yeni test (sample_gap_days).
+
+## [2026-06-03] Faz 5a+5b | tradability tabani + harman confidence
+
+(a) liqlog_floor_from_turnover + CLI --liq-floor-tl (3M TL/gun=P20): medyan cirosu
+taban altinda -> tradable=False -> low (guclu sinyal olsa bile). Ciro: Q1 0-3.1M,
+Q5 78M+.
+(b) composite_icir: per-symbol liq/vol/sektor ICIR agirlikli harman (0.5/0.3/0.2).
+Tek-eksen (her Q1=1.35) yerine cozunurluk.
+
+Gercek nightly (run_id=2, 574 sembol): confidence high 17 / medium 444 / low 113
+(onceki tek-eksen+tabansiz: 111/349/114). Q1 mikrokap 108->low (tradability),
+Q5 blue-chip cogu ->medium (harman vol/sektorle kaldirdi: AKBNK 0.54 EREGL 0.52
+SASA 0.62; TUPRS 0.48 low). 17 high = tatli nokta (tradeable Q2/Q4 + yuksek vol +
+guclu sektor, composite>=1.0: MANAS, MEPET). Dürüst+aksiyon alinabilir: yuksek
+konviksiyon tradeable orta-likiditede, ne (islem zor) en guclu kuyrukta ne
+(edge yok) en likitte. API run_id=2 ile dogrulandi. 6 yeni test.
+
+## [2026-06-03] Faz 5 BITTI | serving: peer scoring + PeerStore + additive API
+
+Nightly batch serving uctan uca:
+- src/serving/peer_scoring.py: rank_to_peer_scores (tek tarih -> peer_score
+  [-1,1] + percentile + label), score_latest_universe.
+- src/serving/confidence.py: peer_confidence = f(segment_ICIR) AND tradability/
+  freshness kapilari (sert kapi her zaman low; Faz 6 gerginligi).
+- src/serving/peer_store.py: izole SQLite (global_model_runs + peer_scores),
+  best_models'a DOKUNMAZ. insert/get/latest.
+- src/serving/nightly_scoring.py: assemble_peer_table (skorla+segment+confidence).
+- tools/e2_faz5_nightly_scoring.py: gercek batch; smoke (64 sembol) PeerStore'a
+  64 satir yazdi.
+- API additive: PeerBlock + PeerEnrichmentService router'da build sonrasi enrich;
+  serving DB/sembol yoksa sessiz no-op, mevcut alanlar korunur. Default DB
+  data/serving_pool.db.
+30 yeni test. Geriye uyumlu (mevcut /analysis sozlesmesi bozulmadi).
+
+## [2026-06-03] Faz 6 BITTI | stratified segment IC + serving kararlari
+
+`src/validation/segment_ic.py` (symbol_segments / segment_cross_sectional_ic /
+attach_segments) + `tools/e2_faz6_segment_ic.py`. Best config OOS tahminleri ->
+likidite/volatilite kovasi + sektor segment-ici gunluk cross-sectional IC. 5 test.
+Overall ICIR 1.550 birebir reproduce (determinizm bu kosuda da saglam).
+
+SINYAL NEREDE (full evren, ~117 isim/kova):
+- Likidite: EN AZ likitte EN GUCLU. Q1 ICIR 1.35/%91 -> Q5 (en likit) 0.39/%64.
+- Volatilite: yuksek vol guclu. Q5 1.23 vs Q1 0.64.
+- Sektor: Industrials 1.20 guclu; Unknown 0.10 / Healthcare 0.30 / Real Estate
+  0.38 zayif.
+URUN GERGINLIGI: sinyal en guclu oldugu yerde (az likit) islem yapilabilirlik
+en zayif -> serving confidence = segment_IC x tradability kapilari (IC tek basina
+degil). Ince/illikit hisse guclu rank sinyali tasiyabilir ama likidite kapisi
+yuzunden low confidence kalir. Faz 5 confidence formulunun temeli.
+
+FAZ 5 KARARLARI (kilitli): nightly universe batch scoring; yeni tablolar
+global_model_runs + peer_scores (best_models'a dokunma); additive API `peer`
+blok + mevcut ConfidenceBlock'u segment_IC x tradability'den besle.
+
+## [2026-06-03] Faz 3.6 | cross-sectional (peer-goreli) ozellikler
+
+`add_cross_sectional_features` (src/data/cross_sectional.py): her mevcut causal
+ozelligin tarih-ici goreli versiyonu (merkezli rank `_csr` [-1,1] + zscore `_csz`).
+"bu hisse bugun akranlarina gore nerede". Leakage-safe (ayni-tarih, causal,
+gelecege bakis yok; hedef tarafini purge korur; NaN->notr 0). build_pooled_features
+otomatik feature alir. 2 yeni test.
+
+Full-evren 3 varyant (589 sembol, 1.23M satir, 378 OOS gun, boost 400):
+- ABSOLUTE: IC +0.044 / ICIR 0.718 / %IC>0 74
+- CROSS-SECTIONAL: IC +0.105 / ICIR 1.418 / %IC>0 91
+- CS+CSFEAT: IC +0.099 / ICIR 1.550 / %IC>0 93.4
+cs-features esasen IC varyansini kisiyor (ICIR 1.42->1.55) -> daha kararli sinyal;
+ince 64-sembol alt-kumede IC ortalamasini da itti (ICIR 0.65->0.93). En iyi config
+= cross-sectional target + cs-features, ICIR ~1.55. Repro notu: iki full kosu
+arasi ABSOLUTE ICIR 0.525->0.718 oynadi (ayni seed/num_threads=1); cross-sectional
+ustunlugu saglam ama LightGBM kosu-arasi determinizmi serving sayilari oncesi
+dogrulanmali.
+
+## [2026-06-03] Faz 3.5 DOGRULAMA | full-evren cross-sectional IC
+
+`tools/e2_faz35_cs_ic_study.py` (outputs/e2_faz35_cs_ic_study.md): tum evren
+589 sembol, 1.228M satir, 2856 tarih, 378 OOS gun, h=5.
+- ABSOLUTE target: IC +0.032 / ICIR 0.525 / %IC>0 70.
+- CROSS-SECTIONAL target: IC +0.083 / ICIR 1.243 / %IC>0 90.
+ICIR 1.24 = guclu sinyal (quant'ta >1.0 mukemmel). 39-sembollik ince
+cross-section (ICIR 0.55) az gostermisti; genis evren IC'yi stabilize etti.
+Per-symbol dir_acc edge hala -2.5 -> mutlak yon yanlis mercek, alpha IC'de.
+Dogrulanan yol: Faz 5 serving (rank->akran-goreli + IC guven), sonra Faz 6.
+Not: `python tools/x.py` icin repo-root sys.path eklendi.
+
+## [2026-06-03] Faz 3.5 ALPHA | cross-sectional rank target + gunluk IC
+
+KIRILMA: pooled model icin per-symbol dir_acc YANLIS metrik (sinyal mutlak
+degil GORELI). Cross-sectional rank target + dogru metrik (gunluk IC) alpha'yi
+ortaya cikardi.
+
+- `src/data/cross_sectional.py` `add_cross_sectional_target`: her tarih ici
+  ileri getirinin rank'i -> merkezli [-1,1] ((rank-0.5)/n, ortalama 0, base
+  ~%50). Leakage-safe (tek-tarih ici, ayni target_date=d+h -> purge tutarli).
+  `zscore` opsiyonu.
+- `daily_cross_sectional_ic` (pooled_oos, scipy'siz Spearman; `PerSymbolOOSResult.ic`):
+  her tarih semboller-arasi corr(pred,true); ICIR=mean/std.
+- SONUC (39 sembol, 109k satir, h=5): absolute target IC +0.041 / ICIR 0.228 /
+  %IC>0 60; CROSS-SECTIONAL target IC +0.092 / ICIR 0.549 / %IC>0 73. IC 2 kat,
+  ICIR 0.55 = kullanilabilir sinyal. Pooled model BIST hisselerini siralayabiliyor.
+- SIZINTI DUZELTME (regresyon testli): target/target_cs (her target_*) artik
+  build_pooled_features + pooled_oos._auto_feature_cols'ta feature DISI; ilk
+  yanlis kosu target_cs'in feature olarak sizmasiyla IC 0.97 vermisti.
+- 6+4 test. Tam suite 602 yesil. Cikarim: urun per-stock ama alpha goreli ->
+  serving tahmini "akranlarina gore daha iyi/kotu" rank'a cevirmeli; guven IC
+  istikrarindan. Faz 4 hala kaldirac degil; zengin cross-sectional ozellik +
+  Faz 6 tabakali IC calismasi sirada.
+
+## [2026-06-03] Faz 3 KOD | global kosullandirilmis model (pooled LightGBM)
+
+`src/models/global_pooled_model.py`:
+- `GlobalPooledModel`: pooled LightGBM (native API, deterministik seed/
+  deterministic/num_threads=1), sklearn-vari fit/predict -> pooled_oos uyumlu.
+- `build_pooled_features`: stabil `sector_code` ekler; kosullandirma = sayisal
+  liq_log/vol + kategorik symbol_id/sector_code (LightGBM native categorical).
+  `make_global_model_factory` harness fabrikasi.
+- 5 test (sema, stabil kod, deterministik fit, harness kosu, sektor-sinyali
+  ogrenilebilirligi). Tam suite 592 yesil.
+- DURUST BENCHMARK (OOS harness, h=5, 39 uzun-gecmis sembol, 109k satir):
+  pooled LightGBM+conditioning ne Ridge base'i ne base-rate'i geciyor
+  (GlobalL edge -2.92 / %edge>0 23 vs Ridge -2.50 / 31). Altyapi dogru ama
+  mevcut durağan ozellik seti + basit conditioning h=5'te alpha tasimiyor.
+  Sonraki gercek kaldirac: ogrenme amaci/ozellikler (cross-sectional rank
+  target, zengin conditioning), tesisat degil. Faz 4 (fine-tune) edge'siz
+  tabani kurtarmaz. Faz 6 tabakali calismaya not edildi.
+
+## [2026-06-03] Faz 2 BITTI | per-symbol OOS aggregation harness
+
+Faz 2 son parca kodlandi + test edildi -> Faz 2 ✅ DONE:
+- `src/validation/pooled_oos.py` `evaluate_per_symbol`: her CV fold icin taze
+  `model_factory()` fit (fold'lar arasi durum sizmasi yok), test satirlarini
+  tahmin, OOS tahminleri SEMBOL bazinda grupla -> per-symbol metrik dagilimi
+  (`dir_acc`, `rmse`, `base_rate`, base-rate-uzeri `edge`, `positive_fold_ratio`,
+  `reliable`) + per-`(symbol,fold)` detay. log-return target -> isaret tabanli
+  yon (price-mode/prev_close coupling yok). final_holdout varsayilan dislanir.
+- 6 test + gercek Ridge smoke (3 sembol): AKBNK edge +0.5, EREGL -1.9, TUPRS
+  -2.4 -> durust, base-rate civari. Faz 5 serving guven skorunu besler.
+- Tam suite 587 yesil. Siradaki: Faz 3 global kosullandirilmis model.
+
+## [2026-06-02] Faz 2 KOD | pooled_loader + pooled_cv (cekirdek)
+
+Tasarimin cekirdegi kodlandi + test edildi:
+- `src/validation/pooled_cv.py` PooledPurgedWalkForward: tarih-bazli split
+  (capraz-sembol leak yok), purge+embargo (E=h+buffer), target_date ile kesin
+  purge, coklu-pencere OOS + final-holdout. 7 leak/yapi testi.
+- `src/data/pooled_loader.py` PooledPanelLoader: uzun panel (per-symbol feature,
+  h-gun target+target_date, sector/symbol_id/causal liq_log/vol, delisted dahil).
+  Stray ham `Kapanış` fiyat-seviyesi feature sizintisi giderildi. 6 test + gercek
+  3-sembol smoke (8463 satir, 6+1 fold, gercek veride leak-free).
+- Tam suite 581 yesil. Kalan Faz 2: per-symbol OOS aggregation harness (dummy/
+  global model -> fold tahmin -> sembol bazli dagilim), sonra Faz 3 model.
+
+## [2026-06-02] Faz 2 TASARIM | pooled loader + grup-purged CV
+
+`docs/wiki/e2-faz2-pooled-cv-design.md` yazildi: pooled panel loader + tarih-bazli
+purged coklu-pencere CV detayli tasarimi. Mevcut `walk_forward_splits` satir-indeksli
+ve tek-sembol oldugu icin panele uymuyor -> yeni tarih-bazli splitter gerek.
+Leakage taksonomisi (capraz-sembol same-date / horizon / feature-lookahead) +
+purge+embargo (E=h+buffer) ile her birinin onlenmesi. Modul plani
+(`src/data/pooled_loader.py` PooledPanelLoader, `src/validation/pooled_cv.py`
+PooledPurgedWalkForward), CV algoritmasi, scaling/conditioning politikasi, per-symbol
+OOS metrik aggregation (API kontrati degismez), test plani, acceptance, 5 acik soru.
+index.md link eklendi. Henuz kod yok; tasarim onayi bekliyor.
+
+## [2026-06-02] Faz 1 | target_horizon knob + predictive horizon kiyas
+
+E2 Faz 1 (predictive dilim): geri-uyumlu `DataConfig.target_horizon` (default 1 =
+davranis sabit) eklendi; `build_target_series`/`prepare_tensors` h-aware
+(`y[t]=target(close[t+h])`, `X=features[:-h]`). Test: `tests/test_data_services.py`
+(3 yeni), tam suite 568 yesil.
+
+`tools/e2_faz1_horizon_compare.py` ile EREGL/AKBNK/TUPRS/AEFES/SASA, h={1,3,5,10},
+Ridge+LightGBM, kronolojik 80/20, predictive-only (backtest YOK):
+- Ortalama Dir_Acc h=1 ~%50 -> h=5 ~%52.5 -> h=10 ~%52. Haftalik gunlukten biraz
+  daha ongorulebilir.
+- Uyari: yuksek h pozitif base-rate'i sisirir; naif "hep yukari"ya edge kucuk
+  (~0-3pp, h=5). Step-change degil, bedava alpha yok.
+- Karar: h=5 E2 default horizon (daha iyi S/N); asil kaldirac pooling (Faz 2-3).
+  Horizon-aware backtest/forecast = Faz 1b (pooling baseline'i gecince). h>1
+  backtest/Sharpe yorumlanmamali.
+
+## [2026-06-02] Faz 0.6 | sektor backfill (kosullandirma prerequ)
+
+`tools/backfill_sectors.py` ile bist_universe.csv Sector kolonu yfinance
+Ticker.info GICS sektoruyle tek tip dolduruldu: 585 sembol, 580 resolved, 5
+Unknown (GMTAS, ISGSY, ISKUR, KZGYO, ULUFA). Dagilim: Industrials 115, Consumer
+Cyclical 99, Financial Services 77, Basic Materials 71, Consumer Defensive 61,
+Real Estate 56, Technology 36, Utilities 33, Healthcare 15, Communication
+Services 12, Energy 5. Sector_Index (macro sektor-getiri alani) dokunulmadi;
+schema sabit (Industry yazilmadi). Sektor artik E2 kosullandirma icin kullanilabilir
+categorical. Universe commit edilmedi (veri, kural).
+
+## [2026-06-02] Faz 0.5 KOSULDU | universe tam yeniden cekildi
+
+`tools/refetch_universe.py` tam 592-sembol kosusu: ok=585, no-data=7, failed=0.
+Re-audit ile dogrulandi: tarih formati ISO'ya birlesti (592/592), fresh-to-
+2026-06-02=583 (onceden 1), universe coverage 585/592 (onceden 28), 1,275,614
+pooled satir (+178k), dup/zero-price=0. No-data 7 sembol (DOBUR, EFORC, IPEKE,
+KOZAA, KOZAL, SNKRN, YGYO) yfinance'den veri donmedi -> delist/aski suphesi;
+eski CSV'leri korundu, survivorship karari icin isaretli. Kalan Faz 0 gap'leri:
+sektor ~557 hissede bos (backfill), 110 hissede |log_return|>=0.30 gunu (split/
+temettu audit), 30 thin (<500) cold-start. Veri+universe commit edilmedi.
+
+## [2026-06-02] Faz 0.5 | E2 universe re-pull araci yazildi
+
+`tools/refetch_universe.py`: Faz 0'in 3 sorununu cozer. Her ticker icin
+yfinance'den (`{SYMBOL}.IS`, `auto_adjust=True` invariant) TAM gecmis cekip
+`data/{TICKER}.csv`'yi TEK TIP ISO (`%Y-%m-%d`) tarihle SIFIRDAN yazar
+(overwrite, append degil) + `data/bist_universe.csv`'yi cekilen her hisse icin
+upsert eder (Listed_Date=min tarih, Status freshness'a gore, Sector/Delisted_Date
+mevcutsa korunur). Smoke: EREGL/AKBNK/TUPRS -> ~2910 satir, 2026-06-02'ye guncel,
+gecici dizine (gercek data + universe bozulmadi). Tam 592 kosusu operator tetigi
+(uzun, ag-yogun, tum CSV'leri overwrite eder). `.gitignore` whitelist'e eklendi.
+
+## [2026-06-02] Faz 0 | E2 universe/data audit kosuldu
+
+`tools/e2_faz0_universe_audit.py` (read-only) ile 592 hisse CSV denetlendi.
+Bulgular `e2-pooled-global-model-epic.md` "Faz 0 Findings"e islendi.
+
+- Olcek: 592 hisse, **1,097,481** pooled satir (8y+ 363 hisse). Thin <500: 71.
+- **Freshness BLOCKER:** 569 hisse 2025-10-24'te donmus (tek seferlik snapshot,
+  ~220 gun eski); yalniz 1 hisse guncel. Pooled egitim oncesi universe tek
+  guncel kesime cekilmeli.
+- **3 tarih formati** (`%Y-%m-%d` 577, `%d/%m/%Y` 14, `%d.%m.%Y` 1) — ingestion
+  hepsini tanimali (tek format varsayimi auditor'un ilk kosusunda 578/592'yi
+  sessizce dusurdu).
+- **Survivorship cozulemedi:** universe yalniz 28 sembol kataloglu, 564 CSV
+  disarida; delisting kaynagi Faz 2 CV oncesi gerek.
+- Veri kalitesi: 102 hisse |log_return(adj)|>=0.30 (CA/split), 1 zero/neg fiyat,
+  1 dup-date, 2 buyuk-gap. Sektor eksik: 564 (kosullandirma gap'i).
+- Pre-Faz-2 onkosullar listelendi (re-pull, multi-format ingestion, delisting
+  kaynagi, sektor backfill, CA temizlik).
+- Cikti raporlari `outputs/` altinda (runtime, commit edilmedi).
+
+## [2026-06-02] Plan | E2 Pooled Global Model epic acildi
+
+EREGL all-models kosusunun analizi sonrasi karar: tek-hisse egitim overfit ediyor +
+kanitlanmis alpha yok (AttentionLSTM v2 WF comp 83.81 -> holdout 56.15, dir 38.98%).
+Cozum yonu kullaniciyla konusuldu ve E2 epic'i acildi.
+
+- **Karar:** egitim kapsami != sunum kapsami. Urun/`GET /analysis/{symbol}` per-symbol
+  kalir (kontrat + confidence policy degismez); egitim ~592 hisseyi havuzlayan tek
+  **kosullu global model**'e gecer (overfit/alpha fix). Cold-start ince/IPO hisseleri
+  ilk gunden cevaplar. Spekulatif hisseler mevcut confidence hard-block (dir_acc<50) ile
+  zaten `low`.
+- **Fine-tune** opsiyonel/deneysel (urun tasariminin "later experimental phase"i ile
+  tutarli). Cross-sectional ranking/portfoy urune uymadigi icin elendi.
+- **Yeni dosya:** `docs/wiki/e2-pooled-global-model-epic.md` (problem, core decision,
+  Faz 0-6 plan, acceptance, open questions). `index.md` link + durum bolumu guncellendi.
+- **Dal:** `feat/e2-pooled-global-model` (E1 dali `refactor/e1-owner-forward-di` push
+  edildi, origin'e tracking kuruldu). Henuz kod yok — yalniz plan.
+- Data CSV'leri (592) kasten commit/push edilmedi (runtime/veri, kullanici talebi).
+
 ## [2026-06-02] Bugfix | run_id model slug MAX_PATH tasmasi (ALL_MODELS etiketi)
 
 EREGL'i tum modellerle (`--role candidate`, 14 model) egitince batch "1 hata" verdi:

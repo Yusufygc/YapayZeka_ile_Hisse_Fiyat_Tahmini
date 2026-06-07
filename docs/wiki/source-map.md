@@ -2,7 +2,7 @@
 title: Source Map
 type: source-map
 status: active
-last_updated: 2026-05-09
+last_updated: 2026-06-04
 owner: llm
 ---
 
@@ -19,7 +19,8 @@ deep inspection so source reads stay targeted.
 | `src/data/` | CSV loading, schema normalization, corporate-action checks, updating | [Data Pipeline](data-pipeline.md) |
 | `src/features/` | Technical indicators, macro features, feature caching | [Data Pipeline](data-pipeline.md) |
 | `src/models/` | Model implementations and `BaseModel` contract | [Model Catalog](model-catalog.md) |
-| `src/validation/` | Walk-forward split execution | [Validation and Backtesting](validation-and-backtesting.md) |
+| `src/validation/` | Walk-forward split execution; pooled purged CV, per-symbol OOS, segment IC (E2) | [Validation and Backtesting](validation-and-backtesting.md), [E2 Epic](e2-pooled-global-model-epic.md) |
+| `src/serving/` | E2 pooled-model serving: peer scoring, segment confidence, trend tendency, nightly scoring, `PeerStore` | [Persistence and API](persistence-and-api.md), [E2 Epic](e2-pooled-global-model-epic.md) |
 | `src/backtesting/` | Signals, execution simulation, metrics, trade extraction, reporting | [Validation and Backtesting](validation-and-backtesting.md) |
 | `src/evaluation/` | Forecast metrics, benchmark enrichment, and plots | [Validation and Backtesting](validation-and-backtesting.md) |
 | `src/database/` | SQLite experiment and forecast registry | [Persistence and API](persistence-and-api.md) |
@@ -38,6 +39,10 @@ deep inspection so source reads stay targeted.
 | `python -m src.cli.batch` | Batch execution helper |
 | `python -m src.cli.forecast` | BIST-compliant forward forecast command |
 | `src/api/main.py` | HTTP service entrypoint |
+| `tools/e2_nightly_pipeline.py` | E2 nightly orchestrator: trading-day gate → data refresh → scoring |
+| `tools/e2_faz5_nightly_scoring.py` | E2 pooled-model universe scoring batch → `PeerStore` |
+| `scripts/nightly_serving.ps1` | Windows Task Scheduler target (daily 21:00) |
+| `scripts/register_nightly_task.ps1` | One-time scheduled-task registration |
 
 ## Reference Documents
 
@@ -59,6 +64,8 @@ deep inspection so source reads stay targeted.
 | `data/macro/` | Macro cache generated from external sources |
 | `data/feature_cache/` | Feature cache generated from raw data and config |
 | `data/stock_models.db` | SQLite registry, generated runtime artifact |
+| `data/serving_pool.db` | E2 isolated `PeerStore` (global_model_runs + peer_scores); generated runtime artifact |
+| `logs/nightly_*.log` | E2 nightly job logs (gitignored, 14-day retention) |
 
 ## Source-of-Truth Rule
 

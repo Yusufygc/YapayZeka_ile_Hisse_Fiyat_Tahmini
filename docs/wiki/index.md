@@ -2,7 +2,7 @@
 title: Wiki Index
 type: index
 status: active
-last_updated: 2026-06-01
+last_updated: 2026-06-04
 owner: llm
 ---
 
@@ -33,6 +33,8 @@ linked pages below.
 - [Code Quality Audit (2026-05-31)](code-quality-audit.md): God-object/SOLID/DRY findings, bloated file/function metrics, and the phased docstring/comment plan.
 - [Staged Refactor Plan (2026-05-31)](refactor-plan.md): Per-stage god-object/complexity/SOLID-KISS-DRY findings mapped to the 8 review stages, behavior-preserving refactor actions, cross-cutting epics (owner-forward removal, DRY, god constructors), and risk-tiered execution order.
 - [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md): Tier 3'un kalan kismi — owner-forward magic'i tamamen kaldirip servisleri `EvaluationContext`/`EvaluationState` DI'ya cevirme; karakterizasyon testi stratejisi + 7 fazli plan. Dal: `refactor/e1-owner-forward-di`.
+- [E2 Faz 2 Pooled CV Design](e2-faz2-pooled-cv-design.md): Pooled panel loader + tarih-bazli purged coklu-pencere CV detayli tasarimi; leakage taksonomisi (capraz-sembol / horizon / feature), modul plani (`src/data/pooled_loader.py`, `src/validation/pooled_cv.py`), test plani, acceptance, acik sorular.
+- [E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md): Egitim tarafi redesign — tek-hisse overfit'i gidermek icin ~592 hisseyi havuzlayan tek kosullu global model; per-symbol urun/`GET /analysis/{symbol}` kontrati korunur; grup-purged coklu-pencere OOS, cold-start, opsiyonel per-symbol fine-tune. Dal: `feat/e2-pooled-global-model`.
 - [Product Decision Support Design](product-decision-support-design.md): Desktop AI decision-support product boundary, target architecture, MVP scope, and phase roadmap.
 - [Analysis API Contract](analysis-api-contract.md): `GET /analysis/{symbol}` response schema, status codes, and confidence label definition.
 - [Confidence and Risk Policy](confidence-and-risk-policy.md): Confidence label derivation rules, signal-diagnosis mapping, eligibility status, and data-quality gates.
@@ -63,6 +65,21 @@ linked pages below.
   writes are now fail-loud against typos; behavior unchanged, locked by golden
   tests in `tests/test_owner_forward_contract.py`.
   See [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md).
+- **E2 pooled global model (branch `feat/e2-pooled-global-model`, Faz 2–8 ✅,
+  2026-06-04):** one conditioned LightGBM trained across ~589 BIST stocks with a
+  **cross-sectional rank target** (within-date rank of forward return). Group-
+  purged date walk-forward gives daily cross-sectional **IC ≈ 0.099 / ICIR ≈
+  1.55**. Serving stays per-symbol via an additive `peer` block on
+  `GET /analysis/{symbol}` (NOT per-query training): a nightly batch scores the
+  universe → `PeerStore` (`data/serving_pool.db`, isolated from `best_models`).
+  Each symbol gets peer_score/percentile/label, segment (liq/vol/sector) +
+  composite-ICIR confidence (tradability-gated), and a **trend tendency**
+  (`yukarı/yatay/aşağı/belirsiz` + calibrated P(up) + expected return; Faz 7
+  finding: peer rank carries a modest-but-real monotone absolute-direction tilt,
+  Q5 54% up vs Q1 43%). **Faz 8** adds a Windows nightly job (Task Scheduler
+  21:00, BIST trading-day gated) that refreshes universe data then re-scores. The
+  honest framing (relative, probabilistic, decision-support — not a buy/sell bot)
+  is preserved. See [E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md).
 - The default production candidate set is defined in `src/pipeline/model_scope.py`
   and the model registry; in the current source tree `TFT` is not registered and
   `src/models/tft_v2/` is absent.

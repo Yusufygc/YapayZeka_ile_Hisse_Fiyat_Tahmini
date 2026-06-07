@@ -53,6 +53,15 @@ python -m pytest tests/test_forecasting.py -v
 | `test_xai_strategies.py` | SHAP/LIME strategy behavior and fallback coverage |
 | `test_analysis_endpoint.py` | Analysis API status, refresh-job, forecast-source, and CORS contract coverage |
 | `test_operational_hardening.py` | Data updater failures, analysis refresh failures, DB backup-reset, and backtest metric backfill |
+| `test_pooled_oos.py` / `test_pooled_cv.py` | E2 per-symbol OOS aggregation, daily cross-sectional IC/ICIR, group-purged CV leakage |
+| `test_global_pooled_model.py` / `test_cross_sectional.py` | Pooled LightGBM feature build, target-leak guard, rank target/feature correctness |
+| `test_segment_ic.py` / `test_peer_scoring.py` | Segment IC stratification, peer score/percentile/label thresholds |
+| `test_peer_confidence.py` / `test_peer_store.py` | Confidence gates, `PeerStore` upsert/read + trend-column migration |
+| `test_nightly_scoring.py` / `test_peer_service.py` | `assemble_peer_table` (segment+confidence+trend), API peer-block enrichment |
+| `test_trend_tendency.py` | Trend label bands, quintile calibration monotonicity, `belirsiz` gate |
+| `test_nightly_pipeline.py` | E2 Faz 8 orchestrator: refresh aggregation, XIST gate + weekday fallback, `gate_target_date`, main skip/run flows |
+
+Full suite currently **670 passed** (run with `dl_env` python).
 
 ## Static Tooling
 

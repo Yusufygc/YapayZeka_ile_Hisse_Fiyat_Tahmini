@@ -13,11 +13,13 @@ from src.api.schemas.analysis import AnalysisResponse
 from src.api.observability import log_event
 from src.api.services.advisory_audit import append_response as audit_append
 from src.api.services.analysis_service import AnalysisService
+from src.api.services.peer_service import PeerEnrichmentService
 from src.api.services.response_cache import get_default_cache
 
 router = APIRouter(tags=["Analiz"])
 
 _service = AnalysisService()
+_peer_enricher = PeerEnrichmentService()
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 _cache = get_default_cache()
 _AUDIT_LOG_PATH = os.path.join(_PROJECT_ROOT, "data", "advisory_history.csv")
@@ -55,6 +57,8 @@ def get_analysis(symbol: str) -> AnalysisResponse:
             return cached
 
         result = _service.build(symbol)
+        # E2 Faz 5 — additive peer (cross-sectional) blok; PeerStore yoksa no-op.
+        result = _peer_enricher.enrich(result)
         source = result.forecast_source
         log_event(
             _PROJECT_ROOT,

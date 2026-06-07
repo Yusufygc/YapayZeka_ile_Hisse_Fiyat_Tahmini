@@ -295,8 +295,40 @@ Confidence interactions (`src/api/services/analysis_service.py`):
   `data_drift_moderate:psi_30d=<value>` appended.
 - `stable` / `unavailable` → no confidence change.
 
+## Peer Block (E2 Faz 5–8, additive)
+
+`AnalysisResponse.peer` (`PeerBlock`) is an **optional, additive** block from the
+pooled global model's nightly cross-sectional scoring (`PeerStore`). It is `null`
+when no peer data exists for the symbol; existing absolute `forecast`/
+`confidence` fields are never changed by it.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `available` | bool | true when peer data attached |
+| `as_of_date` | string | scoring snapshot date |
+| `peer_score` | float | −1..1 centered cross-sectional rank |
+| `peer_percentile` | float | 0..100 |
+| `peer_label` | string | outperform / inline / underperform / unknown |
+| `universe_size` | int | names ranked that date |
+| `segment_liq/vol/sector` | string | liquidity/volatility/sector bucket |
+| `segment_icir` | float | composite segment ICIR (tradability-aware) |
+| `confidence_label` | string | low / medium / high (ICIR × tradability gates) |
+| `confidence_reasons` / `confidence_warnings` | string[] | human-readable |
+| `model_run_id` | int | `global_model_runs.run_id` |
+| `icir_overall` | float | run-level ICIR |
+| `trend_label` | string | **yukarı / yatay / aşağı / belirsiz** (Faz 7b) |
+| `trend_prob_up` | float \| null | calibrated P(h-day return > 0) |
+| `trend_expected_return` | float \| null | calibrated mean h-day log return |
+
+Trend is a **probabilistic tilt, not a guarantee**, derived from the peer
+percentile via Faz 7 quintile calibration (Q1..Q5 P(up) 0.435→0.541). Reliability
+is governed separately by `confidence_label`. See
+[Persistence and API](persistence-and-api.md) and
+[E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md).
+
 ## Related Pages
 
 - [Product Decision Support Design](product-decision-support-design.md)
 - [Confidence and Risk Policy](confidence-and-risk-policy.md)
 - [Persistence and API](persistence-and-api.md)
+- [E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md)

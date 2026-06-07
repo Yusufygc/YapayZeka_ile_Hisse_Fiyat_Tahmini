@@ -26,6 +26,16 @@ latest dates, rows added, and error text. It also accepts a `MarketDataProvider`
 interface, with `YFinanceProvider` as the default, so refresh behavior is
 testable without direct network calls.
 
+**Universe-wide nightly refresh (E2 Faz 8):** there is no single
+`data_updater` CLI; the E2 nightly orchestrator `tools/e2_nightly_pipeline.py`
+(`refresh_universe`) loops every `data/*.csv` (excluding `bist_universe` /
+`advisory_history`) and calls `DataUpdater.check_and_update(path, sym,
+interactive=False)`, aggregating updated/up_to_date/skipped/failed counts and
+continuing on per-symbol errors. A BIST trading-day gate
+(`is_trading_day`, XIST via `pandas-market-calendars`, weekday fallback) skips
+weekends/holidays. See [Persistence and API](persistence-and-api.md) and
+[E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md).
+
 ## Loading and Cleaning
 
 `src/data/data_loader.py` handles raw OHLCV normalization.
