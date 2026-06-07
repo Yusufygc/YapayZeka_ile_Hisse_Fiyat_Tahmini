@@ -140,6 +140,12 @@ class PeerBlock(BaseModel):
     trend_label: Optional[str] = None             # yukarı | yatay | aşağı | belirsiz
     trend_prob_up: Optional[float] = None         # kalibre P(h-gun getiri > 0)
     trend_expected_return: Optional[float] = None  # kalibre ort. h-gun log-getiri
+    # E2 Kol-B pooled fiyat bandı
+    kolb_price_p50: Optional[float] = None
+    kolb_price_low: Optional[float] = None
+    kolb_price_high: Optional[float] = None
+    kolb_horizon_days: Optional[int] = None
+    kolb_band_level: Optional[float] = None
     # E2 Kol-B XAI — pooled modelin per-symbol feature attribution'i (SHAP, additive).
     xai_available: bool = False
     xai_method: str = ""                          # shap_tree | permutation_fallback

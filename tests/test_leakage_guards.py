@@ -28,6 +28,7 @@ class LeakageGuardTests(unittest.TestCase):
             y_pred_target=pred_target,
             prev_close=prev_close,
             target_mode="log_return",
+            risk_free_annual=0.05,
         )
 
         self.assertEqual(metrics["Dir_Acc"], 100.0)

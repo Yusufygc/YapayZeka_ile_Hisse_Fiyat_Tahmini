@@ -131,7 +131,8 @@ class PooledPanelLoader:
         cond = self._causal_columns(raw)
 
         feat_cols = [c for c in feat.columns if c not in _NON_FEATURE]
-        merged = feat.merge(cond, on="Date", how="inner")
+        feat_clean = feat.drop(columns=["Close"], errors="ignore")
+        merged = feat_clean.merge(cond, on="Date", how="inner")
         merged = merged.dropna(subset=feat_cols + ["target"]).reset_index(drop=True)
         if len(merged) < self.cfg.min_usable_rows:
             self.report[symbol] = f"few_usable:{len(merged)}"
@@ -139,7 +140,7 @@ class PooledPanelLoader:
 
         merged["symbol"] = symbol
         merged["sector"] = sector
-        keep = ["symbol", "Date"] + feat_cols + [
+        keep = ["symbol", "Date", "Close"] + feat_cols + [
             "target", "target_date", "sector", "liq_log", "vol"
         ]
         return merged[keep]
@@ -158,6 +159,7 @@ class PooledPanelLoader:
         vol = logret.rolling(self.cfg.vol_lookback, min_periods=5).std()
         return pd.DataFrame({
             "Date": raw["Date"],
+            "Close": close.values,
             "target": target.values,
             "target_date": target_date.values,
             "liq_log": liq_log.values,

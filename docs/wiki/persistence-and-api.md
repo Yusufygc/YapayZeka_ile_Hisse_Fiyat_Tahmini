@@ -363,12 +363,15 @@ Two tables:
   `segment_liq/vol/sector`, `segment_icir` (composite, tradability-aware),
   `confidence_label` (low/medium/high), `confidence_reasons/warnings` (JSON), and
   **trend tendency (Faz 7b)**: `trend_label` (yukarı/yatay/aşağı/belirsiz),
-  `trend_prob_up`, `trend_expected_return`; and **Kol-B XAI (Faz 10)**:
-  `xai_top_features` (JSON: `{method, approximate, caveat, top_positive[], top_negative[]}`).
+  `trend_prob_up`, `trend_expected_return`; **Kol-B XAI (Faz 10)**:
+  `xai_top_features` (JSON: `{method, approximate, caveat, top_positive[], top_negative[]}`);
+  and **Kol-B Price Band (Phase 5)**: `kolb_price_p50` (expected absolute price),
+  `kolb_price_low` (lower absolute price band), `kolb_price_high` (upper absolute price band),
+  `kolb_horizon_days` (horizon days, default 5), and `kolb_band_level` (nominal coverage, default 0.8).
 
 `PeerStore._migrate` runs idempotent `ALTER TABLE ADD COLUMN` on open, so
-pre-existing DBs (run_id ≤ 2, no trend/xai columns) upgrade in place; old rows return
-NULL trend/xai → API surfaces `None`/`xai_available=False` (graceful, never breaks).
+pre-existing DBs (run_id ≤ 2, no trend/xai/kolb price band columns) upgrade in place; old rows return
+NULL trend/xai/kolb values → API surfaces `None`/`xai_available=False` (graceful, never breaks).
 
 **Kol-B XAI (Faz 10):** `tools/e2_faz5_nightly_scoring.py` →
 `score_latest_universe` (cfg `enable_xai`) computes per-symbol SHAP attribution via

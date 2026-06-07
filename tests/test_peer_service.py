@@ -25,6 +25,8 @@ def _seed(tmp_path) -> str:
         "confidence_reasons": [["Segment sinyali guclu"]], "confidence_warnings": [[]],
         "trend_label": ["yukarı"], "trend_prob_up": [0.541],
         "trend_expected_return": [0.0090],
+        "kolb_price_p50": [100.90], "kolb_price_low": [98.10], "kolb_price_high": [103.78],
+        "kolb_horizon_days": [5], "kolb_band_level": [0.8],
         "xai_top_features": [{
             "method": "shap_tree", "approximate": False,
             "caveat": "Bu açıklama yalnızca LightGBM bacağı temellidir.",
@@ -72,6 +74,11 @@ def test_enrich_attaches_peer_block(tmp_path):
     assert out.peer.trend_label == "yukarı"
     assert abs(out.peer.trend_prob_up - 0.541) < 1e-9
     assert abs(out.peer.trend_expected_return - 0.0090) < 1e-9
+    assert abs(out.peer.kolb_price_p50 - 100.90) < 1e-9
+    assert abs(out.peer.kolb_price_low - 98.10) < 1e-9
+    assert abs(out.peer.kolb_price_high - 103.78) < 1e-9
+    assert out.peer.kolb_horizon_days == 5
+    assert abs(out.peer.kolb_band_level - 0.8) < 1e-9
 
 
 def test_enrich_attaches_peer_xai(tmp_path):

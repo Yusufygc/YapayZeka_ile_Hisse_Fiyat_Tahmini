@@ -30,7 +30,7 @@ import pandas as pd
 # loader/oos ile ayni "ozellik olmayan" kolonlar. target* varyantlari (target,
 # target_cs, ...) ASLA feature olmamali -> sizinti.
 _BASE_NON_FEAT = {
-    "symbol", "Date", "target_date", "sector", "symbol_id",
+    "symbol", "Date", "Close", "target_date", "sector", "symbol_id",
     "liq_log", "vol", "sector_code",
 }
 

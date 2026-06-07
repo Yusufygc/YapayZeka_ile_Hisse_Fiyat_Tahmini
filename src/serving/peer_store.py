@@ -58,6 +58,11 @@ CREATE TABLE IF NOT EXISTS peer_scores (
     trend_prob_up REAL,
     trend_expected_return REAL,
     xai_top_features TEXT,
+    kolb_price_p50 REAL,
+    kolb_price_low REAL,
+    kolb_price_high REAL,
+    kolb_horizon_days INTEGER,
+    kolb_band_level REAL,
     UNIQUE(run_id, symbol),
     FOREIGN KEY(run_id) REFERENCES global_model_runs(run_id)
 );
@@ -70,6 +75,8 @@ _PEER_COLS = [
     "raw_pred", "universe_size", "segment_liq", "segment_vol", "segment_sector",
     "segment_icir", "confidence_label", "confidence_reasons", "confidence_warnings",
     "trend_label", "trend_prob_up", "trend_expected_return", "xai_top_features",
+    "kolb_price_p50", "kolb_price_low", "kolb_price_high", "kolb_horizon_days",
+    "kolb_band_level",
 ]
 
 # Eski DB'lere (run_id<3) eklenen kolonlar: ALTER TABLE ile geriye-uyumlu migrasyon.
@@ -78,6 +85,11 @@ _PEER_MIGRATIONS = {
     "trend_prob_up": "REAL",
     "trend_expected_return": "REAL",
     "xai_top_features": "TEXT",  # E2 Kol-B XAI (JSON: top_positive/top_negative)
+    "kolb_price_p50": "REAL",
+    "kolb_price_low": "REAL",
+    "kolb_price_high": "REAL",
+    "kolb_horizon_days": "INTEGER",
+    "kolb_band_level": "REAL",
 }
 
 

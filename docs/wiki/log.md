@@ -1,3 +1,10 @@
+## [2026-06-08] Global Model | Kol-B Pooled Price Band Entegrasyonu
+
+- **Masaüstü ve Backend Entegrasyonu:** Kol-B (pooled global model) için mutlak fiyat tahmini ve olasılıksal bant limitleri (`kolb_price_p50`, `kolb_price_low`, `kolb_price_high`, `kolb_horizon_days`, `kolb_band_level`) `peer_scores` veritabanı tablosuna, API `PeerBlock` şemasına ve PyQt masaüstü arayüzüne (Left Panel `PeerCard` altındaki "Pooled 5g tahmin: ₺X (₺Y–₺Z)" gösterimi) entegre edildi.
+- **Veritabanı ve API:** `PeerStore` DDL ve dinamik migration şeması güncellendi. API `/analysis/{symbol}` uç noktası bu yeni alanları serileştirerek sunacak şekilde güncellendi.
+- **Kaçak Koruması (Leakage Guard):** Kol-B model özellikleri içinden `Close` kolonu çıkarılarak hedef sızıntısı engellendi, ancak mutlak fiyat hesabı için panel dataframe içinde saklanmaya devam edildi.
+- **Testler:** Hem backend tarafında (`test_nightly_scoring`, `test_peer_service`, `test_peer_store`) hem de masaüstü tarafında (`test_peer_card_with_pooled_price`, `test_peer_card_without_pooled_price`) test senaryoları eklendi ve tüm test paketi yeşile boyandı.
+
 ## [2026-06-08] Rules | Graphify kaldırıldı, detaylı wiki kuralı eklendi
 
 - `AGENTS.md` ve `RULES.md` içindeki `graphify` referansları ve otomatik graphify güncelleme kuralları tamamen silindi.

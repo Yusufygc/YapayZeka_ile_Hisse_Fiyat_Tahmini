@@ -31,6 +31,11 @@ def _scored():
         "trend_label": ["yukarı", "yatay", "aşağı"],
         "trend_prob_up": [0.541, 0.509, 0.435],
         "trend_expected_return": [0.0090, 0.0050, -0.0066],
+        "kolb_price_p50": [100.90, 50.25, 19.80],
+        "kolb_price_low": [98.10, 48.50, 18.20],
+        "kolb_price_high": [103.78, 52.00, 21.40],
+        "kolb_horizon_days": [5, 5, 5],
+        "kolb_band_level": [0.8, 0.8, 0.8],
         "xai_top_features": [
             {"method": "shap_tree", "approximate": False, "caveat": "",
              "top_positive": [{"feature_name": "RSI_14_csr", "contribution": 0.3}],
@@ -79,6 +84,18 @@ def test_trend_columns_roundtrip(tmp_path):
     assert abs(aaa["trend_expected_return"] - 0.0090) < 1e-9
 
 
+def test_kolb_columns_roundtrip(tmp_path):
+    s = _store(tmp_path)
+    rid = s.insert_run(GlobalRunMeta(model_name="m", as_of_date="d"))
+    s.insert_peer_scores(rid, _scored())
+    aaa = s.get_peer_score("AAA")
+    assert abs(aaa["kolb_price_p50"] - 100.90) < 1e-9
+    assert abs(aaa["kolb_price_low"] - 98.10) < 1e-9
+    assert abs(aaa["kolb_price_high"] - 103.78) < 1e-9
+    assert aaa["kolb_horizon_days"] == 5
+    assert abs(aaa["kolb_band_level"] - 0.8) < 1e-9
+
+
 def test_xai_top_features_roundtrip(tmp_path):
     """xai_top_features dict -> JSON yazilir, string olarak geri okunur."""
     import json
@@ -109,7 +126,8 @@ def test_migration_adds_trend_cols_to_old_db(tmp_path):
     cols = {r["name"] for r in PeerStore(db)._connect().execute(
         "PRAGMA table_info(peer_scores)")}
     assert {"trend_label", "trend_prob_up", "trend_expected_return",
-            "xai_top_features"} <= cols
+            "xai_top_features", "kolb_price_p50", "kolb_price_low",
+            "kolb_price_high", "kolb_horizon_days", "kolb_band_level"} <= cols
 
 
 def test_get_run_peer_scores_sorted(tmp_path):

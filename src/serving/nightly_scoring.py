@@ -20,6 +20,7 @@ from typing import Callable, Mapping, Optional
 import numpy as np
 import pandas as pd
 
+from src.forecasting.interval_calibration import z_for_level
 from src.serving.confidence import ConfidenceThresholds, peer_confidence
 from src.serving.peer_scoring import PeerScoringConfig, score_latest_universe
 from src.serving.trend_tendency import TrendCalibration, trend_from_peer
@@ -71,6 +72,8 @@ def assemble_peer_table(
     scoring_cfg: Optional[PeerScoringConfig] = None,
     thr: Optional[ConfidenceThresholds] = None,
     trend_cfg: Optional[TrendCalibration] = None,
+    price_band_level: float = 0.8,
+    price_horizon_days: int = 5,
 ) -> pd.DataFrame:
     """En guncel evreni skorla + segment + confidence -> PeerStore'a hazir tablo.
 
@@ -124,15 +127,57 @@ def assemble_peer_table(
 
     # --- mutlak trend eğilimi (Faz 7 kalibrasyonu) ---
     tcfg = trend_cfg or TrendCalibration()
-    t_labels, t_pup, t_exp = [], [], []
+    t_labels, t_pup, t_exp, t_std = [], [], [], []
     for _, r in merged.iterrows():
         t = trend_from_peer(r["peer_percentile"], r["universe_size"], tcfg)
         t_labels.append(t.label)
         t_pup.append(t.prob_up)
         t_exp.append(t.expected_return)
+        t_std.append(t.return_std)
     merged["trend_label"] = t_labels
     merged["trend_prob_up"] = t_pup
     merged["trend_expected_return"] = t_exp
+
+    # --- Kol-B pooled fiyat bandı ---
+    last_closes = {}
+    if "Close" in panel_latest.columns:
+        last_closes = panel_latest.set_index("symbol")["Close"].to_dict()
+
+    kolb_p50, kolb_low, kolb_high = [], [], []
+    kolb_horizon, kolb_level = [], []
+    z = z_for_level(price_band_level)
+
+    for idx, r in merged.iterrows():
+        sym = r["symbol"]
+        close_val = last_closes.get(sym)
+        exp_ret = r["trend_expected_return"]
+        std_val = t_std[idx]
+
+        if (close_val is not None and np.isfinite(close_val) and
+            exp_ret is not None and np.isfinite(exp_ret) and
+            std_val is not None and np.isfinite(std_val)):
+
+            p50 = float(close_val * np.exp(exp_ret))
+            low = float(close_val * np.exp(exp_ret - z * std_val))
+            high = float(close_val * np.exp(exp_ret + z * std_val))
+
+            kolb_p50.append(p50)
+            kolb_low.append(low)
+            kolb_high.append(high)
+            kolb_horizon.append(int(price_horizon_days))
+            kolb_level.append(float(price_band_level))
+        else:
+            kolb_p50.append(None)
+            kolb_low.append(None)
+            kolb_high.append(None)
+            kolb_horizon.append(None)
+            kolb_level.append(None)
+
+    merged["kolb_price_p50"] = kolb_p50
+    merged["kolb_price_low"] = kolb_low
+    merged["kolb_price_high"] = kolb_high
+    merged["kolb_horizon_days"] = kolb_horizon
+    merged["kolb_band_level"] = kolb_level
     return merged
 
 

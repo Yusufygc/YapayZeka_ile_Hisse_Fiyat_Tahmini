@@ -306,6 +306,16 @@ cross-sectional `peer`/trend serving path only (see
 is the daily cross-sectional IC/ICIR (≈ 0.099 / 1.55), not per-symbol absolute
 directional accuracy.
 
+### Kol-B Price Band Estimation
+
+In Phase 5, the Pooled Global Model (Kol-B) is equipped with a parametric absolute price and uncertainty band estimation to serve as a "second opinion" on the desktop UI.
+- **Horizon & Coverage:** The model target is calibrated on a 5-day horizon (`kolb_horizon_days=5`) with a nominal 80% coverage interval (`kolb_band_level=0.8`).
+- **Estimation:** 
+  - Expected price: `kolb_price_p50 = last_close * (1 + expected_return)` where `expected_return` is mapped from the calibrated trend expected return (derived from walk-forward OOS return quintiles).
+  - Uncertainty bands: `kolb_price_low` and `kolb_price_high` are computed using `expected_return ± z * return_std`, where `z` is the z-score corresponding to the 80% confidence level (`z_for_level(0.8) ≈ 1.28`), and `return_std` is the out-of-sample return standard deviation of the stock's segment quintile.
+- **Leakage Prevention:** To prevent target leakage, the raw `Close` price is excluded from model features in `build_pooled_features` but retained in the panel dataframe solely for mapping relative return predictions back to absolute prices during nightly serving.
+
+
 ## Related Pages
 
 - [Validation and Backtesting](validation-and-backtesting.md)

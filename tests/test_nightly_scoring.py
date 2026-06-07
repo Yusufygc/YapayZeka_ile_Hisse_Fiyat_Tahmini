@@ -131,14 +131,29 @@ def test_blended_path_lifts_liquid_highvol_above_pure_liq():
 
 
 def test_assemble_adds_trend_columns():
+    # Test case 1: Close is missing
     out = assemble_peer_table(_StubModel(), _latest_panel(), ["f0"],
                               _seg_table(), _ICIR).set_index("symbol")
-    for c in ["trend_label", "trend_prob_up", "trend_expected_return"]:
+    for c in ["trend_label", "trend_prob_up", "trend_expected_return",
+              "kolb_price_p50", "kolb_price_low", "kolb_price_high",
+              "kolb_horizon_days", "kolb_band_level"]:
         assert c in out.columns
     # pred = f0 = arange -> S19 en yuksek percentile -> yukarı; S0 en dusuk -> aşağı
     assert out.loc["S19", "trend_label"] == "yukarı"
     assert out.loc["S0", "trend_label"] == "aşağı"
     assert out.loc["S19", "trend_prob_up"] > out.loc["S0", "trend_prob_up"]
+    assert out["kolb_price_p50"].isna().all()
+
+    # Test case 2: Close is present
+    panel_with_close = _latest_panel()
+    panel_with_close["Close"] = 100.0
+    out2 = assemble_peer_table(_StubModel(), panel_with_close, ["f0"],
+                               _seg_table(), _ICIR).set_index("symbol")
+    assert not out2["kolb_price_p50"].isna().any()
+    assert (out2["kolb_price_low"] < out2["kolb_price_p50"]).all()
+    assert (out2["kolb_price_p50"] < out2["kolb_price_high"]).all()
+    assert (out2["kolb_horizon_days"] == 5).all()
+    assert (out2["kolb_band_level"] == 0.8).all()
 
 
 def test_empty_panel_safe():

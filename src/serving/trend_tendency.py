@@ -41,6 +41,10 @@ class TrendCalibration:
     # Faz 7 mutlak-yön kalibrasyonu (full-evren OOS, quintile Q1..Q5).
     quintile_prob_up: tuple = (0.435, 0.487, 0.509, 0.519, 0.541)
     quintile_expected_return: tuple = (-0.0066, 0.0032, 0.0050, 0.0062, 0.0090)
+    # Faz 7b: her quintile'da gerçekleşen h=5 log-getiri std'si (pooled OOS).
+    # Pooled fiyat bandı (kolb_price_low/high) için dispersion; mean ile aynı
+    # OOS çalışmasından türetilir (tools/e2_faz7b_quintile_return_std.py).
+    quintile_return_std: tuple = (0.045, 0.040, 0.038, 0.037, 0.039)
 
 
 @dataclass(frozen=True)
@@ -48,6 +52,7 @@ class TrendTendency:
     label: str                                  # yukarı | yatay | aşağı | belirsiz
     prob_up: Optional[float] = None             # kalibre P(getiri>0)
     expected_return: Optional[float] = None     # kalibre ort. h-gün log-getiri
+    return_std: Optional[float] = None          # kalibre h-gün log-getiri std (band)
     basis: str = ""                             # kısa açıklama
     reasons: list = field(default_factory=list)
 
@@ -75,13 +80,19 @@ def trend_from_peer(
 
     if n < cfg.min_names or not np.isfinite(pct):
         return TrendTendency(
-            "belirsiz", None, None,
+            "belirsiz", None, None, None,
             basis="Cross-sectional evren yetersiz veya skor yok.",
             reasons=["Belirsiz: evren < min_names ya da percentile yok."])
 
     qi = _quintile_index(pct)
     prob_up = float(cfg.quintile_prob_up[qi])
     exp_ret = float(cfg.quintile_expected_return[qi])
+    ret_std = (
+        float(cfg.quintile_return_std[qi])
+        if getattr(cfg, "quintile_return_std", None)
+        and qi < len(cfg.quintile_return_std)
+        else None
+    )
 
     if pct >= cfg.hi_pct:
         label = "yukarı"
@@ -94,6 +105,6 @@ def trend_from_peer(
         f"Peer percentil {pct:.0f} (Q{qi+1}); tarihsel P(yukarı)≈{prob_up:.2f}, "
         f"beklenen ~{exp_ret:+.2%} (h-gün). Olasılıksal eğilim, garanti değil."
     ]
-    return TrendTendency(label, prob_up, exp_ret,
+    return TrendTendency(label, prob_up, exp_ret, ret_std,
                          basis="Faz 7 cross-sectional rank kalibrasyonu (mutlak yön).",
                          reasons=reasons)
