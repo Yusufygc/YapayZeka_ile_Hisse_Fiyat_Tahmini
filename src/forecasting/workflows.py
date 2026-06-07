@@ -687,22 +687,83 @@ class ForecastPointGenerator:
                 if agreement < 0.6:
                     weighted_close = previous_close
             bounded_close, band = self.ctx.rules.bound_forecast_price(weighted_close, previous_close)
-            combined.append(
-                {
-                    "target_date": dates[idx].strftime("%Y-%m-%d"),
-                    "horizon_index": idx + 1,
-                    "raw_predicted_close": weighted_close,
-                    "bounded_predicted_close": bounded_close,
-                    "predicted_return": (
-                        (bounded_close / previous_close) - 1.0 if previous_close else 0.0
-                    ),
-                    "lower_band": band.lower_band,
-                    "upper_band": band.upper_band,
-                    "price_tick": band.price_tick,
-                }
+            point = {
+                "target_date": dates[idx].strftime("%Y-%m-%d"),
+                "horizon_index": idx + 1,
+                "raw_predicted_close": weighted_close,
+                "bounded_predicted_close": bounded_close,
+                "predicted_return": (
+                    (bounded_close / previous_close) - 1.0 if previous_close else 0.0
+                ),
+                "lower_band": band.lower_band,
+                "upper_band": band.upper_band,
+                "price_tick": band.price_tick,
+            }
+            # Olasılıksal interval: üyelerin p10/p90'ını ağırlıklı birleştir (varsa).
+            self._combine_member_interval(
+                point=point,
+                member_points=member_points,
+                names=names,
+                normalized=normalized,
+                idx=idx,
+                previous_close=previous_close,
+                p50_close=bounded_close,
             )
+            combined.append(point)
             previous_close = bounded_close
         return combined
+
+    @staticmethod
+    def _combine_member_interval(
+        *,
+        point: Dict[str, Any],
+        member_points: Dict[str, list[dict[str, Any]]],
+        names: list[str],
+        normalized: Dict[str, float],
+        idx: int,
+        previous_close: float,
+        p50_close: float,
+    ) -> None:
+        """Üye p10/p90'larını ağırlıklı birleştirir (yerinde yazar).
+
+        Yalnızca p10_close/p90_close dolu üyeler katkı verir; ağırlıklar bu alt küme
+        üzerinde yeniden normalize edilir. Hiç üyede interval yoksa hiçbir alan
+        eklenmez (geriye uyumlu). p50 = ensemble bounded close; band p50 etrafında
+        clamp edilir.
+        """
+        avail = [
+            name
+            for name in names
+            if member_points[name][idx].get("p10_close") is not None
+            and member_points[name][idx].get("p90_close") is not None
+        ]
+        if not avail:
+            return
+        total_w = sum(normalized.get(name, 0.0) for name in avail)
+        if total_w <= 0.0:
+            renorm = {name: 1.0 / len(avail) for name in avail}
+        else:
+            renorm = {name: normalized.get(name, 0.0) / total_w for name in avail}
+        lower = sum(float(member_points[name][idx]["p10_close"]) * renorm[name] for name in avail)
+        upper = sum(float(member_points[name][idx]["p90_close"]) * renorm[name] for name in avail)
+        if lower > upper:
+            lower, upper = upper, lower
+        # Band p50 etrafında tutarlı olsun (alt ≤ p50 ≤ üst).
+        lower = min(lower, p50_close)
+        upper = max(upper, p50_close)
+        methods = {
+            str(member_points[name][idx].get("interval_method"))
+            for name in avail
+            if member_points[name][idx].get("interval_method")
+        }
+        method = methods.pop() if len(methods) == 1 else "ensemble"
+        point["p10_close"] = lower
+        point["p50_close"] = float(p50_close)
+        point["p90_close"] = upper
+        point["predicted_return_p10"] = (lower / previous_close) - 1.0 if previous_close else 0.0
+        point["predicted_return_p50"] = float(point.get("predicted_return", 0.0))
+        point["predicted_return_p90"] = (upper / previous_close) - 1.0 if previous_close else 0.0
+        point["interval_method"] = method
 
     @staticmethod
     def _normalized_weights(names: list[str], weights: Dict[str, float]) -> Dict[str, float]:

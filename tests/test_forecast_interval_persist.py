@@ -105,6 +105,57 @@ def test_no_calibration_is_noop():
     assert "interval_method" not in point
 
 
+# --- ensemble interval kombinasyonu -------------------------------------
+
+def _member_pt(p10, p90, method="residual_b2"):
+    return [{"p10_close": p10, "p90_close": p90, "interval_method": method}]
+
+
+def test_ensemble_interval_weighted_combine():
+    point = {"predicted_return": 0.0}
+    members = {"A": _member_pt(98.0, 102.0), "B": _member_pt(96.0, 104.0)}
+    ForecastPointGenerator._combine_member_interval(
+        point=point, member_points=members, names=["A", "B"],
+        normalized={"A": 0.5, "B": 0.5}, idx=0, previous_close=100.0, p50_close=100.0,
+    )
+    assert point["p10_close"] == pytest.approx(97.0)
+    assert point["p90_close"] == pytest.approx(103.0)
+    assert point["p50_close"] == pytest.approx(100.0)
+    assert point["interval_method"] == "residual_b2"
+
+
+def test_ensemble_interval_partial_members_renormalize():
+    # B üyesinde interval yok -> sadece A katkı verir
+    point = {"predicted_return": 0.0}
+    members = {"A": _member_pt(98.0, 102.0), "B": [{"interval_method": None}]}
+    ForecastPointGenerator._combine_member_interval(
+        point=point, member_points=members, names=["A", "B"],
+        normalized={"A": 0.3, "B": 0.7}, idx=0, previous_close=100.0, p50_close=100.0,
+    )
+    assert point["p10_close"] == pytest.approx(98.0)
+    assert point["p90_close"] == pytest.approx(102.0)
+
+
+def test_ensemble_interval_mixed_method_label():
+    point = {"predicted_return": 0.0}
+    members = {"A": _member_pt(98.0, 102.0, "residual_b2"), "B": _member_pt(97.0, 103.0, "conformal")}
+    ForecastPointGenerator._combine_member_interval(
+        point=point, member_points=members, names=["A", "B"],
+        normalized={"A": 0.5, "B": 0.5}, idx=0, previous_close=100.0, p50_close=100.0,
+    )
+    assert point["interval_method"] == "ensemble"
+
+
+def test_ensemble_interval_none_is_noop():
+    point = {"predicted_return": 0.0}
+    members = {"A": [{"interval_method": None}], "B": [{}]}
+    ForecastPointGenerator._combine_member_interval(
+        point=point, member_points=members, names=["A", "B"],
+        normalized={"A": 0.5, "B": 0.5}, idx=0, previous_close=100.0, p50_close=100.0,
+    )
+    assert "p10_close" not in point
+
+
 # --- persistence round-trip + coverage ----------------------------------
 
 def _interval_points():

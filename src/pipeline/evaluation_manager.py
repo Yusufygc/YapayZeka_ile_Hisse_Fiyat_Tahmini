@@ -964,6 +964,10 @@ class EvaluationManager:
         wf_fold_metrics: Optional[Dict[str, list[Dict[str, Any]]]] = None,
     ) -> WalkForwardResult:
         self._ensure_services()
+        # Interval kalibrasyonu (final holdout artifact sidecar'i) walk-forward
+        # target residual'larini kullanir; owner'a stash et ki FinalHoldout workflow
+        # (_build_interval_calibration) okuyabilsin.
+        self.wf_backtest_inputs = wf_backtest_inputs or {}
         return self.walk_forward_workflow.run(
             wf_results,
             wf_predictions,
