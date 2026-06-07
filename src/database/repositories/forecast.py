@@ -129,8 +129,11 @@ class ForecastRepository:
             INSERT INTO forecast_points
                 (run_id, target_date, horizon_index, raw_predicted_close,
                  bounded_predicted_close, predicted_return, lower_band,
-                 upper_band, price_tick)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 upper_band, price_tick,
+                 p10_close, p50_close, p90_close,
+                 predicted_return_p10, predicted_return_p50, predicted_return_p90,
+                 interval_method)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id, target_date) DO UPDATE SET
                 horizon_index           = excluded.horizon_index,
                 raw_predicted_close     = excluded.raw_predicted_close,
@@ -139,6 +142,13 @@ class ForecastRepository:
                 lower_band              = excluded.lower_band,
                 upper_band              = excluded.upper_band,
                 price_tick              = excluded.price_tick,
+                p10_close               = excluded.p10_close,
+                p50_close               = excluded.p50_close,
+                p90_close               = excluded.p90_close,
+                predicted_return_p10    = excluded.predicted_return_p10,
+                predicted_return_p50    = excluded.predicted_return_p50,
+                predicted_return_p90    = excluded.predicted_return_p90,
+                interval_method         = excluded.interval_method,
                 actual_close            = NULL,
                 actual_return           = NULL,
                 abs_error               = NULL,
@@ -155,6 +165,13 @@ class ForecastRepository:
                 self.db._optional_float(point.get("lower_band")),
                 self.db._optional_float(point.get("upper_band")),
                 self.db._optional_float(point.get("price_tick")),
+                self.db._optional_float(point.get("p10_close")),
+                self.db._optional_float(point.get("p50_close")),
+                self.db._optional_float(point.get("p90_close")),
+                self.db._optional_float(point.get("predicted_return_p10")),
+                self.db._optional_float(point.get("predicted_return_p50")),
+                self.db._optional_float(point.get("predicted_return_p90")),
+                (str(point["interval_method"]) if point.get("interval_method") else None),
             ),
         )
 

@@ -123,18 +123,23 @@ class ForecastResolutionRepository:
         mape_values = [abs((actual_value - pred_value) / actual_value) for actual_value, pred_value in zip(actual, pred) if actual_value]
         direction_values = [int(point["direction_correct"]) for point in points if point["direction_correct"] is not None]
         weekly_direction_correct = self._weekly_direction_correct(run, points)
+        coverage, avg_width = self._interval_coverage(points)
         conn.execute(
             """
             INSERT INTO forecast_accuracy_summary
                 (run_id, stock_symbol, model_name, rmse, mae, mape, dir_acc,
-                 weekly_direction_correct, resolved_points, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 weekly_direction_correct, interval_coverage, interval_avg_width,
+                 nominal_coverage, resolved_points, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id) DO UPDATE SET
                 rmse                     = excluded.rmse,
                 mae                      = excluded.mae,
                 mape                     = excluded.mape,
                 dir_acc                  = excluded.dir_acc,
                 weekly_direction_correct = excluded.weekly_direction_correct,
+                interval_coverage        = excluded.interval_coverage,
+                interval_avg_width       = excluded.interval_avg_width,
+                nominal_coverage         = excluded.nominal_coverage,
                 resolved_points          = excluded.resolved_points,
                 updated_at               = excluded.updated_at
             """,
@@ -147,10 +152,46 @@ class ForecastResolutionRepository:
                 (sum(mape_values) / len(mape_values) * 100.0) if mape_values else None,
                 (sum(direction_values) / len(direction_values) * 100.0) if direction_values else None,
                 weekly_direction_correct,
+                coverage,
+                avg_width,
+                None,  # nominal_coverage: rapor aracı sidecar/config'ten doldurur.
                 len(points),
                 datetime.now().isoformat(timespec="seconds"),
             ),
         )
+
+    @staticmethod
+    def _interval_coverage(points) -> tuple[Optional[float], Optional[float]]:
+        """Çözümlenmiş noktalarda ampirik kapsama oranı (%) + ortalama band genişliği.
+
+        Yalnızca p10_close/p90_close dolu noktalar sayılır. Hiç interval yoksa
+        (None, None).
+        """
+        hits = 0
+        widths: List[float] = []
+        n = 0
+        for point in points:
+            try:
+                lower = point["p10_close"]
+                upper = point["p90_close"]
+            except (KeyError, IndexError):
+                continue
+            if lower is None or upper is None:
+                continue
+            lower = float(lower)
+            upper = float(upper)
+            if upper < lower:
+                lower, upper = upper, lower
+            actual_close = float(point["actual_close"])
+            n += 1
+            if lower <= actual_close <= upper:
+                hits += 1
+            widths.append(upper - lower)
+        if n == 0:
+            return (None, None)
+        coverage = hits / n * 100.0
+        avg_width = sum(widths) / len(widths) if widths else None
+        return (coverage, avg_width)
 
     def _weekly_direction_correct(self, run, points) -> Optional[int]:
         if len(points) < int(run["horizon_days"]):

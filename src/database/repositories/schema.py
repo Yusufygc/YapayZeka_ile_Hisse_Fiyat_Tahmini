@@ -39,6 +39,8 @@ class SchemaRepository:
             self._ensure_experiment_columns(conn)
             self._ensure_best_model_columns(conn)
             self._ensure_forecast_run_columns(conn)
+            self._ensure_forecast_point_columns(conn)
+            self._ensure_forecast_accuracy_columns(conn)
             self.migrate_legacy_production_candidates(conn)
             self.refresh_best_models_from_production_experiments(conn)
 
@@ -76,6 +78,23 @@ class SchemaRepository:
         self.ensure_column(conn, "forecast_runs", "artifact_mode", "TEXT")
         self.ensure_column(conn, "forecast_runs", "forecast_warnings_json", "TEXT")
         self.ensure_column(conn, "forecast_runs", "ensemble_metadata_json", "TEXT")
+
+    def _ensure_forecast_point_columns(self, conn: sqlite3.Connection) -> None:
+        # Olasılıksal forward interval (B2 residual / C conformal). p10=alt, p50=nokta,
+        # p90=üst; interval_method üreteni ayırır (quantile_model/residual_b2/conformal).
+        self.ensure_column(conn, "forecast_points", "p10_close", "REAL")
+        self.ensure_column(conn, "forecast_points", "p50_close", "REAL")
+        self.ensure_column(conn, "forecast_points", "p90_close", "REAL")
+        self.ensure_column(conn, "forecast_points", "predicted_return_p10", "REAL")
+        self.ensure_column(conn, "forecast_points", "predicted_return_p50", "REAL")
+        self.ensure_column(conn, "forecast_points", "predicted_return_p90", "REAL")
+        self.ensure_column(conn, "forecast_points", "interval_method", "TEXT")
+
+    def _ensure_forecast_accuracy_columns(self, conn: sqlite3.Connection) -> None:
+        # Interval coverage backtest metrikleri (ampirik kapsama / band genişliği).
+        self.ensure_column(conn, "forecast_accuracy_summary", "interval_coverage", "REAL")
+        self.ensure_column(conn, "forecast_accuracy_summary", "interval_avg_width", "REAL")
+        self.ensure_column(conn, "forecast_accuracy_summary", "nominal_coverage", "REAL")
 
     def _ensure_best_model_columns(self, conn: sqlite3.Connection) -> None:
         self.ensure_column(conn, "best_models", "target_mode", "TEXT NOT NULL DEFAULT 'price'")

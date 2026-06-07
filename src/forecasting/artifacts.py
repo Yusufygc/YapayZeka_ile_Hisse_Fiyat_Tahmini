@@ -32,7 +32,14 @@ def artifact_sidecar_paths(model_path: str) -> Dict[str, str]:
         "metadata": f"{base}.forecast_metadata.json",
         "scaler_X": f"{base}.scaler_X.pkl",
         "scaler_y": f"{base}.scaler_y.pkl",
+        # Olasılıksal interval kalibrasyonu (B2 residual / C conformal). Opsiyonel:
+        # eksikse interval üretilmez (geriye uyumlu). load() zorunlu listede DEĞİL.
+        "interval_calib": f"{base}.interval_calib.json",
     }
+
+
+# Eksik olması forecast'i bozmayan opsiyonel sidecar'lar (load guard dışında tutulur).
+_OPTIONAL_SIDECARS = ("interval_calib",)
 
 
 def save_forecast_artifact_package(
@@ -41,6 +48,7 @@ def save_forecast_artifact_package(
     scaler_X: Any,
     scaler_y: Any,
     metadata: Dict[str, Any],
+    interval_calib: Dict[str, Any] | None = None,
 ) -> Dict[str, str]:
     if not model_path:
         raise ForecastArtifactError("model_path is required for artifact metadata")
@@ -53,6 +61,10 @@ def save_forecast_artifact_package(
     payload["model_path"] = model_path
     payload["scaler_X_path"] = paths["scaler_X"]
     payload["scaler_y_path"] = paths["scaler_y"]
+    if interval_calib is not None:
+        payload["interval_calib_path"] = paths["interval_calib"]
+        with open(paths["interval_calib"], "w", encoding="utf-8") as handle:
+            json.dump(interval_calib, handle, ensure_ascii=False, indent=2, default=str)
     with open(paths["metadata"], "w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2, default=str)
     return paths
@@ -67,7 +79,11 @@ def load_forecast_artifact_package(
     if not model_path or not os.path.isfile(model_path):
         raise ForecastArtifactError(f"{model_name} artifact model file not found: {model_path}")
     paths = artifact_sidecar_paths(model_path)
-    missing = [name for name, path in paths.items() if not os.path.isfile(path)]
+    missing = [
+        name
+        for name, path in paths.items()
+        if name not in _OPTIONAL_SIDECARS and not os.path.isfile(path)
+    ]
     if missing:
         raise ForecastArtifactError(
             f"{model_name} artifact sidecars missing: {', '.join(missing)}"
@@ -80,6 +96,13 @@ def load_forecast_artifact_package(
 
     with open(paths["metadata"], "r", encoding="utf-8") as handle:
         metadata = json.load(handle)
+    # Opsiyonel interval kalibrasyonu: varsa metadata'ya göm (yoksa None).
+    calib_path = paths.get("interval_calib")
+    if calib_path and os.path.isfile(calib_path):
+        with open(calib_path, "r", encoding="utf-8") as handle:
+            metadata["interval_calibration"] = json.load(handle)
+    else:
+        metadata.setdefault("interval_calibration", None)
     return ForecastArtifactPackage(
         model=model,
         scaler_X=joblib.load(paths["scaler_X"]),

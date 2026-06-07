@@ -126,8 +126,17 @@ Operational support modules added in this phase:
 | `src/api/observability.py` | JSON-line rotating log events under `logs/ai_core.log` |
 | `src/api/services/data_refresh_service.py` | Analysis refresh job orchestration |
 | `src/cli/db_maintenance.py` | SQLite summary and backup-reset commands |
-| `src/forecasting/artifacts.py` | Forecast model/scaler/metadata sidecar persistence |
+| `src/forecasting/artifacts.py` | Forecast model/scaler/metadata sidecar persistence (+ optional `interval_calib` sidecar) |
+| `src/forecasting/interval_calibration.py` | Model-agnostik olasılıksal interval kalibrasyonu: B2 residual σ band + C conformal (q̂, ACI) |
 | `src/forecasting/bist_calendar.py` | Deterministic BIST calendar generation and merge with manual overrides |
+
+Forward forecast olasılıksal aralık akışı: eğitimde `_build_interval_calibration`
+(`evaluation_workflows.py`) walk-forward residual'larından B2+C kalibrasyonunu üretir
+→ `{model}.interval_calib.json` sidecar. Serve'de `roll_forward_recursive`
+kalibrasyonu yükler, `interval_calibration.py` band fonksiyonlarıyla
+`p10/p50/p90` üretir (yeniden eğitim yok), BIST clip uygular, persist eder. Detay:
+[Validation and Backtesting](validation-and-backtesting.md),
+[Persistence and API](persistence-and-api.md).
 
 ## E2 Pooled Serving Subsystem (Faz 5–8)
 

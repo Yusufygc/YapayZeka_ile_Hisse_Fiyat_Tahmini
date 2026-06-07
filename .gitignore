@@ -26,6 +26,7 @@ tools/*
 !tools/e2_poc_deep_ensemble.py
 !tools/e2_poc_deep_lstm.py
 !tools/e2_poc_deep_ens3.py
+!tools/interval_coverage_report.py
 .claude
 kalinanYer.md
 kalinanYer1.md

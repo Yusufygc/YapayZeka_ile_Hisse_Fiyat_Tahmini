@@ -37,6 +37,45 @@ def _merge_backtest_metrics(model_metrics_by_model: dict, backtest_results: dict
                 model_metrics[field] = bt_metrics[field]
 
 
+def _build_interval_calibration(owner, model_name: str) -> dict | None:
+    """Walk-forward target residual'larından interval kalibrasyonu üretir.
+
+    Kaynak: ``owner.wf_backtest_inputs[model_name]`` (out-of-sample fold tahminleri;
+    final holdout KULLANILMAZ). B2 (residual σ, rejim-koşullu) + C (conformal q̂)
+    birlikte hesaplanır; aktif üreteç top-level ``method`` ile belirlenir (B2).
+    WF girdisi yoksa None (interval atlanır, geriye uyumlu).
+    """
+    inputs = getattr(owner, "wf_backtest_inputs", {}) or {}
+    entry = inputs.get(model_name)
+    if not entry:
+        return None
+    y_true = entry.get("y_true_target")
+    y_pred = entry.get("pred_target")
+    if y_true is None or y_pred is None or len(y_true) == 0:
+        return None
+    from src.forecasting.interval_calibration import (
+        compute_conformal_calibration,
+        compute_residual_calibration,
+    )
+
+    record = {
+        "y_true_target": list(np.asarray(y_true, dtype=float).ravel()),
+        "y_pred_target": list(np.asarray(y_pred, dtype=float).ravel()),
+    }
+    regimes = entry.get("market_regime")
+    if regimes is not None and len(regimes):
+        record["market_regime"] = list(np.asarray(regimes).ravel())
+    fold_records = [record]
+    residual = compute_residual_calibration(fold_records, levels=(0.8,), per_regime=True)
+    if residual is None:
+        return None
+    calibration = dict(residual)  # top-level method = "residual_b2" (B2 aktif)
+    conformal = compute_conformal_calibration(fold_records, level=0.9)
+    if conformal is not None:
+        calibration["conformal"] = conformal  # C: rapor + ileride aktifleştirme
+    return calibration
+
+
 def _write_forecast_artifact_sidecars(owner, *, model_name: str, model_path: str, tensors: dict, validation_mode: str) -> None:
     if not model_path or "scaler_X" not in tensors or "scaler_y" not in tensors:
         return
@@ -55,11 +94,13 @@ def _write_forecast_artifact_sidecars(owner, *, model_name: str, model_path: str
         "forecast_strategy": "recursive_direct_target",
     }
     try:
+        interval_calib = _build_interval_calibration(owner, model_name)
         save_forecast_artifact_package(
             model_path=model_path,
             scaler_X=tensors["scaler_X"],
             scaler_y=tensors["scaler_y"],
             metadata=metadata,
+            interval_calib=interval_calib,
         )
     except Exception as exc:
         print(f"  [WARN] Forecast artifact sidecar yazilamadi ({model_name}): {exc}")

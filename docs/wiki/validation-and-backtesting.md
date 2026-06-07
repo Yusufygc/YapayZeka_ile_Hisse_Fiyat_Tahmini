@@ -376,6 +376,67 @@ Current full-universe result: IC ≈ 0.099, ICIR ≈ 1.55. See
 [E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md) and
 [E2 Faz 2 Pooled CV Design](e2-faz2-pooled-cv-design.md).
 
+## Olasılıksal Forward Interval (Kademe B2 → C)
+
+Forward forecast (`ForecastRunner`) tek-nokta (p50) yerine **olasılıksal aralık**
+üretebilir: "p10'a iner, p90'a çıkar, p50 merkez". Aralık **model-agnostik**'tir
+(sadece quantile model değil, her üretim modeli için). İki kademe `src/forecasting/
+interval_calibration.py` içinde:
+
+### Kademe B2 — residual band (parametrik baseline)
+
+- **Kaynak**: walk-forward fold residual'ları (target uzayı),
+  `residual = y_true_target − y_pred_target`. Final holdout KULLANILMAZ
+  (out-of-sample sızıntısız). `compute_residual_calibration(fold_records)`.
+- **σ**: örneklem standart sapması (ddof=1); opsiyonel **rejim-koşullu σ**
+  (`sigma_by_regime`, walk-forward `market_regime` etiketinden) → volatil rejimde
+  geniş, sakin rejimde dar band (heteroskedastisiteyi kısmen yakalar).
+- **Band**: `p50 ± z·σ·√h` (`residual_band`). z iki-taraflı normal (0.8→1.28,
+  0.9→1.64, 0.95→1.96); `√h` random-walk horizon ölçeği.
+- **Varsayım**: yaklaşık normal + homoskedastik → kapsama **garantisi yok**, ampirik
+  ölçülür. Fat-tail'i kısmen kaçırır. Hızlı, açıklaması kolay → tez baseline'ı.
+
+### Kademe C — conformal (dağılımdan bağımsız, kapsama-garantili)
+
+- **Split-conformal**: nonconformity skoru `s_i = |y_true − y_pred|`; ampirik
+  quantile `q̂ = quantile(scores, ceil((n+1)·level)/n)` (sonlu-örneklem kapsama
+  garantisi). `compute_conformal_calibration(fold_records, level=0.9)`.
+- **Band**: `p50 ± q̂` (`conformal_band`; opsiyonel `√h` horizon ölçeği).
+- **ACI-lite** (`adaptive_conformal_update`): zaman-serisi exchangeability kırılımı
+  için `q̂`'i kayan kapsama sapmasına göre online ayarlar
+  (`q_new = q̂·(1 + γ·(target − recent))`). Kapsama düşükse band genişler.
+- **Üstünlük**: dağılım varsayımı yok → fat-tail'i doğal kapsar, **teorik + sonlu
+  örneklem coverage garantisi** (tezde en güçlü iddia).
+
+### Kalibrasyon depolama & serving
+
+- Eğitimde `_build_interval_calibration` (`src/pipeline/evaluation_workflows.py`)
+  WF residual'larından B2 + C'yi birlikte hesaplar; **model yanı sidecar artifact**
+  `<model>.interval_calib.json`'a yazılır (`save_forecast_artifact_package`,
+  opsiyonel). Serve'de yeniden eğitim yok — `load_forecast_artifact_package`
+  metadata'ya `interval_calibration` olarak gömer (yoksa None → interval atlanır).
+- `roll_forward_recursive` quantile dalı yoksa ve kalibrasyon varsa model-agnostik
+  dalı çağırır (`_apply_model_agnostic_interval`): band hedef uzayında kurulur →
+  `target_to_price` → BIST clip → `p10_close/p50_close/p90_close` +
+  `predicted_return_p*` + `interval_method` (quantile_model | residual_b2 |
+  conformal). Aktif üreteç `model_settings["interval_method"]` ile seçilir
+  (`resolve_active_calibration`); varsayılan `residual_b2`.
+
+### Coverage backtest (kalibrasyon kanıtı)
+
+- `forecast_resolution.py` resolve sırasında `actual_close ∈ [p10, p90]` oranını
+  hesaplar → `forecast_accuracy_summary.interval_coverage` (%) +
+  `interval_avg_width`. Ampirik kapsama = tez metriği.
+- `tools/interval_coverage_report.py` üreteç (B2 vs conformal) bazında ortalama
+  kapsama + band genişliği tablolar → **tez "naive band %X vs conformal %Y, hedef
+  %90" karşılaştırma tablosu**. B2 = baseline/ablation, C = aday.
+- Yorum sınırı: aralık göreli/koşullu fiyat aralığıdır, kesin değer değil;
+  dar band + hedefe yakın kapsama = iyi kalibre + bilgili.
+
+Testler: `tests/test_interval_calibration.py` (σ/q̂/band/ACI/validasyon),
+`tests/test_forecast_interval_persist.py` (roll_forward dalı + persistence
+round-trip + coverage + rapor).
+
 ## Related Pages
 
 - [Data Pipeline](data-pipeline.md)

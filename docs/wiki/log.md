@@ -1,3 +1,26 @@
+## [2026-06-07] Forward Interval | B2 residual band + C conformal (model-agnostik)
+
+Forward forecast'e **olasılıksal aralık** eklendi (tek-nokta p50 yerine p10/p50/p90,
+"iner/çıkar/seyreder"). Model-agnostik (sadece quantile model değil). İki kademe:
+- **B2**: walk-forward residual σ (+ rejim-koşullu), band `p50 ± z·σ·√h`.
+- **C**: split-conformal q̂ (`|hata|` quantile) + ACI-lite, kapsama-garantili;
+  `p50 ± q̂`. CQR için quantile model artıkları da aynı skor mantığıyla kalibre.
+- YENİ `src/forecasting/interval_calibration.py` (saf fonksiyonlar: compute_residual/
+  conformal_calibration, residual/conformal_band, adaptive_conformal_update,
+  resolve_active_calibration).
+- Kalibrasyon **sidecar** `{model}.interval_calib.json` (opsiyonel, eksikse graceful);
+  eğitimde `_build_interval_calibration` WF residual'larından üretir (holdout değil).
+- `roll_forward_recursive` model-agnostik dal (`_apply_model_agnostic_interval`);
+  aktif üreteç `model_settings["interval_method"]` (varsayılan residual_b2).
+- Persistence: `forecast_points` p10/p50/p90 + predicted_return_p* + interval_method;
+  `forecast_accuracy_summary` interval_coverage/avg_width/nominal (additive migration).
+  Serving (`ForecastPoint` + `_build_forecast_block`) zaten p10/p50/p90 taşıyordu;
+  + `interval_method` alanı. Coverage backtest `forecast_resolution.py`.
+- YENİ `tools/interval_coverage_report.py` (B2 vs conformal coverage tablosu = tez).
+- Testler: `tests/test_interval_calibration.py` (12) + `tests/test_forecast_interval_persist.py` (8); 32 forecast testi yeşil, 102 regresyon yeşil.
+- Wiki: `validation-and-backtesting.md` (tez bölümü), `persistence-and-api.md`,
+  `architecture.md`.
+
 ## [2026-06-07] E2 Faz 10 | Kol-B XAI: pooled model per-symbol SHAP attribution
 
 Kol-B (pooled cross-sectional) production modeline per-symbol feature attribution eklendi

@@ -471,6 +471,14 @@ class ProductionTrainingWorkflow:
         return artifact.model, {
             "features": features,
             "target_mode": data_manager.data_cfg.target_mode,
+            "feature_mode": data_manager.data_cfg.feature_mode,
+            # Olasılıksal interval kalibrasyonu (B2/C). Artifact sidecar'ında varsa
+            # dolu; yoksa None -> interval üretilmez (geriye uyumlu).
+            "interval_calibration": artifact.metadata.get("interval_calibration"),
+            # Aktif üreteç tercihi (residual_b2 | conformal). Config'ten gelir.
+            "interval_method_pref": str(
+                self.ctx.model_config.model_settings.get("interval_method", "residual_b2")
+            ),
             "scaler_X": artifact.scaler_X,
             "scaler_y": artifact.scaler_y,
             "artifact_metadata": artifact.metadata,
@@ -793,6 +801,20 @@ class ForecastPointGenerator:
                 if "p90" in quantile_close:
                     point["p90_close"] = quantile_close["p90"]
                     point["predicted_return_p90"] = quantile_returns["p90"]
+                point["interval_method"] = "quantile_model"
+            else:
+                # Model-agnostik olasiliksal interval (B2 residual / C conformal).
+                # Quantile model yoksa ve artifact'ta kalibrasyon varsa uygulanir.
+                self._apply_model_agnostic_interval(
+                    point=point,
+                    predicted_target=predicted_target,
+                    previous_close=previous_close,
+                    target_mode=target_mode,
+                    calibration=context.get("interval_calibration"),
+                    horizon_index=idx,
+                    frame=frame,
+                    prefer=context.get("interval_method_pref", "residual_b2"),
+                )
             points.append(point)
             frame = self._append_recursive_row(
                 frame=frame,
@@ -808,6 +830,92 @@ class ForecastPointGenerator:
             frame = self._apply_macro_forward_projection_safe(frame, context, target_date)
             previous_close = bounded_close
         return points
+
+    def _apply_model_agnostic_interval(
+        self,
+        *,
+        point: Dict[str, Any],
+        predicted_target: float,
+        previous_close: float,
+        target_mode: str,
+        calibration: Optional[Dict[str, Any]],
+        horizon_index: int,
+        frame: pd.DataFrame,
+        prefer: str = "residual_b2",
+    ) -> None:
+        """B2/C kalibrasyonundan p10/p50/p90 close + return üretir (yerinde yazar).
+
+        Kalibrasyon yoksa veya geçersizse hiçbir alan eklenmez (geriye uyumlu).
+        `prefer` aktif üreteci seçer (residual_b2 | conformal). Band hedef (target)
+        uzayında kurulur, fiyata çevrilir, BIST clip uygulanır. p50 = mevcut bounded
+        tahmin (point), p10/p90 = band sınırları.
+        """
+        from src.forecasting.interval_calibration import (
+            conformal_band,
+            residual_band,
+            resolve_active_calibration,
+            sigma_for_regime,
+        )
+
+        calibration = resolve_active_calibration(calibration, prefer)
+        if not calibration:
+            return
+
+        method = str(calibration.get("method", ""))
+        levels = calibration.get("levels") or [0.8]
+        level = float(levels[0]) if levels else 0.8
+        try:
+            if method == "residual_b2":
+                regime = self._latest_regime(frame)
+                sigma = sigma_for_regime(calibration, regime)
+                lower_t, upper_t = residual_band(
+                    float(predicted_target), sigma, horizon_index, level
+                )
+            elif method == "conformal":
+                q_hat = float(calibration.get("q_hat", 0.0))
+                level = float(calibration.get("level", level))
+                lower_t, upper_t = conformal_band(
+                    float(predicted_target), q_hat, horizon_index, horizon_scale=True
+                )
+            else:
+                return
+        except (ValueError, TypeError):
+            return
+
+        lower_close = self._target_to_bounded_price(lower_t, previous_close, target_mode)
+        upper_close = self._target_to_bounded_price(upper_t, previous_close, target_mode)
+        # Band sıralaması garanti (target_to_price monoton ama clip karıştırabilir).
+        if lower_close > upper_close:
+            lower_close, upper_close = upper_close, lower_close
+        p50_close = float(point["bounded_predicted_close"])
+        point["p10_close"] = lower_close
+        point["p50_close"] = p50_close
+        point["p90_close"] = upper_close
+        point["predicted_return_p10"] = (
+            (lower_close / previous_close) - 1.0 if previous_close else 0.0
+        )
+        point["predicted_return_p50"] = float(point.get("predicted_return", 0.0))
+        point["predicted_return_p90"] = (
+            (upper_close / previous_close) - 1.0 if previous_close else 0.0
+        )
+        point["interval_method"] = method
+        point["interval_level"] = level
+
+    def _target_to_bounded_price(
+        self, target: float, previous_close: float, target_mode: str
+    ) -> float:
+        raw = self.ctx.target_to_price(float(target), previous_close, target_mode)
+        bounded, _ = self.ctx.rules.bound_forecast_price(raw, previous_close)
+        return float(bounded)
+
+    @staticmethod
+    def _latest_regime(frame: pd.DataFrame) -> Optional[str]:
+        for col in ("Market_Regime", "market_regime"):
+            if col in frame.columns and len(frame):
+                val = frame[col].iloc[-1]
+                if val is not None and not (isinstance(val, float) and np.isnan(val)):
+                    return str(val)
+        return None
 
     def _refresh_latest_context(
         self, context: Dict[str, Any], frame: pd.DataFrame, model_name: str

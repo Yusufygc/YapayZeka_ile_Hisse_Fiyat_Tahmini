@@ -51,6 +51,8 @@ class ForecastPoint(BaseModel):
     lower_band: Optional[float] = None
     upper_band: Optional[float] = None
     price_tick: Optional[float] = None
+    # Olasılıksal interval üreteni: quantile_model | residual_b2 | conformal | None.
+    interval_method: Optional[str] = None
 
 
 class ForecastBlock(BaseModel):

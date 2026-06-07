@@ -574,6 +574,7 @@ def _build_forecast_block(forecast_row: Dict[str, Any]) -> ForecastBlock:
             lower_band=p.get("lower_band"),
             upper_band=p.get("upper_band"),
             price_tick=p.get("price_tick"),
+            interval_method=p.get("interval_method"),
         )
         for p in raw_points
     ]

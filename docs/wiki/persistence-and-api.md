@@ -202,9 +202,31 @@ Forecast artifact sidecars are written next to the model file:
 - `{model}.forecast_metadata.json`
 - `{model}.scaler_X.pkl`
 - `{model}.scaler_y.pkl`
+- `{model}.interval_calib.json` — **opsiyonel** olasılıksal interval kalibrasyonu
+  (B2 residual σ + C conformal q̂). Eksikse forecast bozulmaz, interval atlanır
+  (`_OPTIONAL_SIDECARS`). Walk-forward residual'larından `_build_interval_calibration`
+  ile üretilir (final holdout kullanılmaz).
 
-Missing or incompatible sidecars fail the forecast path explicitly through
-`ForecastArtifactError`; serving code should not silently retrain in that case.
+Missing or incompatible sidecars (zorunlu olanlar) fail the forecast path explicitly
+through `ForecastArtifactError`; serving code should not silently retrain in that case.
+
+### Olasılıksal forward interval (B2/C)
+
+- `forecast_points` ek kolonlar: `p10_close`, `p50_close`, `p90_close`,
+  `predicted_return_p10/p50/p90`, `interval_method`
+  (`quantile_model | residual_b2 | conformal | null`). p10=alt, p50=nokta, p90=üst.
+  Quantile model yolu da aynı alanları doldurur; `interval_method` üreteni ayırır.
+  Geriye uyumlu: eski satırlar/interval'siz tahminler `null`.
+- `forecast_accuracy_summary` ek kolonlar: `interval_coverage` (%),
+  `interval_avg_width`, `nominal_coverage`. Resolve sırasında
+  `actual_close ∈ [p10, p90]` oranından hesaplanır (`forecast_resolution.py`).
+- Kolonlar additive migration ile mevcut DB'lere eklenir
+  (`SchemaRepository._ensure_forecast_point_columns` /
+  `_ensure_forecast_accuracy_columns`). DDL `stock_model_db.py`.
+- API `ForecastPoint` şeması p10/p50/p90 + `predicted_return_p*` + `interval_method`
+  alanlarını taşır (`_build_forecast_block` map eder); desktop/UI tüketebilir.
+- Karşılaştırma: `tools/interval_coverage_report.py` (B2 vs conformal coverage tablosu).
+  Detay: [Validation and Backtesting](validation-and-backtesting.md).
 
 Production ensemble leaders are now allowed only for the curated methods
 `Ensemble Inverse RMSE` and `Ensemble Cash-Gated`. Their forecast runs persist

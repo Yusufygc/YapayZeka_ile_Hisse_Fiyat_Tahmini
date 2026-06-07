@@ -270,6 +270,7 @@ class WalkForwardTrainingWorkflow(_OwnerBackedService):
         all_preds, all_trues = [], []
         all_dates, all_prediction_dates, all_prev_close = [], [], []
         all_pred_target, all_true_target, all_fold_ids = [], [], []
+        all_market_regime = []
         for window in windows:
             all_preds.extend(window["y_pred_price"])
             all_trues.extend(window["y_true_price"])
@@ -278,6 +279,7 @@ class WalkForwardTrainingWorkflow(_OwnerBackedService):
             all_prev_close.extend(window["prev_close"])
             all_pred_target.extend(window["y_pred_target"])
             all_true_target.extend(window["y_true_target"])
+            all_market_regime.extend(window.get("market_regime", []))
             all_fold_ids.extend([window["split_idx"]] * len(window["y_true_price"]))
 
         self.wf_predictions[name] = np.asarray(all_preds, dtype=float)
@@ -291,6 +293,8 @@ class WalkForwardTrainingWorkflow(_OwnerBackedService):
             "fold_ids": np.asarray(all_fold_ids),
             "pred_target": np.asarray(all_pred_target, dtype=float),
             "y_true_target": np.asarray(all_true_target, dtype=float),
+            # Interval kalibrasyonu (B2 rejim-koşullu σ) için rejim etiketleri.
+            "market_regime": np.asarray(all_market_regime),
         }
 
     def _log_walk_forward_runs(self) -> None:
