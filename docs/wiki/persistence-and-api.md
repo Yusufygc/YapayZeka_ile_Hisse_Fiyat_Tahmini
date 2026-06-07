@@ -341,11 +341,18 @@ Two tables:
   `segment_liq/vol/sector`, `segment_icir` (composite, tradability-aware),
   `confidence_label` (low/medium/high), `confidence_reasons/warnings` (JSON), and
   **trend tendency (Faz 7b)**: `trend_label` (yukarı/yatay/aşağı/belirsiz),
-  `trend_prob_up`, `trend_expected_return`.
+  `trend_prob_up`, `trend_expected_return`; and **Kol-B XAI (Faz 10)**:
+  `xai_top_features` (JSON: `{method, approximate, caveat, top_positive[], top_negative[]}`).
 
 `PeerStore._migrate` runs idempotent `ALTER TABLE ADD COLUMN` on open, so
-pre-existing DBs (run_id ≤ 2, no trend columns) upgrade in place; old rows return
-NULL trend → API surfaces `None` (graceful, never breaks).
+pre-existing DBs (run_id ≤ 2, no trend/xai columns) upgrade in place; old rows return
+NULL trend/xai → API surfaces `None`/`xai_available=False` (graceful, never breaks).
+
+**Kol-B XAI (Faz 10):** `tools/e2_faz5_nightly_scoring.py` →
+`score_latest_universe` (cfg `enable_xai`) computes per-symbol SHAP attribution via
+`src/serving/peer_xai.py::compute_peer_xai` (LGB TreeExplainer; ensemble = LGB-leg only
++ caveat). `PeerEnrichmentService` parses `xai_top_features` into `PeerBlock.xai_available
+/xai_method/xai_caveat/xai_top_positive/xai_top_negative` (reusing `XaiFactorItem`).
 
 **API surface:** `src/api/services/peer_service.py` (`PeerEnrichmentService`)
 reads the latest run for a symbol and attaches an additive `peer` block to

@@ -31,6 +31,15 @@ def _scored():
         "trend_label": ["yukarı", "yatay", "aşağı"],
         "trend_prob_up": [0.541, 0.509, 0.435],
         "trend_expected_return": [0.0090, 0.0050, -0.0066],
+        "xai_top_features": [
+            {"method": "shap_tree", "approximate": False, "caveat": "",
+             "top_positive": [{"feature_name": "RSI_14_csr", "contribution": 0.3}],
+             "top_negative": []},
+            None,
+            {"method": "shap_tree", "approximate": False, "caveat": "x",
+             "top_positive": [], "top_negative": [
+                 {"feature_name": "vol", "contribution": -0.2}]},
+        ],
     })
 
 
@@ -70,6 +79,19 @@ def test_trend_columns_roundtrip(tmp_path):
     assert abs(aaa["trend_expected_return"] - 0.0090) < 1e-9
 
 
+def test_xai_top_features_roundtrip(tmp_path):
+    """xai_top_features dict -> JSON yazilir, string olarak geri okunur."""
+    import json
+    s = _store(tmp_path)
+    rid = s.insert_run(GlobalRunMeta(model_name="m", as_of_date="d"))
+    s.insert_peer_scores(rid, _scored())
+    aaa = json.loads(s.get_peer_score("AAA")["xai_top_features"])
+    assert aaa["method"] == "shap_tree"
+    assert aaa["top_positive"][0]["feature_name"] == "RSI_14_csr"
+    # None -> NULL kalir
+    assert s.get_peer_score("BBB")["xai_top_features"] is None
+
+
 def test_migration_adds_trend_cols_to_old_db(tmp_path):
     """Eski sema (trend kolonsuz) -> PeerStore acilista ALTER ile ekler."""
     import sqlite3
@@ -86,7 +108,8 @@ def test_migration_adds_trend_cols_to_old_db(tmp_path):
         conn.executescript(old_schema)
     cols = {r["name"] for r in PeerStore(db)._connect().execute(
         "PRAGMA table_info(peer_scores)")}
-    assert {"trend_label", "trend_prob_up", "trend_expected_return"} <= cols
+    assert {"trend_label", "trend_prob_up", "trend_expected_return",
+            "xai_top_features"} <= cols
 
 
 def test_get_run_peer_scores_sorted(tmp_path):

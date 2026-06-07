@@ -10,6 +10,20 @@ import re
 
 def describe_feature(feature_name: str) -> str:
     """Return a plain Turkish explanation for a feature name."""
+    # E2 Kol-B (pooled cross-sectional) — gün içi akran dönüşümleri ve meta sinyaller.
+    if feature_name.endswith("_csr"):
+        return f"{describe_feature(feature_name[:-4])} — gün içi akran sıralaması (cross-sectional sıra)"
+    if feature_name.endswith("_csz"):
+        return f"{describe_feature(feature_name[:-4])} — gün içi akran standardı (cross-sectional z-skor)"
+    if feature_name == "symbol_id":
+        return "sembol kimliği: modelin sembole özgü öğrendiği eğilim (gömme)"
+    if feature_name in {"sector_code", "sector"}:
+        return "sektör kodu: hissenin ait olduğu sektörün etkisi"
+    if feature_name == "liq_log":
+        return "likidite: log devir hacmi (işlem yoğunluğu)"
+    if feature_name == "vol":
+        return "gerçekleşen oynaklık: hissenin yakın dönem dalgalanması"
+
     if feature_name == "WalkForward_Summary":
         return "walk-forward pencerelerindeki genel model davranışı"
     if feature_name == "RSI_14":
@@ -55,6 +69,14 @@ def describe_feature(feature_name: str) -> str:
         return "reel faiz: reel faiz koşullarının risk iştahına etkisi"
     if feature_name.startswith("ATR"):
         return "ATR: fiyat oynaklığı ve günlük hareket aralığı"
+    if feature_name.startswith("NATR"):
+        return "NATR: normalize ATR (fiyata oranlı oynaklık)"
+    if feature_name.startswith("ADX"):
+        return "ADX: trendin gücü (yön bağımsız)"
+    if feature_name.startswith("CMF"):
+        return "CMF: Chaikin para akışı (hacim ağırlıklı alım/satım baskısı)"
+    if feature_name.startswith("MFI"):
+        return "MFI: para akışı endeksi (hacimli RSI, aşırı bölge)"
     if feature_name.startswith("Stoch"):
         return "Stokastik osilatör: kısa vadeli momentum ve aşırı bölge sinyali"
     if feature_name.startswith("Signal_"):
@@ -74,14 +96,23 @@ def describe_feature(feature_name: str) -> str:
 
 def feature_group(feature_name: str) -> str:
     """Map a feature to the Phase 5 feature group taxonomy."""
+    # E2 Kol-B — cross-sectional & meta grupları (prefix kontrollerinden ÖNCE).
+    if feature_name.endswith(("_csr", "_csz")):
+        return "cross_sectional"
+    if feature_name in {"symbol_id", "sector_code", "sector", "liq_log"}:
+        return "meta"
+    if feature_name == "vol":
+        return "volatility"
     if feature_name.startswith("LogRet_Lag") or feature_name.endswith("_Lag") or "_Lag_" in feature_name:
         return "lag"
-    if feature_name.startswith(("OBV", "VWAP")):
+    if feature_name.startswith(("OBV", "VWAP", "CMF", "MFI")):
         return "volume"
     if feature_name.startswith("Market_Regime"):
         return "regime"
-    if feature_name.startswith(("RollStd", "BB_Width", "ATR", "Volatility")):
+    if feature_name.startswith(("RollStd", "BB_Width", "ATR", "NATR", "Volatility")):
         return "volatility"
+    if feature_name.startswith("ADX"):
+        return "technical"
     if feature_name == "Relative_Strength" or feature_name.startswith("BIST100"):
         return "market_relative"
     if feature_name.startswith(("USDTRY", "Rate", "CPI")) or feature_name == "Real_Rate":

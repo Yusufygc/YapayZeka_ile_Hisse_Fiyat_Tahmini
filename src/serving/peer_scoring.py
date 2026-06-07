@@ -29,6 +29,8 @@ class PeerScoringConfig:
     lo_pct: float = 30.0     # bu percentilin altinda -> underperform
     hi_pct: float = 70.0     # bu percentilin ustunde -> outperform
     min_names: int = 15      # bundan az sembol -> peer skoru anlamsiz
+    enable_xai: bool = True   # E2 Kol-B: per-symbol SHAP attribution uret
+    xai_top_k: int = 5        # sembol basina arti/eksi surucu sayisi
 
 
 def _label(pct: float, lo: float, hi: float) -> str:
@@ -104,4 +106,18 @@ def score_latest_universe(
     preds = np.asarray(model.predict(X), dtype=float).ravel()
     scored = df[[cfg.symbol_col]].copy()
     scored[cfg.pred_col] = preds
-    return rank_to_peer_scores(scored, as_of_date=latest, cfg=cfg)
+    out = rank_to_peer_scores(scored, as_of_date=latest, cfg=cfg)
+
+    # E2 Kol-B XAI — per-symbol feature attribution (booster yoksa no-op).
+    if cfg.enable_xai and len(out):
+        try:
+            from src.serving.peer_xai import compute_peer_xai
+
+            symbols = df[cfg.symbol_col].astype(str).tolist()
+            xai = compute_peer_xai(model, X, list(feature_cols), symbols,
+                                   top_k=cfg.xai_top_k)
+            if xai:
+                out["xai_top_features"] = out["symbol"].map(xai)
+        except Exception:  # XAI hatasi skorlamayi bozmasin
+            pass
+    return out

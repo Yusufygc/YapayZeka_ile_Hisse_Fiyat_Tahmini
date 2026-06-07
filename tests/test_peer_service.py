@@ -25,6 +25,33 @@ def _seed(tmp_path) -> str:
         "confidence_reasons": [["Segment sinyali guclu"]], "confidence_warnings": [[]],
         "trend_label": ["yukarı"], "trend_prob_up": [0.541],
         "trend_expected_return": [0.0090],
+        "xai_top_features": [{
+            "method": "shap_tree", "approximate": False,
+            "caveat": "Bu açıklama yalnızca LightGBM bacağı temellidir.",
+            "top_positive": [{
+                "feature_name": "RSI_14_csr", "human_label": "RSI ... akran",
+                "importance": 0.3, "direction": "yukarı", "feature_group": "cross_sectional",
+                "reason": "...", "method": "shap_tree", "contribution": 0.3,
+                "approximate": False}],
+            "top_negative": [{
+                "feature_name": "vol", "human_label": "oynaklık",
+                "importance": 0.2, "direction": "aşağı", "feature_group": "volatility",
+                "reason": "...", "method": "shap_tree", "contribution": -0.2,
+                "approximate": False}],
+        }],
+    }))
+    return db
+
+
+def _seed_no_xai(tmp_path) -> str:
+    db = os.path.join(str(tmp_path), "noxai.db")
+    store = PeerStore(db)
+    rid = store.insert_run(GlobalRunMeta(model_name="m", as_of_date="d", icir=1.5))
+    store.insert_peer_scores(rid, pd.DataFrame({
+        "symbol": ["TUPRS"], "as_of_date": ["d"], "peer_score": [0.1],
+        "peer_percentile": [55.0], "peer_label": ["inline"], "raw_pred": [0.0],
+        "universe_size": [10], "confidence_label": ["low"],
+        "confidence_reasons": [[]], "confidence_warnings": [[]],
     }))
     return db
 
@@ -45,6 +72,28 @@ def test_enrich_attaches_peer_block(tmp_path):
     assert out.peer.trend_label == "yukarı"
     assert abs(out.peer.trend_prob_up - 0.541) < 1e-9
     assert abs(out.peer.trend_expected_return - 0.0090) < 1e-9
+
+
+def test_enrich_attaches_peer_xai(tmp_path):
+    svc = PeerEnrichmentService(_seed(tmp_path))
+    peer = svc.enrich(_resp("TUPRS")).peer
+    assert peer.xai_available
+    assert peer.xai_method == "shap_tree"
+    assert "LightGBM" in peer.xai_caveat
+    assert len(peer.xai_top_positive) == 1
+    assert peer.xai_top_positive[0].feature_name == "RSI_14_csr"
+    assert peer.xai_top_positive[0].direction == "yukarı"
+    assert len(peer.xai_top_negative) == 1
+    assert peer.xai_top_negative[0].contribution == -0.2
+
+
+def test_enrich_no_xai_graceful(tmp_path):
+    """xai_top_features NULL -> xai_available False, blok yine doner."""
+    svc = PeerEnrichmentService(_seed_no_xai(tmp_path))
+    peer = svc.enrich(_resp("TUPRS")).peer
+    assert peer is not None and peer.available
+    assert peer.xai_available is False
+    assert peer.xai_top_positive == [] and peer.xai_top_negative == []
 
 
 def test_enrich_case_insensitive(tmp_path):

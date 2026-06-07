@@ -11,7 +11,7 @@ import json
 import os
 from typing import Optional
 
-from src.api.schemas.analysis import AnalysisResponse, PeerBlock
+from src.api.schemas.analysis import AnalysisResponse, PeerBlock, XaiFactorItem
 
 
 def _default_db_path() -> str:
@@ -31,6 +31,45 @@ def _json_list(v) -> list[str]:
         return [str(v)]
 
 
+def _xai_factor(raw: dict) -> XaiFactorItem:
+    """XAI JSON sozlugunu XaiFactorItem'a tasir (geriye uyumlu)."""
+    return XaiFactorItem(
+        feature_name=str(raw.get("feature_name", "")),
+        human_label=str(raw.get("human_label", "")),
+        importance=float(raw.get("importance", 0) or 0),
+        direction=str(raw.get("direction", "")),
+        feature_group=raw.get("feature_group"),
+        reason=raw.get("reason"),
+        method=raw.get("method"),
+        contribution=raw.get("contribution"),
+        approximate=raw.get("approximate"),
+    )
+
+
+def _parse_peer_xai(v) -> Optional[dict]:
+    """peer_scores.xai_top_features JSON'unu parse et. Yok/bozuk -> None."""
+    if not v:
+        return None
+    obj = v
+    if isinstance(v, str):
+        try:
+            obj = json.loads(v)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(obj, dict):
+        return None
+    pos = [_xai_factor(f) for f in obj.get("top_positive", []) if isinstance(f, dict)]
+    neg = [_xai_factor(f) for f in obj.get("top_negative", []) if isinstance(f, dict)]
+    if not pos and not neg:
+        return None
+    return {
+        "method": str(obj.get("method", "")),
+        "caveat": str(obj.get("caveat", "")),
+        "top_positive": pos,
+        "top_negative": neg,
+    }
+
+
 class PeerEnrichmentService:
     def __init__(self, db_path: Optional[str] = None) -> None:
         self._db_path = db_path or _default_db_path()
@@ -46,6 +85,7 @@ class PeerEnrichmentService:
             if row is None:
                 return None
             run = store.latest_run() or {}
+            xai = _parse_peer_xai(row.get("xai_top_features"))
             return PeerBlock(
                 available=True,
                 as_of_date=row.get("as_of_date"),
@@ -65,6 +105,11 @@ class PeerEnrichmentService:
                 trend_label=row.get("trend_label"),
                 trend_prob_up=row.get("trend_prob_up"),
                 trend_expected_return=row.get("trend_expected_return"),
+                xai_available=xai is not None,
+                xai_method="" if xai is None else xai["method"],
+                xai_caveat="" if xai is None else xai["caveat"],
+                xai_top_positive=[] if xai is None else xai["top_positive"],
+                xai_top_negative=[] if xai is None else xai["top_negative"],
             )
         except Exception:  # serving katmani API'yi asla bozmasin
             return None

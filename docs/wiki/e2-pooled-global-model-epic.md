@@ -507,6 +507,48 @@ build (~2× ek hesap, ensemble zaten 4×). **%2 kazanç bu maliyeti haklı çık
 Karar: sequence LSTM **rafa** — 3. bacak kanıtlandı ama ekonomik değil. PoC araçları
 kayıt olarak repo'da kalır; serving 2-bacak (LGB+MLP) ensemble'da kalır.
 
+## Faz 10 — Kol-B XAI (per-symbol feature attribution, 2026-06-07)
+
+Kol-B (pooled cross-sectional) production karar motoruydu ama **neden** bir sembolü
+yüksek/düşük sıraladığına dair açıklama yoktu (mevcut `src/xai/explainer.py` yalnız
+Kol-A single-stock'a bağlı). Eklendi: nightly skorlamada her sembol için SHAP tabanlı
+feature attribution.
+
+**Yorum:** cross-sectional hedef (rank) için SHAP, modelin `raw_pred`'ini (gün içi akran
+skoru) feature'lara böler → "bu hisse akranlarına göre neden üstte/altta". Mutlak fiyat
+açıklaması değil, **göreli sıra sürücüleri**.
+
+**Akış:**
+- `src/serving/peer_xai.py::compute_peer_xai(model, X, feature_cols, symbols, top_k)` —
+  LGB booster'ı çözer (`GlobalPooledModel.booster` veya `EnsemblePooledModel.lgb.booster`),
+  `TabularContributionStrategy.tree_contributions` (shap TreeExplainer; shap yoksa
+  permutation_fallback, `approximate=True`) çağırır, sembol başına en etkili artı/eksi
+  top-K sürücü üretir. Booster yoksa no-op (`{}`).
+- **Ensemble = LGB-leg SHAP + caveat:** sadece LightGBM bacağı açıklanır; çıktıya
+  "MLP bacağı bu özetin dışında" uyarısı eklenir. Ucuz (<1sn/gece), dürüst.
+- `score_latest_universe` (cfg `enable_xai=True`, `xai_top_k=5`) skorlama sonrası XAI'yi
+  `xai_top_features` kolonuna (symbol-join) yazar. XAI hatası skorlamayı bozmaz (try/except).
+- Depolama: `peer_scores.xai_top_features TEXT` (JSON), idempotent migration ile eski DB'lere
+  eklenir. Servis: `PeerEnrichmentService` JSON'u parse edip `PeerBlock.xai_*` alanlarını
+  doldurur (`xai_available`, `xai_method`, `xai_caveat`, `xai_top_positive/negative`
+  → `XaiFactorItem`). XAI yoksa `xai_available=False` (graceful).
+- Feature sözlüğü (`src/xai/feature_dictionary.py`) pooled adları kapsayacak şekilde
+  genişletildi: `*_csr`/`*_csz` (cross-sectional sıra/z-skor), `symbol_id`, `sector_code`,
+  `liq_log`, `vol` + base indikatörler NATR/ADX/CMF/MFI. Yeni gruplar: `cross_sectional`, `meta`.
+
+**Smoke doğrulama (30 sym, h=5):** 30/30 satırda XAI yazıldı; en güçlü sürücüler
+`symbol_id`, `NATR_14_csr`, `liq_log`, `SMA_7_rel_csr`, `Log_Return_csz` — yani
+**cross-sectional/meta feature'lar baskın**, modelin akran-göreli mantığını doğruluyor.
+Ensemble koşusunda caveat doğru basıldı; tekil modelde caveat boş.
+
+**Kapsam dışı (follow-up):** desktop UI peer.xai'yi henüz tüketmiyor (Kol-B XAI backend
+hazır, masaüstü kartı ayrı iş).
+
+Kapsam: backend-only. Kod: `src/serving/peer_xai.py` (yeni),
+`src/serving/peer_scoring.py`, `src/serving/peer_store.py`, `src/api/schemas/analysis.py`,
+`src/api/services/peer_service.py`, `src/xai/feature_dictionary.py`. Test:
+`tests/test_peer_xai.py` (yeni) + `test_peer_store.py`/`test_peer_service.py` genişletildi.
+
 ## Faz 0 Findings (2026-06-02)
 
 Audit of all 592 stock CSVs in `data/` via `tools/e2_faz0_universe_audit.py`.

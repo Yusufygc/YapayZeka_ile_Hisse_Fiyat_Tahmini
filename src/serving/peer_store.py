@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS peer_scores (
     trend_label TEXT,
     trend_prob_up REAL,
     trend_expected_return REAL,
+    xai_top_features TEXT,
     UNIQUE(run_id, symbol),
     FOREIGN KEY(run_id) REFERENCES global_model_runs(run_id)
 );
@@ -68,7 +69,7 @@ _PEER_COLS = [
     "symbol", "as_of_date", "peer_score", "peer_percentile", "peer_label",
     "raw_pred", "universe_size", "segment_liq", "segment_vol", "segment_sector",
     "segment_icir", "confidence_label", "confidence_reasons", "confidence_warnings",
-    "trend_label", "trend_prob_up", "trend_expected_return",
+    "trend_label", "trend_prob_up", "trend_expected_return", "xai_top_features",
 ]
 
 # Eski DB'lere (run_id<3) eklenen kolonlar: ALTER TABLE ile geriye-uyumlu migrasyon.
@@ -76,6 +77,7 @@ _PEER_MIGRATIONS = {
     "trend_label": "TEXT",
     "trend_prob_up": "REAL",
     "trend_expected_return": "REAL",
+    "xai_top_features": "TEXT",  # E2 Kol-B XAI (JSON: top_positive/top_negative)
 }
 
 
@@ -146,6 +148,7 @@ class PeerStore:
                 df[col] = None
         for col in ("confidence_reasons", "confidence_warnings"):
             df[col] = df[col].map(_to_json_list)
+        df["xai_top_features"] = df["xai_top_features"].map(_to_json_obj)
         rows = [
             (run_id, *(_cell(r[c]) for c in _PEER_COLS))
             for _, r in df.iterrows()
@@ -213,3 +216,17 @@ def _to_json_list(v: Any) -> str:
         return json.dumps(list(v), ensure_ascii=False)
     except TypeError:
         return json.dumps([str(v)], ensure_ascii=False)
+
+
+def _to_json_obj(v: Any) -> Optional[str]:
+    """XAI dict -> JSON string. None / NaN / bos -> None (kolon NULL kalir)."""
+    if v is None:
+        return None
+    if isinstance(v, float) and v != v:  # NaN
+        return None
+    if isinstance(v, str):
+        return v if v.strip() else None
+    try:
+        return json.dumps(v, ensure_ascii=False)
+    except TypeError:
+        return None

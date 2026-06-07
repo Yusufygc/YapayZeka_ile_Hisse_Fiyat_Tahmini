@@ -1,3 +1,19 @@
+## [2026-06-07] E2 Faz 10 | Kol-B XAI: pooled model per-symbol SHAP attribution
+
+Kol-B (pooled cross-sectional) production modeline per-symbol feature attribution eklendi
+(önceki XAI yalnız Kol-A'ya bağlıydı). SHAP `raw_pred`'i feature'lara böler =
+"akran-göreli sıra sürücüleri".
+- YENİ `src/serving/peer_xai.py::compute_peer_xai` — LGB TreeExplainer (shap yoksa
+  permutation_fallback); ensemble = **LGB-leg + caveat**; booster yoksa no-op.
+- `score_latest_universe` (cfg `enable_xai`/`xai_top_k`) → `peer_scores.xai_top_features`
+  (JSON, idempotent migration). `PeerEnrichmentService` → `PeerBlock.xai_*` (`XaiFactorItem`).
+- `feature_dictionary` pooled adları kapsadı: `*_csr`/`*_csz`, `symbol_id`, `sector_code`,
+  `liq_log`, `vol`, NATR/ADX/CMF/MFI; yeni grup `cross_sectional`/`meta`.
+- Smoke: 30/30 satır XAI; baskın sürücüler cross-sectional/meta (modeli doğruluyor).
+- Test: `tests/test_peer_xai.py` (yeni) + peer_store/peer_service genişletildi (toplam yeşil).
+- Kapsam: backend-only; desktop UI tüketimi follow-up.
+- Güncellenen wiki: `e2-pooled-global-model-epic.md` (Faz 10), `persistence-and-api.md`.
+
 ## [2026-06-05] E2 Faz 9 live | Gecelik job ensemble'a geçti
 
 Scheduled `ts_forecasting_nightly` artık ensemble koşar:

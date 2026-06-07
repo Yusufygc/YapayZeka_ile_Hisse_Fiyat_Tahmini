@@ -138,6 +138,12 @@ class PeerBlock(BaseModel):
     trend_label: Optional[str] = None             # yukarı | yatay | aşağı | belirsiz
     trend_prob_up: Optional[float] = None         # kalibre P(h-gun getiri > 0)
     trend_expected_return: Optional[float] = None  # kalibre ort. h-gun log-getiri
+    # E2 Kol-B XAI — pooled modelin per-symbol feature attribution'i (SHAP, additive).
+    xai_available: bool = False
+    xai_method: str = ""                          # shap_tree | permutation_fallback
+    xai_caveat: str = ""                          # ensemble ise LGB-leg uyarisi
+    xai_top_positive: List[XaiFactorItem] = []    # sirayi yukari iten suruculer
+    xai_top_negative: List[XaiFactorItem] = []    # sirayi asagi iten suruculer
 
 
 class ForecastSourceBlock(BaseModel):
