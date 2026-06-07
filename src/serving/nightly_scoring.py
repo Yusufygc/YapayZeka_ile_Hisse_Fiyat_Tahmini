@@ -71,6 +71,8 @@ def assemble_peer_table(
     scoring_cfg: Optional[PeerScoringConfig] = None,
     thr: Optional[ConfidenceThresholds] = None,
     trend_cfg: Optional[TrendCalibration] = None,
+    price_band_level: float = 0.8,
+    price_horizon_days: int = 5,
 ) -> pd.DataFrame:
     """En guncel evreni skorla + segment + confidence -> PeerStore'a hazir tablo.
 

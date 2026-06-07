@@ -2195,3 +2195,18 @@ Date,Is_Trading_Day,Session_Type,Note
 2027-05-22,False,closed,Weekend
 2027-05-23,False,closed,Weekend
 2027-05-24,True,full,Regular session
+2027-05-25,True,full,Regular session
+2027-05-26,True,full,Regular session
+2027-05-27,True,full,Regular session
+2027-05-28,True,full,Regular session
+2027-05-29,False,closed,Weekend
+2027-05-30,False,closed,Weekend
+2027-05-31,True,full,Regular session
+2027-06-01,True,full,Regular session
+2027-06-02,True,full,Regular session
+2027-06-03,True,full,Regular session
+2027-06-04,True,full,Regular session
+2027-06-05,False,closed,Weekend
+2027-06-06,False,closed,Weekend
+2027-06-07,True,full,Regular session
+2027-06-08,True,full,Regular session

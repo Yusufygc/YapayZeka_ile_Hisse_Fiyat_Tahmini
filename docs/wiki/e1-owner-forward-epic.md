@@ -2,10 +2,10 @@
 title: E1 Owner-Forward Removal Epic
 type: plan
 status: done
-last_updated: 2026-06-01
+last_updated: 2026-06-04
 owner: llm
 source_count: 9
-branch: refactor/e1-owner-forward-di
+branch: refactor/e1-owner-forward-di (silindi; main'e merge edildi c62b35d)
 ---
 
 # E1 — Owner-Forward Kaldırma Epiği (Tam DI'ya Geçiş)
