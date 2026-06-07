@@ -151,3 +151,13 @@ yeniTasarim/
 pytest_temp/
 .pytest_tmp_codex_lstm_lite/
 
+
+# Ek AI ve Context-Bloat Dosyalarý
+.gemini/
+.cursor/
+.cursorrules
+.cline/
+.aider/
+.aider.*
+*plan.md
+new_plan.md

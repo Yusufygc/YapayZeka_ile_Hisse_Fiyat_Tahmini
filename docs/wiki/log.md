@@ -1,3 +1,14 @@
+## [2026-06-08] Rules | Graphify kaldırıldı, detaylı wiki kuralı eklendi
+
+- `AGENTS.md` ve `RULES.md` içindeki `graphify` referansları ve otomatik graphify güncelleme kuralları tamamen silindi.
+- Yerine, sistem değişikliklerinde pasif kalmadan anında detaylı wiki güncellemesi (`index.md` ve `log.md` dâhil) yapılmasını emreden "Detaylı Wiki Güncelleme ve Kontrol Kuralı" eklendi.
+
+## [2026-06-08] Git Commit | Development branch commit ve graphify temizliği
+
+- Kullanıcının isteği üzerine `development` branch'indeki değişiklikler commit edildi.
+- Commit içeriği: Faz 7b fiyat bandı için `quintile_return_std` eklendi (`src/serving/trend_tendency.py`), `nightly_scoring.py` fonksiyon imzasına fiyat bandı parametreleri eklendi, yeni plan detaylarını içeren `new_plan.md` eklendi ve veriseti/wiki güncellendi.
+- Token maliyetinden dolayı `graphify-out` klasörü tamamen silindi ve artık wiki güncellemesi ile yetiniliyor (otomatik graphify çağrısı atlandı).
+
 ## [2026-06-08] Forward Interval | ensemble bacağı + kalibrasyon owner fix
 
 Interval uçtan uca doğrulandı (GARAN) ve iki boşluk kapatıldı.
