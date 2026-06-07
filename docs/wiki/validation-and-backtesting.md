@@ -433,9 +433,26 @@ interval_calibration.py` içinde:
 - Yorum sınırı: aralık göreli/koşullu fiyat aralığıdır, kesin değer değil;
   dar band + hedefe yakın kapsama = iyi kalibre + bilgili.
 
+### Ensemble forecast interval + kalibrasyon akışı
+
+- **Kalibrasyon kaynağı (kritik akış):** interval_calib sidecar'ı final-holdout
+  artifact yazımında (`_build_interval_calibration`, `evaluation_workflows.py`)
+  walk-forward residual'larından üretilir. Residual'lar `wf_backtest_inputs`'ta
+  (ModelTrainer) tutulur; `evaluate_walk_forward` bunu owner'a (EvaluationManager)
+  stash eder ki FinalHoldout workflow okuyabilsin. Bu stash olmadan kalibrasyon
+  None döner ve sidecar yazılmaz (tek-model forecast'ta p10/p90 boş kalır).
+- **Ensemble bacağı:** ensemble forecast (`combine_member_points`) üye p10/p90'larını
+  ağırlıklı birleştirir (mevcut üyeler üzerinde renormalize); p50 = ensemble bounded
+  close, band p50 etrafında clamp. Karışık yöntemde `interval_method="ensemble"`;
+  hiç üyede interval yoksa no-op. Üye interval'i ancak o üyenin artifact'ında
+  interval_calib sidecar varsa dolar.
+- **Doğrulanmış uçtan uca (GARAN, Ridge Return):** σ=0.0256 (log-getiri),
+  rejim-koşullu (bear 0.0278 / bull 0.0247), conformal q̂=0.0392, 240 residual.
+  Forecast h1 `[125.10, 133.60]` → h5 `[119.30, 138.10]` (√h ile genişler).
+
 Testler: `tests/test_interval_calibration.py` (σ/q̂/band/ACI/validasyon),
-`tests/test_forecast_interval_persist.py` (roll_forward dalı + persistence
-round-trip + coverage + rapor).
+`tests/test_forecast_interval_persist.py` (roll_forward dalı + ensemble kombinasyon +
+persistence round-trip + coverage + rapor).
 
 ## Related Pages
 

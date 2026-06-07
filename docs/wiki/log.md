@@ -1,3 +1,16 @@
+## [2026-06-08] Forward Interval | ensemble bacağı + kalibrasyon owner fix
+
+Interval uçtan uca doğrulandı (GARAN) ve iki boşluk kapatıldı.
+- **Fix (kritik):** `wf_backtest_inputs` ModelTrainer'da; `_build_interval_calibration`
+  FinalHoldout owner'ından (EvaluationManager) okuyordu → boş → interval_calib.json
+  HİÇ yazılmıyordu (sessiz). `evaluate_walk_forward` artık owner'a stash ediyor.
+- **Ensemble interval:** `combine_member_points` üye p10/p90'ını ağırlıklı birleştirir
+  (renormalize, p50 etrafında clamp, karışık→'ensemble', boş→no-op).
+- Doğrulama: GARAN Ridge final-holdout → sidecar (σ=0.0256, rejim-koşullu, q̂=0.0392,
+  240 residual); forecast h1 [125.10,133.60] → h5 [119.30,138.10] (√h).
+- Testler: ensemble kombinasyon 4 birim test; 36 interval/forecast testi yeşil.
+- Wiki: validation-and-backtesting.md (ensemble + kalibrasyon akışı).
+
 ## [2026-06-07] Forward Interval | B2 residual band + C conformal (model-agnostik)
 
 Forward forecast'e **olasılıksal aralık** eklendi (tek-nokta p50 yerine p10/p50/p90,
