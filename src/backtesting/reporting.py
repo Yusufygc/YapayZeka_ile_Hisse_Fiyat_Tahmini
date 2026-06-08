@@ -380,6 +380,9 @@ def plot_equity_curves(
 
     matplotlib yoksa sessizce atlanır (headless-safe). `selected_models` verilirse
     yalnızca o modeller çizilir.
+
+    Buy & Hold çizgisi daima en üste (zorder yüksek), kalın ve kesik çizgi
+    olarak çizilir; diğer çizgilere gömülmez.
     """
     if plt is None:
         print("[WARN] matplotlib yok; backtest equity curve grafigi atlandi.")
@@ -392,14 +395,27 @@ def plot_equity_curves(
         return
 
     plt.figure(figsize=(16, 7))
-    buy_hold_plotted = False
+
+    # Önce model çizgilerini çiz, Buy & Hold en sona (üstte kalır)
+    buy_hold_data = None
     for name, curve in curves.items():
         if curve.empty:
             continue
-        if not buy_hold_plotted and "BuyHold_Equity" in curve.columns:
-            plt.plot(curve["BuyHold_Equity"].to_numpy(), label="Buy & Hold", color="black", linewidth=2.2, alpha=0.85)
-            buy_hold_plotted = True
+        if buy_hold_data is None and "BuyHold_Equity" in curve.columns:
+            buy_hold_data = curve["BuyHold_Equity"].to_numpy()
         plt.plot(curve["Equity"].to_numpy(), label=name, linewidth=1.5, alpha=0.85)
+
+    # Buy & Hold en son, kesik çizgi + yüksek zorder ile üste çiz
+    if buy_hold_data is not None:
+        plt.plot(
+            buy_hold_data,
+            label="Buy & Hold",
+            color="black",
+            linewidth=2.5,
+            linestyle="--",
+            alpha=1.0,
+            zorder=10,
+        )
 
     plt.title(title, fontsize=14, fontweight="bold")
     plt.xlabel("Bar Index")
