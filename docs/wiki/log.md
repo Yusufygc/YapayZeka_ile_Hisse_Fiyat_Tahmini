@@ -1,3 +1,10 @@
+## [2026-06-08] Desktop UI | Aşamalı Gösterim Sekme Düzeni ve QSS Optimizasyonu
+
+- **Progressive Disclosure:** `ModelPanel` (`left_panel/model_panel.py`) sol paneli dikeyde çok uzatan kartlar (Prediction, Signal, Peer, Performance, XAI) `QTabWidget` ile 3 ana sekmeye ("Genel Görünüm", "Model Performansı", "Karar Faktörleri (XAI)") ayrıldı. Yeni analiz sorgularında otomatik olarak 0. sekmenin ("Genel Görünüm") odaklanması sağlandı.
+- **Tipografi ve QSS:** Açık temada `TABLE_ALT_BG` renk tokenı `#F8F9FA` yapılarak QTableView'lerdeki zebra çizgisi kontrastı optimize edildi.
+- **Lokalizasyon:** Tab başlıkları `locale_tr.py` içindeki `L10N` sınıfına eklenerek refactor guard kuralları sağlandı.
+- **Doğrulama:** Arayüz bileşenlerinin (516 adet PyQt) testleri tamamen yeşil olacak şekilde doğrulandı.
+
 ## [2026-06-08] Global Model | Kol-B Pooled Price Band Entegrasyonu
 
 - **Masaüstü ve Backend Entegrasyonu:** Kol-B (pooled global model) için mutlak fiyat tahmini ve olasılıksal bant limitleri (`kolb_price_p50`, `kolb_price_low`, `kolb_price_high`, `kolb_horizon_days`, `kolb_band_level`) `peer_scores` veritabanı tablosuna, API `PeerBlock` şemasına ve PyQt masaüstü arayüzüne (Left Panel `PeerCard` altındaki "Pooled 5g tahmin: ₺X (₺Y–₺Z)" gösterimi) entegre edildi.
