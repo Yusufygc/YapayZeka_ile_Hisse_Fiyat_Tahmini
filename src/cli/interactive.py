@@ -100,14 +100,63 @@ def select_stock() -> str:
     if not stocks:
         raise FileNotFoundError(f"'{DATA_DIR}' dizininde OHLCV hisse CSV dosyasi bulunamadi.")
 
-    _header("ADIM 1 | Hisse Senedi Seçimi")
-    for i, s in enumerate(stocks, 1):
-        print(f"  [{i}] {s}")
+    stock_map = {s.upper(): (s, path) for s, path in zip(stocks, stock_files)}
 
-    choice = _ask("Numara girin", {str(i) for i in range(1, len(stocks) + 1)})
-    selected = stocks[int(choice) - 1]
-    print(f"  ✔ Seçildi: {selected}\n")
-    return stock_files[int(choice) - 1]
+    _header("ADIM 1 | Hisse Senedi Seçimi")
+    print(f"  Toplam {len(stocks)} adet hisse senedi yüklü.")
+    print("  Hisse kodunu direkt yazabilirsiniz (örn: SARKY) veya arama yapabilirsiniz.")
+    print("  Tüm hisseleri listelemek için 'liste' veya 'L' yazın.\n")
+
+    while True:
+        choice = input("  » Hisse kodu, arama kelimesi veya 'liste' girin: ").strip().upper()
+        if not choice:
+            continue
+
+        # 1. Tam hisse kodu eşleşmesi (Doğruluk Kontrolü)
+        if choice in stock_map:
+            selected, path = stock_map[choice]
+            print(f"  ✔ Seçildi: {selected}\n")
+            return path
+
+        # 2. Tümünü listeleme (Alan tasarruflu çoklu sütun düzeni)
+        if choice in ("LİSTE", "LISTE", "L"):
+            print("\n  --- Mevcut Tüm Hisseler ---")
+            for i, s in enumerate(stocks, 1):
+                print(f" {s:<9}", end="" if i % 8 != 0 else "\n")
+            print("\n")
+            continue
+
+        # 3. Arama/Filtreleme
+        matches = [s for s in stocks if choice in s.upper()]
+        if not matches:
+            print(f"  [!] '{choice}' koduyla eşleşen bir hisse veya dosya bulunamadı. Lütfen kontrol edip tekrar deneyin.")
+            continue
+
+        if len(matches) == 1:
+            selected = matches[0]
+            _, path = stock_map[selected.upper()]
+            print(f"  ✔ Seçildi: {selected}\n")
+            return path
+
+        # Birden fazla eşleşme varsa listele ve içinden seçtir
+        print(f"\n  Eşleşen {len(matches)} hisse bulundu:")
+        for i, m in enumerate(matches, 1):
+            print(f"  [{i}] {m}")
+        print("  [0] Yeni Arama Yap")
+        
+        while True:
+            sub_choice = input(f"  » Seçiminiz (1-{len(matches)}) veya 0: ").strip()
+            if sub_choice == "0":
+                break
+            if sub_choice.isdigit():
+                idx = int(sub_choice)
+                if 1 <= idx <= len(matches):
+                    selected = matches[idx - 1]
+                    _, path = stock_map[selected.upper()]
+                    print(f"  ✔ Seçildi: {selected}\n")
+                    return path
+            print(f"  [!] Geçersiz seçim. Lütfen 1 ile {len(matches)} arasında bir sayı girin.")
+
 
 # ─── Adım 2 — Validasyon Modu ────────────────────────────────────────────────
 # Sprint 0 (2026-05-25): single_split kullanici arayuzunden kaldirildi.

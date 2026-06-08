@@ -1,4 +1,26 @@
+## [2026-06-08] Cleanup | Kök Outputs Dizinindeki Geçici POC ve Geliştirme Dosyaları Temizlendi
+
+- **Açıklama:** Geliştirme süreçlerinden kalma ve repoda takip edilmeyen tüm geçici log, csv ve md dosyaları `outputs/` kök dizininden silindi. Hisselerin kendi run/latest çıktı klasörlerine dokunulmadı.
+
+## [2026-06-08] CLI Feature | Etkileşimli Arama ve Doğrulama Mekanizması Eklendi
+
+
+- **Yenilik:** 500'den fazla hisse senedi arasından numara ile seçim yapmanın zorluğunu gidermek amacıyla `src/cli/interactive.py` içindeki `select_stock` fonksiyonu yenilendi.
+- **Detaylar:**
+  - Kullanıcılar artık hisse kodunu direkt yazıp (örn: `SARKY`, `THYAO`) case-insensitive olarak tam doğrulukla aratabilir.
+  - Arama kelimesi girilerek (örn: `ARK`) eşleşen alt kümeler listelenebilir ve numaralandırılmış listeden hızlıca seçim yapılabilir.
+  - Geniş listeyi sığdırmak için `liste` veya `L` komutuyla tüm hisseler dikey yerine yer tasarruflu 8 kolonlu bir ızgara (grid) düzeninde gösterilebilir.
+- **Doğrulama:** Değişiklikler sonrası sözdizimi derlemesi ve `test_interactive_cli_models.py` testleri başarıyla doğrulandı.
+
+## [2026-06-08] Bug Fix | Tarih Ayrıştırma (Date Parsing) Hatası Giderildi
+
+
+- **Sorun:** BIST stock CSV dosyaları YYYY-MM-DD formatında (örn. `2026-06-02`) olduğunda, `_parse_last_date` fonksiyonunun pandas `pd.to_datetime`'a `dayfirst=True` geçmesi nedeniyle MM (ay) ve DD (gün) değerleri (ikisi de <= 12 ise) yanlış ayrıştırılıyor ve gelecekte bir tarih (örn. `2026-12-05`) üretiyordu. Bu durum, veri seti güncelliğini denetleyen `DataUpdater.check_and_update` fonksiyonunun veri setini güncel sanmasına ve sessizce güncellemeleri atlamasına yol açıyordu.
+- **Çözüm:** `_parse_last_date` fonksiyonuna akıllı format algılama eklendi: Tarih dizesinin ilk bileşeni 4 haneli ise (yıl ilk geliyorsa) `dayfirst=False` parametresi ile, aksi takdirde geriye dönük uyumluluk için `dayfirst=True` ile ayrıştırılması sağlandı.
+- **Doğrulama:** `SARKY.csv` dosyası üzerinde yapılan testlerde yfinance üzerinden eksik olan 3 işlem gününün (3, 4 ve 5 Haziran 2026) başarıyla çekildiği ve CSV dosyasına eklendiği doğrulandı.
+
 ## [2026-06-08] Desktop UI | Teknik Terimlerin Sadeleştirilmesi ve Türkçe Açıklamalar
+
 
 - **Metrik ve Terim Sadeleştirme:** `PerformanceCard` altındaki Sharpe ("Kazanç Güvenilirliği"), RMSE ("Ortalama Sapma (Geniş)"), MAE ("Net Fark Hata Payı") gibi teknik göstergeler ve `PredictionCard` altındaki aralık yöntemleri halk diline uygun Türkçe terimlerle değiştirildi.
 - **Akran ve Sektör Çevirileri:** `PeerCard` içindeki Q1-Q5 quintile değerleri "Çok Düşük/Orta/Çok Yüksek" segmentlerine dönüştürüldü ve İngilizce sektör adları (örn. "Basic Materials") dinamik olarak Türkçe'ye çevrildi.

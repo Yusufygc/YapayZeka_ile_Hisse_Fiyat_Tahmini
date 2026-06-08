@@ -26,6 +26,10 @@ latest dates, rows added, and error text. It also accepts a `MarketDataProvider`
 interface, with `YFinanceProvider` as the default, so refresh behavior is
 testable without direct network calls.
 
+### Date Parsing Bug & Fix (2026-06-08)
+When target BIST stock CSV files are in YYYY-MM-DD format (e.g., `2026-06-02`), passing `dayfirst=True` to `pd.to_datetime` causes pandas to parse month and day incorrectly if both are $\le 12$ (e.g., `2026-05-12` becomes `2026-12-05`). This resulted in incorrect future dates, negative `diff_days` calculation, and silent skipping of data updates during pipeline execution. The fix introduces format-detection logic in `_parse_last_date`: if the date string starts with a 4-digit year, `dayfirst` is set to `False`, allowing correct date parsing and data updates.
+
+
 **Universe-wide nightly refresh (E2 Faz 8):** there is no single
 `data_updater` CLI; the E2 nightly orchestrator `tools/e2_nightly_pipeline.py`
 (`refresh_universe`) loops every `data/*.csv` (excluding `bist_universe` /

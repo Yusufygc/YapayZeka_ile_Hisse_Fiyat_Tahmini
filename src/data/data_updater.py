@@ -204,9 +204,24 @@ def _find_column(columns: Any, candidates: list[str]) -> str | None:
 
 
 def _parse_last_date(values: pd.Series) -> pd.Timestamp:
-    parsed = pd.to_datetime(values, errors="coerce", dayfirst=True)
+    vals_clean = values.dropna()
+    if vals_clean.empty:
+        return pd.NaT
+    sample = str(vals_clean.iloc[0]).strip()
+    is_year_first = False
+    for separator in ["-", "/", "."]:
+        if separator in sample:
+            parts = sample.split(separator)
+            if parts and len(parts[0]) == 4:
+                is_year_first = True
+                break
+    if is_year_first:
+        parsed = pd.to_datetime(vals_clean, errors="coerce", dayfirst=False)
+    else:
+        parsed = pd.to_datetime(vals_clean, errors="coerce", dayfirst=True)
     parsed = parsed.dropna()
     return pd.NaT if parsed.empty else pd.Timestamp(parsed.max())
+
 
 
 def _normalize_yfinance_frame(frame: pd.DataFrame) -> pd.DataFrame:
