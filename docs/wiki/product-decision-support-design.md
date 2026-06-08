@@ -132,6 +132,24 @@ Served via the nightly batch (no per-query training); see
 [Analysis API Contract](analysis-api-contract.md) and
 [E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md).
 
+## Terminology Simplification for Non-Technical Users (2026-06-08)
+
+To ensure that the analytical decision-support tool remains accessible to laypersons with no statistical or quantitative background, a sweeping simplification of UI-facing terminology has been implemented across the AI left panel cards:
+
+- **AI Success Status (`PerformanceCard`):** Technical metrics have been translated into plain descriptive Turkish:
+  - *Composite Score* -> "Genel Başarı Puanı"
+  - *Directional Accuracy* -> "Yönü Doğru Tahmin"
+  - *Hit Rate* -> "Fiyat Yakınlığı"
+  - *Sharpe Ratio* -> "Kazanç Güvenilirliği" (risk-adjusted return simplified)
+  - *RMSE* -> "Ortalama Sapma (Geniş)" (punishes large errors)
+  - *MAE* -> "Net Fark Hata Payı" (average raw difference)
+  - *Stability Score* -> "Performans Tutarlılığı"
+- **AI Prediction Card (`PredictionCard`):** Interval estimation methods simplified:
+  - *residual_b2* -> "Geçmiş Sapmalara Göre (%80 Olasılık)"
+  - *conformal* -> "Hata Analizine Göre (%90 Olasılık)"
+- **Sector Peer Position (`PeerCard`):** Segment quantiles (Q1-Q5) dynamically mapped to descriptive labels ("Çok Düşük", "Düşük", "Orta", "Yüksek", "Çok Yüksek") and sector names translated dynamically (e.g., "Basic Materials" -> "Hammadde / Temel Malzemeler").
+- **AI Decision Drivers (`XAICard`):** Cleaned up SHAP attribution detail cards to hide raw log-return/probability contribution floats (e.g. `katkı: +0.02125` / `yöntem: sequence`) and show only the clean natural language reason, mapping group/method categories to clear concepts.
+
 ## Faz 3 (Research Phase)
 
 - Regime-based model performance tracking.

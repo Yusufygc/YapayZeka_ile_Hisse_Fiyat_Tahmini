@@ -1,3 +1,11 @@
+## [2026-06-08] Desktop UI | Teknik Terimlerin Sadeleştirilmesi ve Türkçe Açıklamalar
+
+- **Metrik ve Terim Sadeleştirme:** `PerformanceCard` altındaki Sharpe ("Kazanç Güvenilirliği"), RMSE ("Ortalama Sapma (Geniş)"), MAE ("Net Fark Hata Payı") gibi teknik göstergeler ve `PredictionCard` altındaki aralık yöntemleri halk diline uygun Türkçe terimlerle değiştirildi.
+- **Akran ve Sektör Çevirileri:** `PeerCard` içindeki Q1-Q5 quintile değerleri "Çok Düşük/Orta/Çok Yüksek" segmentlerine dönüştürüldü ve İngilizce sektör adları (örn. "Basic Materials") dinamik olarak Türkçe'ye çevrildi.
+- **Karar Faktörleri (XAI) Temizliği:** `XAICard` altındaki gerekçelerde yer alan `yöntem: ... · katkı: ...` gibi ham istatistiksel detaylar gizlenerek yalnızca temiz gerekçe açıklaması gösterildi.
+- **Lokalizasyon ve AST Koruma:** Yeni eklenen tüm sade metinler `locale_tr.py` üzerinden lokalize edilerek PyQt refactor guard kuralları eksiksiz korundu.
+- **Doğrulama:** Tüm PyQt testleri (516 adet) ve AST denetim testleri yeşil olarak doğrulandı.
+
 ## [2026-06-08] Desktop UI | Aşamalı Gösterim Sekme Düzeni ve QSS Optimizasyonu
 
 - **Progressive Disclosure:** `ModelPanel` (`left_panel/model_panel.py`) sol paneli dikeyde çok uzatan kartlar (Prediction, Signal, Peer, Performance, XAI) `QTabWidget` ile 3 ana sekmeye ("Genel Görünüm", "Model Performansı", "Karar Faktörleri (XAI)") ayrıldı. Yeni analiz sorgularında otomatik olarak 0. sekmenin ("Genel Görünüm") odaklanması sağlandı.
