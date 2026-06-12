@@ -138,8 +138,11 @@ class DataIngestionService(_OwnerBackedService):
     @staticmethod
     def _has_macro_features(feature_names) -> bool:
         """feature_names icinde en az bir makro ozellik var mi? (cache self-heal icin)."""
-        macro_names = set(MacroPipeline.macro_feature_names(include_rates=True))
-        return any(name in macro_names for name in (feature_names or []))
+        if not feature_names:
+            return False
+        # 'Rate_Level' is the central interest rate feature; if it is missing,
+        # the macro cache is considered degraded/poisoned.
+        return "Rate_Level" in feature_names
 
     def _print_ingestion_summary(self, macro_df) -> None:
         """Veri boyutu, teknik/makro özellik sayıları, kurumsal aksiyon, pruning

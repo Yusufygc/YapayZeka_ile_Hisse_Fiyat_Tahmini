@@ -1,3 +1,65 @@
+## [2026-06-12] Audit | XAI kapsamı ve iyileştirme planı kaydedildi
+
+- Kol-A `XAIExplainer`, XAI stratejileri, ürün özeti, report writer, AttentionLSTM v2
+  attention export'u, Kol-B peer XAI, Analysis API kontratı ve ilgili testler
+  kaynak kod üzerinden incelendi.
+- Yeni `docs/wiki/xai-audit-2026-06-12.md` sayfası oluşturuldu ve
+  `docs/wiki/index.md` navigasyonuna eklendi.
+- En kritik bulgu: production varsayılan validation modu walk-forward olmasına
+  rağmen walk-forward XAI henüz gerçek fold-level feature attribution üretmiyor;
+  rule-based özet ve sinyal/trade gerekçeleriyle sınırlı kalıyor.
+- Öncelikli plan: XAI manifest/API kontratı, walk-forward attribution,
+  sequence/attention ayrımı, Kol-B ensemble-level peer XAI ve feature dictionary
+  coverage kalite kapıları.
+
+## [2026-06-12] Audit | Kapsamlı refactor ve quant mimari analizi kaydedildi
+
+- Kod, test ve wiki kaynakları üzerinden leakage, model mimarisi, yazılım mimarisi,
+  bellek/performance ve evaluation/serving uyumluluğu incelendi.
+- Yeni `docs/wiki/refactor-analysis-2026-06-12.md` sayfası oluşturuldu; ana
+  bulgular P0-P4 önceliklerinde kaydedildi.
+- En kritik bulgu: default `target_horizon=1` güvenli kalırken `h > 1` Kol-A
+  yolunda tarih/backtest/forecast hizalaması henüz production-ready değildir.
+- `docs/wiki/index.md` yeni analiz sayfasına bağlandı.
+
+## [2026-06-11] Bug Fix | Toplu Model Eğitimi (Batch Runner) Unicode Karakter Hatası Giderildi
+
+- **Sorun:** Batch CLI (`src/cli/batch.py`) çalıştırıldığında, konsol varsayılan kodlaması (Türkçe Windows'ta CP1254) ASCII dışı unicode karakterleri (`✓` ve `✗`) desteklemediği için `UnicodeEncodeError` hatası fırlatıyor ve tüm batch işleminin sonlanmasına yol açıyordu. Bu durum model eğitimlerinin arka planda tamamlanmasına rağmen özet raporların (`batch_summary_*.csv`) yazılmasını engelliyordu.
+- **Çözüm:** `batch.py` içindeki tüm `✓` ve `✗` sembolleri ASCII uyumlu `[OK]`, `[ERR]` ve `Var` / `Yok` metinleriyle değiştirildi.
+- **Sonuç:** Konsol kodlama hatası giderildi, batch çalıştırma güvenli hale getirildi.
+
+## [2026-06-11] Bug Fix | GARAN Tahmin Hatası ve Önbellek Zehirlenmesi (Self-Healing Cache Eviction) Giderildi
+
+- **Sorun:** `GARAN` sorgusu atıldığında veri tabanında model olmasına rağmen tahmin dönmüyordu (`no_forecast` / `failed` refresh job). Bunun nedeni, faiz/enflasyon verilerinin EVDS otomatik çekim hatası sırasında diskteki önbelleğe (`data/feature_cache`) makrosuz (degraded) olarak yazılması ve sonraki tahmin isteklerinde bu zehirli/eksik cache'in okunmasıydı. Model makro özellikleri (`Rate_Level`, `Rate_Change`, `Real_Rate`) beklerken eksik veriyle karşılaştığı için `ForecastArtifactError` fırlatıyordu.
+- **Çözüm:** `src/pipeline/data_services.py` → `_engineer_features_cached()` fonksiyonuna cache self-healing mantığı entegre edildi. Eğer makro veriler istendiği halde diskteki cache'te politika faizi (`Rate_Level`) kolonu bulunamazsa, bu zehirli önbellek otomatik olarak silinip (`_cache._evict()`) veri baştan üretilmektedir.
+- **Sonuç:** Bozuk cache temizlendikten sonra tahmin başarıyla üretilmiştir. API'nin ve kullanıcı arayüzünün bu değişikliği alabilmesi için FastAPI (uvicorn) sunucusunun restart edilmesi gerekmektedir.
+
+## [2026-06-11] Bug Fix | Masaüstü Uygulaması Zaman Aşımı (ReadTimeout) Sorunu Giderildi
+
+- **Sorun:** Masaüstü uygulamasından (veya API istemcilerinden) eksik/eski tahminli bir hisse sorgulandığında, `AnalysisService` arka planda yeni tahmin üretilmesini beklerken varsayılan olarak 90 saniye boyunca senkronize şekilde bloklanıyordu. Masaüstü uygulamasının kendi istek zaman aşımı 15 saniye olduğu için bu durum `ReadTimeout` hatasına ve uygulamanın çökmesine yol açıyordu.
+- **Çözüm:** `src/api/services/analysis_service.py` içindeki varsayılan senkron bekleme süresi (`refresh_wait_timeout_seconds` varsayılan değeri) 90.0 saniyeden 10.0 saniyeye düşürüldü. Ayrıca bu değer `API_REFRESH_WAIT_TIMEOUT` ortam değişkeniyle dinamik olarak override edilebilir hale getirildi.
+- **Sonuç:** Tahmin üretimi 10 saniyeyi aşarsa API isteği artık zaman aşımına uğramak yerine HTTP 200 ile `refresh_status="running"` ve `analysis_status="no_forecast"` şeklinde temiz bir yanıt dönecek, masaüstü uygulaması çökmeyecektir. `test_analysis_endpoint.py` testleri başarıyla doğrulandı.
+
+## [2026-06-11] Ingest | Faiz Oranı Otomatik Alınamadığı İçin Manuel Fallback Oluşturuldu
+
+- **Açıklama:** TCMB EVDS API anahtarının (`TCMB_EVDS_API_KEY` ortam değişkeni) tanımlı olmadığı ortamlarda `MacroPipeline` faiz verisini otomatik çekemediğinden `INTEREST_RATE.csv` dosyası oluşmuyordu. Bu durum, risk-free ve faiz bazlı makro özelliklerin hesaplanamamasına yol açıyordu.
+- **Çözüm:** `data/macro/INTEREST_RATE.csv` dosyası manuel olarak oluşturuldu ve 2020-01-01 ile 2026-06-01 tarihleri arasındaki TCMB politika faizi geçmişi (yüzdelik formatta) dosyaya girildi.
+- **Sonuç:** `test_smoke`, `test_risk_free_fail_loud` ve `test_macro_cache_schema` testleri başarıyla doğrulandı.
+
+## [2026-06-08] Bug Fix | Equity Grafiğinde Buy & Hold Çizgisi Görünmezlik Sorunu Giderildi
+
+- **Sorun:** `src/backtesting/reporting.py` → `plot_equity_curves()` fonksiyonunda Buy & Hold çizgisi, Naive Zero Return (≈1.0 sabit) ile aynı bölgede üst üste düştüğünden siyah çizgi görünmez hale geliyordu. Ayrıca ilk modelin döngüsünde çizildiği için diğer model çizgilerinin altında kalıyordu.
+- **Çözüm:** B&H çizgisi artık tüm model çizgileri çizildikten **sonra** (en üste) çiziliyor; `linewidth=2.5`, `linestyle='--'` (kesik çizgi), `zorder=10`, `alpha=1.0` ile net biçimde ayırt ediliyor.
+- **Etki:** ERBOS, EREGL, ASELS, FROTO için tüm WF ve Final Holdout equity PNG'leri yeniden üretildi.
+- **Commit:** `6eb5f93`
+
+## [2026-06-08] Bug Fix | Uvicorn Sunucu Yeniden Başlatıldı ve XAI Uyuşmazlığı Giderildi
+
+
+- **Sorun:** Model XAI raporunda negatif veya düşüş yönünde etken bulunmadığında, `product_summary.py` dosyasındaki eski mantık sebebiyle pozitif faktörler yönü "negative" (düşüşe neden olan) olarak işaretlenip ters sırada negatif layout'a ekleniyordu. Bu durum, arayüzde (özellikle TTKOM hissesinde) aynı 3 faktörün hem yükselişi destekleyen hem de düşüşe neden olan faktörler olarak mükerrer görünmesine yol açıyordu. Bu mantık hatası daha önce düzeltilmiş olmasına rağmen, çalışan FastAPI uvicorn sunucusu Windows ortamında değişikliği belleğe yüklemediği için uyuşmazlık devam ediyordu.
+- **Çözüm:** Port 8000 üzerinde uvicorn tarafından çalıştırılan FastAPI backend sunucusu `taskkill` komutu ile durduruldu ve güncel `product_summary.py` koduyla (`--reload` flag'i aktif edilerek) yeniden başlatıldı.
+- **Doğrulama:** API üzerinden `/analysis/TTKOM` sorgulandığında `top_negative_reasons` alanının başarıyla boş (`[]`) geldiği ve yön uyuşmazlığının (hem API hem de PyQt arayüz tarafında) tamamen giderildiği doğrulandı.
+
 ## [2026-06-08] Cleanup | Kök Outputs Dizinindeki Geçici POC ve Geliştirme Dosyaları Temizlendi
 
 - **Açıklama:** Geliştirme süreçlerinden kalma ve repoda takip edilmeyen tüm geçici log, csv ve md dosyaları `outputs/` kök dizininden silindi. Hisselerin kendi run/latest çıktı klasörlerine dokunulmadı.

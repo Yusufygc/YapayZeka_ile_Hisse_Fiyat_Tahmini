@@ -245,6 +245,10 @@ Feature generation is split across:
 - `src/features/feature_cache.py`: cache by data/config key.
 - `src/features/sector_mapping.py`: dynamic stock-to-sector-index mapping from `data/bist_universe.csv`.
 
+### Feature Caching and Self-Healing Cache Eviction
+Feature engineering caching uses `FeatureCache` (a disk-based cache under `data/feature_cache`) to avoid redundant preprocessing. 
+To prevent transient data-gathering failures (such as EVDS API errors) from poisoning the cache with macro-less (degraded) datasets when `use_macro=True` is requested, `DataIngestionService._engineer_features_cached` implements a self-healing eviction check. If macro features are expected but the cached feature names lack the central policy interest rate feature (`Rate_Level`), the cache entry is considered degraded, gets automatically evicted via `_cache._evict()`, and the features are regenerated.
+
 The project favors stationary or normalized features:
 
 - Relative moving-average features instead of raw moving-average price levels.

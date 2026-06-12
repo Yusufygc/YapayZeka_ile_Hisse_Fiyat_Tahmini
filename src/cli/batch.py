@@ -370,7 +370,7 @@ def _execute_batch(worker_args: List[Dict[str, Any]], workers: int) -> List[Dict
             print(f"\n[Batch] {wa['symbol']} işleniyor...")
             r = _run_single_stock(wa)
             results.append(r)
-            status_icon = "✓" if r["status"] == "ok" else "✗"
+            status_icon = "[OK] " if r["status"] == "ok" else "[ERR]"
             print(f"  {status_icon} {wa['symbol']:12s}  {r['status']:10s}  {r['duration_sec']:.0f}s")
     else:
         # Paralel mod
@@ -393,7 +393,7 @@ def _execute_batch(worker_args: List[Dict[str, Any]], workers: int) -> List[Dict
                         "metrics": {},
                     }
                 results.append(r)
-                status_icon = "✓" if r["status"] == "ok" else "✗"
+                status_icon = "[OK] " if r["status"] == "ok" else "[ERR]"
                 print(f"  {status_icon} {sym:12s}  {r['status']:10s}  {r['duration_sec']:.0f}s")
     return results
 
@@ -438,7 +438,7 @@ def main() -> None:
         print("[DRY-RUN] Çalıştırılacak hisseler:")
         for sym in symbols:
             csv_path = os.path.join(args.data_dir, f"{sym}.csv")
-            exists = "✓" if os.path.exists(csv_path) else "✗ (dosya yok)"
+            exists = "Var" if os.path.exists(csv_path) else "Yok (dosya yok)"
             print(f"  {sym:12s}  {csv_path}  {exists}")
         return
 

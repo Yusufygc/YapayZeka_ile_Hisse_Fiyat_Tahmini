@@ -151,7 +151,10 @@ def _xai_dir_from_model_path(model_path: Optional[str]) -> Optional[str]:
 
 def _read_csv_table(table_path: str) -> pd.DataFrame:
     attempts = (
-        {"sep": None, "engine": "python"},
+        {"sep": ";", "encoding": "utf-8-sig"},
+        {"sep": ";", "encoding": "utf-8"},
+        {"sep": None, "engine": "python", "encoding": "utf-8-sig"},
+        {"sep": None, "engine": "python", "encoding": "utf-8"},
         {"sep": ";"},
         {},
     )
@@ -159,7 +162,8 @@ def _read_csv_table(table_path: str) -> pd.DataFrame:
     for kwargs in attempts:
         try:
             df = pd.read_csv(table_path, **kwargs)
-            if _looks_like_misparsed_semicolon_csv(df):
+            sep = kwargs.get("sep")
+            if _looks_like_misparsed_csv(df, sep):
                 continue
             return _normalize_columns(df)
         except Exception as exc:
@@ -169,8 +173,14 @@ def _read_csv_table(table_path: str) -> pd.DataFrame:
     return pd.read_csv(table_path)
 
 
-def _looks_like_misparsed_semicolon_csv(df: pd.DataFrame) -> bool:
-    return len(df.columns) == 1 and ";" in str(df.columns[0])
+def _looks_like_misparsed_csv(df: pd.DataFrame, sep: str | None) -> bool:
+    if len(df.columns) == 1:
+        col = str(df.columns[0])
+        if ";" in col:
+            return True
+        if sep == ";" and "," in col:
+            return True
+    return False
 
 
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -287,8 +297,11 @@ def _summary_from_feature_frame(
     else:
         direction_text = pd.Series([""] * len(work), index=work.index)
 
-    positive_direction = direction_text.isin({"positive", "up", "buy", "hold", "long"})
-    negative_direction = direction_text.isin({"negative", "down", "sell", "exit", "short"})
+    # Hem İngilizce hem Türkçe yön belirteçlerini destekle, kodlama hatalarına toleranslı ol
+    positive_words = {"positive", "up", "buy", "hold", "long", "yukarı", "yukari"}
+    negative_words = {"negative", "down", "sell", "exit", "short", "aşağı", "asagi"}
+    positive_direction = direction_text.apply(lambda val: any(w in str(val) for w in positive_words) or "yukar" in str(val))
+    negative_direction = direction_text.apply(lambda val: any(w in str(val) for w in negative_words) or "asa" in str(val))
     has_direction_signal = bool((positive_direction | negative_direction).any())
     has_contribution_signal = bool(work["_xai_contribution"].notna().any())
 
@@ -327,12 +340,20 @@ def _summary_from_feature_frame(
 
     positives = work[positive_mask].head(top_k)
     negatives = work[negative_mask].head(top_k)
-    if negatives.empty and not positives.empty:
-        top_positive = [_factor(row, "positive") for _, row in positives.head(top_k).iterrows()]
-        top_negative = [_factor(row, "negative") for _, row in work.tail(top_k).iloc[::-1].iterrows()]
-    else:
+    
+    # Katkı veya yön bilgisi (contribution/direction) varsa pozitif/negatif ayrımı nettir.
+    # Bu durumda boş yönler için diğer yönün elemanlarını tersten ekleyip (fallback) kullanıcıyı yanıltma.
+    if has_contribution_signal or has_direction_signal:
         top_positive = [_factor(row, "positive") for _, row in positives.iterrows()]
         top_negative = [_factor(row, "negative") for _, row in negatives.iterrows()]
+    else:
+        # Sadece önem derecesi varsa (yön bilgisi yoksa), en yüksekleri pozitif, en düşükleri negatif olarak göster.
+        if negatives.empty and not positives.empty:
+            top_positive = [_factor(row, "positive") for _, row in positives.head(top_k).iterrows()]
+            top_negative = [_factor(row, "negative") for _, row in work.tail(top_k).iloc[::-1].iterrows()]
+        else:
+            top_positive = [_factor(row, "positive") for _, row in positives.iterrows()]
+            top_negative = [_factor(row, "negative") for _, row in negatives.iterrows()]
 
     method = "SHAP TreeExplainer" if model_name in _TREE_MODELS else "Feature Importance"
     return XaiProductSummary(

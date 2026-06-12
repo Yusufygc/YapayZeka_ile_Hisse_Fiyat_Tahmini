@@ -68,7 +68,16 @@ class AnalysisService:
             else bool(enable_background_refresh)
         )
         if refresh_wait_timeout_seconds is None:
-            self._refresh_wait_timeout_seconds = 90.0 if self._enable_background_refresh else 0.0
+            # Desktop uygulamalarında zaman aşımını (örn: 15s) engellemek için varsayılanı 10s yapıyoruz.
+            # Ortam değişkeni ile override edilebilir.
+            env_val = os.getenv("API_REFRESH_WAIT_TIMEOUT")
+            if env_val is not None:
+                try:
+                    self._refresh_wait_timeout_seconds = float(env_val)
+                except ValueError:
+                    self._refresh_wait_timeout_seconds = 10.0 if self._enable_background_refresh else 0.0
+            else:
+                self._refresh_wait_timeout_seconds = 10.0 if self._enable_background_refresh else 0.0
         else:
             self._refresh_wait_timeout_seconds = float(refresh_wait_timeout_seconds)
 

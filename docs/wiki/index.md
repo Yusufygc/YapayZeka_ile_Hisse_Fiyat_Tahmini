@@ -2,7 +2,7 @@
 title: Wiki Index
 type: index
 status: active
-last_updated: 2026-06-04
+last_updated: 2026-06-12
 owner: llm
 ---
 
@@ -32,6 +32,8 @@ linked pages below.
 - [Code Quality and Refactoring](code-quality-and-refactoring.md): Code thresholds, file/class size limits, input validation guidelines, error handling, and datetime policy.
 - [Code Quality Audit (2026-05-31)](code-quality-audit.md): God-object/SOLID/DRY findings, bloated file/function metrics, and the phased docstring/comment plan.
 - [Staged Refactor Plan (2026-05-31)](refactor-plan.md): Per-stage god-object/complexity/SOLID-KISS-DRY findings mapped to the 8 review stages, behavior-preserving refactor actions, cross-cutting epics (owner-forward removal, DRY, god constructors), and risk-tiered execution order.
+- [Refactor Analysis 2026-06-12](refactor-analysis-2026-06-12.md): Source-grounded quant/architecture audit after E1/E2; horizon-aware alignment, pooled serving calibration, remaining owner-state workflow, backtest, and memory priorities.
+- [XAI Audit 2026-06-12](xai-audit-2026-06-12.md): Source-grounded explainability audit covering Kol-A XAI, walk-forward attribution, sequence/attention diagnostics, Kol-B peer XAI, API contract gaps, and phased improvement plan.
 - [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md): Tier 3'un kalan kismi — owner-forward magic'i tamamen kaldirip servisleri `EvaluationContext`/`EvaluationState` DI'ya cevirme; karakterizasyon testi stratejisi + 7 fazli plan. Dal: `refactor/e1-owner-forward-di`.
 - [E2 Faz 2 Pooled CV Design](e2-faz2-pooled-cv-design.md): Pooled panel loader + tarih-bazli purged coklu-pencere CV detayli tasarimi; leakage taksonomisi (capraz-sembol / horizon / feature), modul plani (`src/data/pooled_loader.py`, `src/validation/pooled_cv.py`), test plani, acceptance, acik sorular.
 - [E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md): Egitim tarafi redesign — tek-hisse overfit'i gidermek icin ~592 hisseyi havuzlayan tek kosullu global model; per-symbol urun/`GET /analysis/{symbol}` kontrati korunur; grup-purged coklu-pencere OOS, cold-start, opsiyonel per-symbol fine-tune. Dal: `feat/e2-pooled-global-model`.
