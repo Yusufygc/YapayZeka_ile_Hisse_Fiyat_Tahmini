@@ -21,6 +21,7 @@ from src.api.schemas.analysis import (
     PerformanceBlock,
     XaiBlock,
     XaiFactorItem,
+    XaiGroupSummary,
 )
 from src.api.services.analysis_freshness import compute_freshness
 from src.api.services.data_quality_monitor import compute_psi_30d
@@ -326,7 +327,6 @@ def _build_forecast_response(
     xai_block = _build_xai_block(xai_summary)
     status = _resolve_status(
         freshness=freshness.status,
-        xai_available=xai_summary.available,
         confidence_label=conf_result.label,
     )
 
@@ -646,10 +646,13 @@ def _json_list(raw: Any) -> list:
 
 def _build_xai_block(summary) -> XaiBlock:
     if not summary.available:
-        return XaiBlock(available=False, caveat=summary.caveat)
+        return XaiBlock(available=False, status=summary.status, caveat=summary.caveat)
     return XaiBlock(
         available=True,
+        status=summary.status,
         method=summary.method,
+        method_detail=summary.method_detail,
+        approximate_ratio=summary.approximate_ratio,
         top_positive_reasons=[
             XaiFactorItem(
                 feature_name=f.feature_name,
@@ -678,8 +681,27 @@ def _build_xai_block(summary) -> XaiBlock:
             )
             for f in summary.top_negative_reasons
         ],
+        group_summaries=[_xai_group_summary(item) for item in summary.group_summaries],
+        feature_stability_top=summary.feature_stability_top,
+        generated_at=summary.generated_at,
+        run_id=summary.run_id,
+        background_scope=summary.background_scope,
+        dictionary_coverage=summary.dictionary_coverage,
         model_family_caveat=summary.model_family_caveat,
         caveat=summary.caveat,
+    )
+
+
+def _xai_group_summary(item: Any) -> XaiGroupSummary:
+    return XaiGroupSummary(
+        feature_group=str(item.feature_group),
+        group_label=str(item.group_label),
+        total_importance=float(item.total_importance),
+        net_contribution=float(item.net_contribution),
+        direction=str(item.direction),
+        top_features=[str(feature) for feature in item.top_features],
+        reason=str(item.reason),
+        approximate_ratio=float(item.approximate_ratio),
     )
 
 
@@ -689,11 +711,9 @@ def _normalize_trend_label(value: Any) -> Optional[str]:
     return mapping.get(raw, raw or None)
 
 
-def _resolve_status(*, freshness: str, xai_available: bool, confidence_label: str) -> str:
+def _resolve_status(*, freshness: str, confidence_label: str) -> str:
     if freshness == "stale_data":
         return "stale_data"
-    if not xai_available:
-        return "xai_unavailable"
     if confidence_label == "low":
         return "low_confidence"
     return "ok"

@@ -2,7 +2,7 @@
 title: Testing and Quality
 type: concept
 status: active
-last_updated: 2026-05-24
+last_updated: 2026-06-14
 owner: llm
 source_count: 6
 ---
@@ -51,6 +51,7 @@ python -m pytest tests/test_forecasting.py -v
 | `test_stock_model_db_repositories.py` | StockModelDB repository composition, schema idempotency, forecast idempotency/resolution |
 | `test_forecast_workflows.py` | ForecastRunner workflow composition and forecast helper characterization |
 | `test_xai_strategies.py` | SHAP/LIME strategy behavior and fallback coverage |
+| `test_xai_product_summary.py` / `test_xai_fold_stability.py` | XAI manifest/product summary metadata and fold-stability coverage |
 | `test_analysis_endpoint.py` | Analysis API status, refresh-job, forecast-source, and CORS contract coverage |
 | `test_operational_hardening.py` | Data updater failures, analysis refresh failures, DB backup-reset, and backtest metric backfill |
 | `test_pooled_oos.py` / `test_pooled_cv.py` | E2 per-symbol OOS aggregation, daily cross-sectional IC/ICIR, group-purged CV leakage |
@@ -61,7 +62,29 @@ python -m pytest tests/test_forecasting.py -v
 | `test_trend_tendency.py` | Trend label bands, quintile calibration monotonicity, `belirsiz` gate |
 | `test_nightly_pipeline.py` | E2 Faz 8 orchestrator: refresh aggregation, XIST gate + weekday fallback, `gate_target_date`, main skip/run flows |
 
-Full suite currently **670 passed** (run with `dl_env` python).
+Full suite currently **760 passed, 19 warnings** (run with `dl_env` python and
+`--basetemp=.pytest_tmp_full_xai_group_details`).
+
+The 2026-06-14 XAI audit focused gate covers manifest/background handling,
+walk-forward fold attribution, sequence heatmaps, Analysis API `xai.status`,
+and Kol-B peer XAI observability:
+
+```powershell
+$env:PYTHONDONTWRITEBYTECODE='1'
+& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_xai_strategies.py tests\test_xai_product_summary.py tests\test_xai_fold_stability.py tests\test_xai_routing.py tests\test_analysis_endpoint.py tests\test_peer_xai.py tests\test_peer_scoring.py tests\test_peer_store.py tests\test_peer_service.py -q --basetemp=.pytest_tmp_xai_audit
+```
+
+Latest focused result: **82 passed** in `dl_env`.
+
+The macro/indicator XAI group-summary extension adds a narrower product/API
+gate:
+
+```powershell
+$env:PYTHONDONTWRITEBYTECODE='1'
+& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_xai_product_summary.py tests\test_analysis_endpoint.py tests\test_peer_xai.py tests\test_peer_service.py tests\test_phase5_data_quality.py -q --basetemp=.pytest_tmp_xai_group_details
+```
+
+Latest macro/indicator XAI result: **59 passed** in `dl_env`.
 
 ## Static Tooling
 

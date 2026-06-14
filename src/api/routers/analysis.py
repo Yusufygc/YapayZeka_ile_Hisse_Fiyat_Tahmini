@@ -46,7 +46,7 @@ def get_analysis(symbol: str) -> AnalysisResponse:
     - ``no_model``: Hisse için kayıtlı eligible model yok.
     - ``no_forecast``: Model var ama forecast üretilmemiş.
     - ``low_confidence``: Sonuç var ama güven etiketi ``low``.
-    - ``xai_unavailable``: Forecast var ama XAI çıktısı yok.
+    - XAI yoklugu ``analysis_status`` degil, ``xai.status`` ile raporlanir.
     - ``error``: Beklenmeyen hata.
     """
     try:

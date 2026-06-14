@@ -246,6 +246,7 @@ class _MetricsReporterMixin:
                 wf_y_true=np.asarray(wf_y_true) if wf_y_true is not None else np.asarray([]),
                 wf_backtest_inputs=wf_backtest_inputs or {},
                 backtest_results=self.state.latest_backtest_results.get("wf", {}),
+                wf_xai_records=getattr(self.state, "wf_xai_records", {}),
             )
             self._write_xai_reports(payload, suffix="wf")
             return payload

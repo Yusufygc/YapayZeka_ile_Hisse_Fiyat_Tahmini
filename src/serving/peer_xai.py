@@ -20,12 +20,13 @@ from typing import Any
 import numpy as np
 
 from src.xai.feature_dictionary import describe_feature, feature_group
-from src.xai.narrative import contribution_sentence, direction_label
+from src.xai.group_summary import build_group_summaries, group_summaries_to_dicts
+from src.xai.narrative import direction_label
 from src.xai.strategies import TabularContributionStrategy
 
 _ENSEMBLE_CAVEAT = (
-    "Bu açıklama yalnızca modelin LightGBM bacağı temellidir; "
-    "MLP bacağı bu özetin dışındadır."
+    "Bu aciklama ensemble skoruna permutation sensitivity uygular; "
+    "LightGBM bacagi SHAP'i yalniz diagnostic alt bilgi olarak tutulur."
 )
 
 
@@ -81,7 +82,14 @@ def compute_peer_xai(
         return {}
 
     strategy = TabularContributionStrategy(list(feature_cols))
-    contribs, method, approximate = strategy.tree_contributions(booster, X)
+    diagnostic_method = ""
+    if is_ensemble and hasattr(model, "predict"):
+        contribs = strategy.permutation_contributions(model, X)
+        method = "ensemble_permutation"
+        approximate = True
+        diagnostic_method = "lgb_leg_shap_available"
+    else:
+        contribs, method, approximate = strategy.tree_contributions(booster, X)
     contribs = np.asarray(contribs, dtype=float)
     if contribs.ndim == 1:
         contribs = contribs.reshape(1, -1)
@@ -93,6 +101,7 @@ def compute_peer_xai(
         ranked = np.argsort(np.abs(row))[::-1]
         top_positive: list[dict] = []
         top_negative: list[dict] = []
+        group_rows: list[dict] = []
         for feat_idx in ranked:
             contribution = float(row[int(feat_idx)])
             if contribution == 0.0:
@@ -100,18 +109,21 @@ def compute_peer_xai(
             factor = _make_factor(
                 feature_cols[int(feat_idx)], contribution, method, approximate
             )
+            group_rows.append(factor)
             if contribution > 0 and len(top_positive) < top_k:
                 top_positive.append(factor)
             elif contribution < 0 and len(top_negative) < top_k:
                 top_negative.append(factor)
-            if len(top_positive) >= top_k and len(top_negative) >= top_k:
-                break
         out[str(symbol)] = {
             "method": method,
             "approximate": bool(approximate),
             "caveat": caveat,
+            "diagnostic_method": diagnostic_method,
             "top_positive": top_positive,
             "top_negative": top_negative,
+            "group_summaries": group_summaries_to_dicts(
+                build_group_summaries(group_rows, context="peer")
+            ),
         }
     return out
 
@@ -126,8 +138,17 @@ def _make_factor(
         "importance": abs(contribution),
         "direction": direction_label(contribution),
         "feature_group": feature_group(feature_name),
-        "reason": contribution_sentence(feature_name, contribution, approximate),
+        "reason": _peer_rank_reason(feature_name, contribution, approximate),
         "method": method,
         "contribution": contribution,
         "approximate": bool(approximate),
     }
+
+
+def _peer_rank_reason(feature_name: str, contribution: float, approximate: bool) -> str:
+    direction = "yukari" if contribution > 0 else "asagi"
+    suffix = " Yaklasik sensitivity hesabidir." if approximate else ""
+    return (
+        f"{describe_feature(feature_name)} akran siralamasini {direction} iten "
+        f"model sinyallerinden biri oldu.{suffix}"
+    )

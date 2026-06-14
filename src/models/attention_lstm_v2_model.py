@@ -312,19 +312,32 @@ class AttentionLSTMV2Model(BaseModel):
         last_seq = np.asarray(X_seq)[-1]
         if last_seq.ndim != 2:
             return
-        weighted_feature_signal = np.average(last_seq, axis=0, weights=mean_time)
         rows = []
-        for idx, feature in enumerate(feature_names[: len(weighted_feature_signal)]):
-            rows.append({
-                "Model": model_name,
-                "Feature": feature,
-                "Readable_Feature": describe_feature(feature),
-                "Feature_Group": feature_group(feature),
-                "Importance": float(weighted_feature_signal[idx]),
-                "Direction": "positive" if weighted_feature_signal[idx] >= 0 else "negative",
-                "Method": "Temporal attention weights",
-            })
+        n_steps = min(last_seq.shape[0], len(mean_time))
+        n_features = min(last_seq.shape[1], len(feature_names))
+        for lag_idx in range(n_steps):
+            lag_from_now = int(n_steps - lag_idx)
+            attention_weight = float(mean_time[lag_idx])
+            for feature_idx, feature in enumerate(feature_names[:n_features]):
+                weighted_signal = float(last_seq[lag_idx, feature_idx] * attention_weight)
+                rows.append({
+                    "Model": model_name,
+                    "Feature": feature,
+                    "Readable_Feature": describe_feature(feature),
+                    "Feature_Group": feature_group(feature),
+                    "Importance": abs(weighted_signal),
+                    "Contribution": weighted_signal,
+                    "Direction": "positive" if weighted_signal >= 0 else "negative",
+                    "Method": "temporal_attention_diagnostic",
+                    "Approximate": True,
+                    "Time_Lag": lag_from_now,
+                    "Attention_Weight": attention_weight,
+                    "Weighted_Signal": weighted_signal,
+                    "Reason": "Temporal attention diagnostic; this is not causal contribution.",
+                })
         rows.sort(key=lambda row: abs(row["Importance"]), reverse=True)
+        if not rows:
+            return
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         with open(output_path, "w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=list(rows[0]))

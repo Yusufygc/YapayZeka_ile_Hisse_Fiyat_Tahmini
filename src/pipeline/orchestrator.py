@@ -514,6 +514,7 @@ class ForecastingPipeline:
                 self.model_trainer.wf_y_true,
                 self.model_trainer.wf_backtest_inputs,
                 self.model_trainer.wf_fold_metrics,
+                self.model_trainer.wf_xai_records,
             )
             best_model_name = wf_result["best_model_name"]
             if (

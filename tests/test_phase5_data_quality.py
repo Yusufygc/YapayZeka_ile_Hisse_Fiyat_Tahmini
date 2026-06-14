@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pandas as pd
 
-from src.xai.feature_dictionary import feature_group
+from src.xai.feature_dictionary import feature_group, feature_group_label, feature_group_reason
 
 
 class Phase5DataQualityTests(unittest.TestCase):
@@ -21,6 +21,16 @@ class Phase5DataQualityTests(unittest.TestCase):
         self.assertEqual(feature_group("OBV_Norm_20"), "volume")
         self.assertEqual(feature_group("VWAP_20_rel"), "volume")
         self.assertEqual(feature_group("Market_Regime_SMA200"), "regime")
+        self.assertEqual(feature_group("EURTRY_Return"), "macro")
+        self.assertEqual(feature_group("VIX_Change"), "macro")
+        self.assertEqual(feature_group("XUSIN_Return"), "market_relative")
+
+    def test_feature_group_product_labels_and_reasons(self):
+        self.assertEqual(feature_group_label("macro"), "Makro ekonomik sinyaller")
+        reason = feature_group_reason("macro", "asagi", context="forecast")
+        self.assertIn("model tahminini asagi", reason)
+        peer_reason = feature_group_reason("technical", "yukari", context="peer")
+        self.assertIn("akran siralamasini yukari", peer_reason)
 
     def test_feature_pipeline_adds_volume_and_lag_features(self):
         try:

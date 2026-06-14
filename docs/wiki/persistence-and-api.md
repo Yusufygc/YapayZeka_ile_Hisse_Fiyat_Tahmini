@@ -2,7 +2,7 @@
 title: Persistence and API
 type: concept
 status: active
-last_updated: 2026-05-26
+last_updated: 2026-06-14
 owner: llm
 source_count: 14
 ---
@@ -39,6 +39,16 @@ must read `outputs/{SYMBOL}/runs/{RUN_ID}` as the source of truth. The sync step
 copies into a temporary `latest.__tmp__{RUN_ID}` directory first, then replaces
 `latest/` under a symbol-local `.latest_sync.lock` file so nearby runs do not
 delete the target while another run is copying into it.
+
+As of the 2026-06-14 XAI audit, `xai/` also carries machine-readable run
+metadata:
+
+- `xai_manifest_{suffix}.json` and alias `xai_manifest.json`: method counts,
+  fallback/approximate ratio, background scope, row/feature counts,
+  top-feature stability, dictionary coverage, `run_id`, and `created_at`.
+- `xai_sequence_heatmap_{suffix}.csv`: optional feature-lag attribution output
+  for sequence models. Existing aggregate `xai_top_reasons_*.csv` and
+  `xai_daily_reasons_*.csv` stay backward-compatible.
 
 ## Experiment Tracker
 
@@ -289,7 +299,11 @@ XAI summaries are resolved against the current best model's run first. The API
 passes `best_models.run_id` and `model_path` into `build_xai_product_summary()`,
 which searches `outputs/{SYMBOL}/runs/{RUN_ID}/xai` before falling back to
 `latest/xai`. This avoids stale `latest/` XAI tables from a later non-best run
-masking the best model's explanations.
+masking the best model's explanations. The XAI product summary now reads
+`xai_manifest.json` when available and exposes `xai.status`, `method_detail`,
+`approximate_ratio`, `feature_stability_top`, `generated_at`, `run_id`,
+`background_scope`, `dictionary_coverage`, and `group_summaries` without
+changing legacy factor arrays.
 
 The current job tracker is in-memory. For production multi-process deployment,
 the API comments note that Redis would be more appropriate.
@@ -364,20 +378,27 @@ Two tables:
   `confidence_label` (low/medium/high), `confidence_reasons/warnings` (JSON), and
   **trend tendency (Faz 7b)**: `trend_label` (yukarı/yatay/aşağı/belirsiz),
   `trend_prob_up`, `trend_expected_return`; **Kol-B XAI (Faz 10)**:
-  `xai_top_features` (JSON: `{method, approximate, caveat, top_positive[], top_negative[]}`);
+  `xai_top_features` (JSON: `{method, approximate, caveat, top_positive[], top_negative[]}`),
+  `xai_method`, `xai_approximate`, `xai_error`, `xai_generated_at`;
   and **Kol-B Price Band (Phase 5)**: `kolb_price_p50` (expected absolute price),
   `kolb_price_low` (lower absolute price band), `kolb_price_high` (upper absolute price band),
   `kolb_horizon_days` (horizon days, default 5), and `kolb_band_level` (nominal coverage, default 0.8).
 
 `PeerStore._migrate` runs idempotent `ALTER TABLE ADD COLUMN` on open, so
 pre-existing DBs (run_id ≤ 2, no trend/xai/kolb price band columns) upgrade in place; old rows return
-NULL trend/xai/kolb values → API surfaces `None`/`xai_available=False` (graceful, never breaks).
+NULL trend/xai/kolb values -> API surfaces `None`/`xai_available=False`
+(graceful, never breaks).
 
 **Kol-B XAI (Faz 10):** `tools/e2_faz5_nightly_scoring.py` →
-`score_latest_universe` (cfg `enable_xai`) computes per-symbol SHAP attribution via
-`src/serving/peer_xai.py::compute_peer_xai` (LGB TreeExplainer; ensemble = LGB-leg only
-+ caveat). `PeerEnrichmentService` parses `xai_top_features` into `PeerBlock.xai_available
-/xai_method/xai_caveat/xai_top_positive/xai_top_negative` (reusing `XaiFactorItem`).
+`score_latest_universe` (cfg `enable_xai`) computes per-symbol peer-rank XAI via
+`src/serving/peer_xai.py::compute_peer_xai`. Ensemble models use ensemble-level
+permutation sensitivity; LightGBM-leg SHAP can remain as diagnostic metadata.
+Scoring persists `xai_method`, `xai_approximate`, `xai_error`, and
+`xai_generated_at` so XAI failures are observable without breaking the peer
+score row. `PeerEnrichmentService` parses these fields plus `xai_top_features`
+into `PeerBlock.xai_available/xai_method/xai_approximate/xai_error/
+xai_generated_at/xai_caveat/xai_top_positive/xai_top_negative` (reusing
+`XaiFactorItem`).
 
 **API surface:** `src/api/services/peer_service.py` (`PeerEnrichmentService`)
 reads the latest run for a symbol and attaches an additive `peer` block to

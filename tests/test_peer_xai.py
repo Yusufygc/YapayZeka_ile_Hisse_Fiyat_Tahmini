@@ -42,6 +42,9 @@ class _Ensemble:
     def __init__(self, booster):
         self.lgb = _Single(booster)
 
+    def predict(self, X):
+        return self.lgb.predict(X)
+
 
 def _X(n=6):
     return np.random.default_rng(1).normal(size=(n, len(_FEATURES)))
@@ -58,6 +61,8 @@ def test_single_model_attribution_shape():
         assert len(rec["top_positive"]) <= 3
         assert len(rec["top_negative"]) <= 3
         assert rec["top_positive"] or rec["top_negative"]
+        assert rec["group_summaries"]
+        assert all("akran siralamas" in g["reason"] for g in rec["group_summaries"])
         for f in rec["top_positive"] + rec["top_negative"]:
             assert _FACTOR_KEYS <= set(f.keys())
             assert f["importance"] >= 0
@@ -77,6 +82,8 @@ def test_ensemble_has_caveat():
     model = _Ensemble(_train_booster())
     out = compute_peer_xai(model, _X(4), _FEATURES, ["A", "B", "C", "D"])
     assert all(r["caveat"] for r in out.values())  # LGB-leg uyarisi dolu
+    assert {r["method"] for r in out.values()} == {"ensemble_permutation"}
+    assert all(r["diagnostic_method"] == "lgb_leg_shap_available" for r in out.values())
 
 
 def test_no_booster_is_noop():

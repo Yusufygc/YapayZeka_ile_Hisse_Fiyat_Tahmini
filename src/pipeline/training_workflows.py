@@ -65,6 +65,10 @@ class _TrainingWorkflowBase:
         return self.state.wf_backtest_inputs
 
     @property
+    def wf_xai_records(self) -> dict:
+        return self.state.wf_xai_records
+
+    @property
     def wf_y_true(self):
         return self.state.wf_y_true
 
@@ -383,6 +387,7 @@ class WalkForwardTrainingWorkflow(_TrainingWorkflowBase):
                 {"Model": name, "Fold": window["split_idx"], **window["metrics"]}
                 for window in validator.results
             ]
+            self.wf_xai_records[name] = list(getattr(validator, "xai_records", []))
             self._store_backtest_inputs(name, validator.results)
 
     def _store_backtest_inputs(self, name: str, windows: list) -> None:

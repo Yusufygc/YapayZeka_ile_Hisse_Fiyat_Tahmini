@@ -2,7 +2,7 @@
 title: Analysis API Contract
 type: concept
 status: active
-last_updated: 2026-05-25
+last_updated: 2026-06-14
 owner: llm
 source_count: 7
 ---
@@ -100,7 +100,27 @@ For Faz 2+, if user-specific scenario parameters are required a
   },
   "xai": {
     "available": true,
+    "status": "available",
     "method": "SHAP TreeExplainer",
+    "method_detail": {
+      "shap_tree": 12,
+      "permutation_fallback": 0
+    },
+    "approximate_ratio": 0.0,
+    "feature_stability_top": [
+      {
+        "feature": "RSI_14",
+        "stability": 0.82
+      }
+    ],
+    "generated_at": "2026-05-18T03:05:00+03:00",
+    "run_id": "20260518_ASELS_walk_forward_xgboost",
+    "background_scope": "train_slice",
+    "dictionary_coverage": {
+      "coverage_ratio": 0.97,
+      "covered": 29,
+      "total": 30
+    },
     "top_positive_reasons": [
       {
         "feature_name": "RSI_14",
@@ -115,6 +135,18 @@ For Faz 2+, if user-specific scenario parameters are required a
       }
     ],
     "top_negative_reasons": [],
+    "group_summaries": [
+      {
+        "feature_group": "macro",
+        "group_label": "Makro ekonomik sinyaller",
+        "total_importance": 0.31,
+        "net_contribution": -0.04,
+        "direction": "asagi",
+        "top_features": ["USDTRY_Return", "Rate_Level"],
+        "reason": "Makro ekonomik sinyaller model tahminini asagi yonde etkileyen faktorler arasinda.",
+        "approximate_ratio": 0.5
+      }
+    ],
     "model_family_caveat": "Tree modeller için SHAP TreeExplainer güvenilirdir.",
     "caveat": "XAI, modelin tahmininde öne çıkan değişkenleri gösterir; nedensellik kanıtı değildir."
   },
@@ -149,7 +181,14 @@ For Faz 2+, if user-specific scenario parameters are required a
 `xai.model_family_caveat` are added in Faz 2. XAI factor fields
 `feature_group`, `reason`, `method`, `contribution`, and `approximate` are
 optional detail fields; older consumers can keep using `feature_name`,
-`human_label`, `importance`, and `direction`.
+`human_label`, `importance`, and `direction`. The 2026-06-14 XAI audit adds
+`xai.status`, `method_detail`, `approximate_ratio`, `feature_stability_top`,
+`generated_at`, `run_id`, `background_scope`, and `dictionary_coverage`
+additively from run-level XAI manifests. The macro/indicator XAI extension adds
+`xai.group_summaries`, an additive list of group-level explanations derived
+from visible XAI artifact rows. It summarizes macro, technical,
+market-relative, volume, volatility, lag, cross-sectional, meta, signal, and
+other groups without changing the factor arrays.
 
 `refresh_status`, `refresh_reason`, `refresh_job_id`, and `forecast_source` were
 added in the 2026-05-20 serving hardening phase. `forecast_source.type` is
@@ -184,11 +223,16 @@ band bounding as the median forecast.
 | `no_model` | No eligible model registered for this symbol |
 | `no_forecast` | Model exists but no forecast has been run |
 | `low_confidence` | Result exists but confidence label is `low` |
-| `xai_unavailable` | Forecast available but XAI output missing |
 | `error` | Unexpected server error |
 
 **Status priority (most severe first):**
-`no_model > no_forecast > stale_data > xai_unavailable > low_confidence > ok`
+`no_model > no_forecast > stale_data > low_confidence > ok`
+
+XAI availability is no longer part of `analysis_status`. Forecast/model health
+stays in the top-level status, while explanation health is reported under
+`xai.status` (`available`, `fallback`, `missing_artifact`, or `error` when a
+future reader can distinguish a malformed artifact). Clients that need to warn
+about missing explanations should use `xai.status`, not `analysis_status`.
 
 When `no_model` or `no_forecast`, the endpoint still returns HTTP 200 with the
 appropriate status field — it does not return 404. This allows the desktop app
@@ -319,6 +363,12 @@ when no peer data exists for the symbol; existing absolute `forecast`/
 | `trend_label` | string | **yukarı / yatay / aşağı / belirsiz** (Faz 7b) |
 | `trend_prob_up` | float \| null | calibrated P(h-day return > 0) |
 | `trend_expected_return` | float \| null | calibrated mean h-day log return |
+| `xai_available` | bool | true when peer XAI rows are attached |
+| `xai_method` | string \| null | peer XAI method, e.g. `ensemble_permutation` |
+| `xai_approximate` | bool \| null | true when peer XAI is approximate/sensitivity-based |
+| `xai_error` | string \| null | structured nightly XAI failure reason, if any |
+| `xai_generated_at` | string \| null | peer XAI generation timestamp |
+| `xai_group_summaries` | object[] | group-level peer-rank XAI summaries |
 
 Trend is a **probabilistic tilt, not a guarantee**, derived from the peer
 percentile via Faz 7 quintile calibration (Q1..Q5 P(up) 0.435→0.541). Reliability

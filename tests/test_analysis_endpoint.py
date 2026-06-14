@@ -142,13 +142,14 @@ class TestAnalysisService:
         assert result.analysis_status == "stale_data"
         assert result.data.data_freshness == "stale_data"
 
-    def test_xai_unavailable_status(self):
+    def test_xai_missing_artifact_status(self):
         # Forecast var, XAI dosyası yok, dir_acc yeterli
         tmp_db = _make_db_with_model(dir_acc=56.0)
         svc = AnalysisService(db_path=tmp_db, outputs_base=tempfile.mkdtemp())
         result = svc.build("TUPRS")
-        # Fresh veri, XAI yok → xai_unavailable ya da low_confidence (dir_acc güven mekanizmasına bağlı)
-        assert result.analysis_status in ("xai_unavailable", "low_confidence", "ok")
+        # Fresh veri, XAI yok: analysis_status forecast sagligini korur, XAI ayri raporlanir.
+        assert result.analysis_status in ("low_confidence", "ok")
+        assert result.xai.status == "missing_artifact"
 
     def test_analysis_uses_best_model_run_id_for_xai_lookup(self):
         from src.database.stock_model_db import StockModelDB
@@ -188,18 +189,23 @@ class TestAnalysisService:
         )
         run_csv.joinpath("xai_top_reasons_wf.csv").write_text(
             "Model;Feature;Readable_Feature;Feature_Group;Importance;Contribution;Direction;Reason;Method;Approximate\n"
-            "LSTM;BestRunFeature;Best run feature;technical;0.5;0.03;positive;best run reason;sequence;True\n",
+            "LSTM;BestRunFeature;Best run feature;technical;0.5;0.03;positive;best run reason;sequence;True\n"
+            "LSTM;USDTRY_Return;USDTRY return;macro;0.3;-0.02;negative;macro reason;sequence;True\n",
             encoding="utf-8",
         )
 
         result = AnalysisService(db_path=tmp, outputs_base=str(outputs)).build("ASELS")
 
         assert result.xai.available is True
+        assert result.xai.status in {"available", "fallback"}
         assert result.xai.top_positive_reasons[0].feature_name == "BestRunFeature"
         assert result.xai.top_positive_reasons[0].feature_group == "technical"
         assert result.xai.top_positive_reasons[0].reason == "best run reason"
         assert result.xai.top_positive_reasons[0].contribution == pytest.approx(0.03)
         assert result.xai.top_positive_reasons[0].approximate is True
+        groups = {item.feature_group: item for item in result.xai.group_summaries}
+        assert groups["macro"].direction == "asagi"
+        assert groups["macro"].top_features == ["USDTRY_Return"]
 
     def test_ensemble_forecast_source_metadata_surfaces(self):
         from src.database.stock_model_db import StockModelDB

@@ -12,6 +12,8 @@ import pandas as pd
 
 from src.api.constants import XAI_CAVEAT
 from src.xai.feature_dictionary import describe_feature, feature_group
+from src.xai.group_summary import XaiGroupSummaryData, build_group_summaries
+from src.xai.manifest import read_xai_manifest
 
 _TREE_MODELS = {"XGBoost", "Random Forest", "LightGBM Return", "Random Forest Return"}
 _LINEAR_MODELS = {"Ridge Return", "ElasticNet Return"}
@@ -47,17 +49,25 @@ class XaiFeatureFactor:
 @dataclass
 class XaiProductSummary:
     available: bool
+    status: str = "missing_artifact"
     method: str = ""
+    method_detail: str = ""
+    approximate_ratio: float = 0.0
     top_positive_reasons: List[XaiFeatureFactor] = field(default_factory=list)
     top_negative_reasons: List[XaiFeatureFactor] = field(default_factory=list)
+    group_summaries: List[XaiGroupSummaryData] = field(default_factory=list)
     feature_stability_top: Dict[str, float] = field(default_factory=dict)
+    generated_at: Optional[str] = None
+    run_id: Optional[str] = None
+    background_scope: Optional[str] = None
+    dictionary_coverage: Dict[str, Any] = field(default_factory=dict)
     model_family_caveat: str = ""
     caveat: str = XAI_CAVEAT
 
 
 def _unavailable(reason: str = "") -> XaiProductSummary:
     caveat = XAI_CAVEAT if not reason else f"{XAI_CAVEAT} ({reason})"
-    return XaiProductSummary(available=False, caveat=caveat)
+    return XaiProductSummary(available=False, status="missing_artifact", caveat=caveat)
 
 
 def build_xai_product_summary(
@@ -86,11 +96,13 @@ def build_xai_product_summary(
     last_unavailable: Optional[XaiProductSummary] = None
     for xai_dir in existing_dirs:
         standard_table = _find_standard_xai_table(xai_dir)
+        manifest = read_xai_manifest(xai_dir)
         if standard_table is not None:
             summary = _summary_from_standard_table(
                 table_path=standard_table,
                 model_name=model_name,
                 top_k=top_k,
+                manifest=manifest,
             )
             if summary.available:
                 return summary
@@ -102,6 +114,7 @@ def build_xai_product_summary(
                 table_path=legacy_table,
                 model_name=model_name,
                 top_k=top_k,
+                manifest=manifest,
             )
             if summary.available:
                 return summary
@@ -214,7 +227,7 @@ def _find_legacy_importance_table(latest_dir: str, model_name: str) -> Optional[
     return sorted(matches)[-1] if matches else None
 
 
-def _summary_from_standard_table(*, table_path: str, model_name: str, top_k: int) -> XaiProductSummary:
+def _summary_from_standard_table(*, table_path: str, model_name: str, top_k: int, manifest: Optional[dict] = None) -> XaiProductSummary:
     try:
         df = _read_csv_table(table_path)
     except Exception as exc:
@@ -241,10 +254,11 @@ def _summary_from_standard_table(*, table_path: str, model_name: str, top_k: int
         label_col="Readable_Feature",
         importance_col="Importance",
         top_k=top_k,
+        manifest=manifest or {},
     )
 
 
-def _summary_from_legacy_importance(*, table_path: str, model_name: str, top_k: int) -> XaiProductSummary:
+def _summary_from_legacy_importance(*, table_path: str, model_name: str, top_k: int, manifest: Optional[dict] = None) -> XaiProductSummary:
     try:
         df = _read_csv_table(table_path)
     except Exception as exc:
@@ -265,6 +279,7 @@ def _summary_from_legacy_importance(*, table_path: str, model_name: str, top_k: 
         label_col="Readable_Feature",
         importance_col=importance_col,
         top_k=top_k,
+        manifest=manifest or {},
     )
 
 
@@ -276,6 +291,7 @@ def _summary_from_feature_frame(
     label_col: str,
     importance_col: str,
     top_k: int,
+    manifest: Optional[dict] = None,
 ) -> XaiProductSummary:
     if df.empty:
         return _unavailable("xai tablosu bos")
@@ -317,6 +333,12 @@ def _summary_from_feature_frame(
 
     work["_xai_sort_importance"] = work[importance_col].abs()
     work.sort_values("_xai_sort_importance", ascending=False, inplace=True)
+    group_rows = _group_summary_rows(
+        work=work,
+        feature_col=feature_col,
+        label_col=label_col,
+        importance_col=importance_col,
+    )
 
     def _factor(row: Any, direction: str) -> XaiFeatureFactor:
         feature = str(row[feature_col])
@@ -355,15 +377,74 @@ def _summary_from_feature_frame(
             top_positive = [_factor(row, "positive") for _, row in positives.iterrows()]
             top_negative = [_factor(row, "negative") for _, row in negatives.iterrows()]
 
-    method = "SHAP TreeExplainer" if model_name in _TREE_MODELS else "Feature Importance"
+    manifest = manifest or {}
+    method = _summary_method(work, model_name)
+    approximate_ratio = _manifest_float(manifest, "approximate_ratio", _frame_approximate_ratio(work))
     return XaiProductSummary(
         available=True,
+        status="fallback" if approximate_ratio > 0 else "available",
         method=method,
+        method_detail=str(manifest.get("method_detail") or method),
+        approximate_ratio=approximate_ratio,
         top_positive_reasons=top_positive,
         top_negative_reasons=top_negative,
+        group_summaries=build_group_summaries(group_rows, context="forecast"),
+        feature_stability_top=dict(manifest.get("top_feature_stability") or {}),
+        generated_at=manifest.get("created_at"),
+        run_id=manifest.get("run_id"),
+        background_scope=manifest.get("background_scope"),
+        dictionary_coverage=dict(manifest.get("dictionary_coverage") or {}),
         model_family_caveat=_model_family_caveat(model_name),
         caveat=XAI_CAVEAT,
     )
+
+
+def _summary_method(df: pd.DataFrame, model_name: str) -> str:
+    if "Method" in df.columns:
+        methods = [str(v).strip() for v in df["Method"].dropna().tolist() if str(v).strip()]
+        if methods:
+            counts = pd.Series(methods).value_counts()
+            if len(counts) == 1:
+                return str(counts.index[0])
+            return "mixed:" + ",".join(f"{idx}={int(val)}" for idx, val in counts.items())
+    return "SHAP TreeExplainer" if model_name in _TREE_MODELS else "Feature Importance"
+
+
+def _group_summary_rows(
+    *,
+    work: pd.DataFrame,
+    feature_col: str,
+    label_col: str,
+    importance_col: str,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for _, row in work.iterrows():
+        feature = str(row[feature_col])
+        rows.append(
+            {
+                "feature_name": feature,
+                "human_label": _resolved_label(feature, row.get(label_col)),
+                "feature_group": _resolved_group(feature, row.get("Feature_Group")),
+                "importance": abs(float(row[importance_col])),
+                "contribution": _optional_float(row.get("Contribution")),
+                "approximate": _optional_bool(row.get("Approximate")),
+            }
+        )
+    return rows
+
+
+def _frame_approximate_ratio(df: pd.DataFrame) -> float:
+    if df.empty or "Approximate" not in df.columns:
+        return 0.0
+    approx = df["Approximate"].map(_optional_bool).fillna(False)
+    return float(approx.sum() / len(df)) if len(df) else 0.0
+
+
+def _manifest_float(manifest: dict, key: str, default: float) -> float:
+    try:
+        return float(manifest.get(key, default))
+    except (TypeError, ValueError):
+        return float(default)
 
 
 def _optional_text(value: Any) -> Optional[str]:

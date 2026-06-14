@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
+from src.xai.background import XAIBackgroundProvider
+
 
 def compute_feature_stability_scores(
     fold_importances: List[Dict[str, float]],
@@ -40,15 +42,23 @@ def compute_feature_stability_scores(
 
 
 class TabularContributionStrategy:
-    def __init__(self, feature_names: list[str], *, max_rows: int = 80) -> None:
+    def __init__(
+        self,
+        feature_names: list[str],
+        *,
+        max_rows: int = 80,
+        background_provider: XAIBackgroundProvider | None = None,
+    ) -> None:
         self.feature_names = feature_names
         self.max_rows = max_rows
+        self.background_provider = background_provider or XAIBackgroundProvider.unavailable()
 
     def tree_contributions(self, estimator: Any, X: np.ndarray) -> Tuple[np.ndarray, str, bool]:
         try:
             import shap  # type: ignore
 
-            explainer = shap.TreeExplainer(estimator)
+            background = self.background_provider.tabular_background
+            explainer = shap.TreeExplainer(estimator, data=background) if background is not None else shap.TreeExplainer(estimator)
             shap_values = explainer.shap_values(X)
             if isinstance(shap_values, list):
                 shap_values = shap_values[0]
@@ -61,13 +71,17 @@ class TabularContributionStrategy:
         try:
             import shap  # type: ignore
 
-            explainer = shap.LinearExplainer(estimator, X)
+            background = self.background_provider.tabular_background
+            explainer = shap.LinearExplainer(estimator, background if background is not None else X)
             shap_values = explainer.shap_values(X)
             return np.asarray(shap_values, dtype=float), "shap_linear", False
         except Exception:
             coef = np.asarray(getattr(estimator, "coef_", []), dtype=float).ravel()
             if coef.size == X.shape[1]:
-                centered = X - np.nanmean(X, axis=0, keepdims=True)
+                baseline = self.background_provider.tabular_median
+                if baseline is None or len(baseline) != X.shape[1]:
+                    baseline = np.nanmedian(X, axis=0)
+                centered = X - np.asarray(baseline, dtype=float).reshape(1, -1)
                 return centered * coef.reshape(1, -1), "linear_coefficients", True
             return self.permutation_contributions(estimator, X), "permutation_fallback", True
 
@@ -76,7 +90,7 @@ class TabularContributionStrategy:
         contribs = np.zeros((len(X), len(self.feature_names)), dtype=float)
         for feature_idx in range(min(X.shape[1], len(self.feature_names))):
             X_perm = X.copy()
-            X_perm[:, feature_idx] = np.mean(X_perm[:, feature_idx])
+            X_perm[:, feature_idx] = self.background_provider.tabular_mask_value(X_perm, feature_idx)
             perm_pred = np.asarray(estimator.predict(X_perm), dtype=float).ravel()
             contribs[:, feature_idx] = baseline - perm_pred
         return contribs
@@ -93,7 +107,11 @@ class TabularContributionStrategy:
 
         X_sample = np.asarray(X[-sample_count:], dtype=float)
         explainer = LimeTabularExplainer(
-            training_data=np.asarray(X, dtype=float),
+            training_data=(
+                self.background_provider.tabular_background
+                if self.background_provider.tabular_background is not None
+                else np.asarray(X, dtype=float)
+            ),
             feature_names=self.feature_names[: X.shape[1]],
             mode="regression",
             discretize_continuous=True,
@@ -117,9 +135,16 @@ class TabularContributionStrategy:
 
 
 class SequenceContributionStrategy:
-    def __init__(self, feature_names: list[str], *, max_rows: int = 80) -> None:
+    def __init__(
+        self,
+        feature_names: list[str],
+        *,
+        max_rows: int = 80,
+        background_provider: XAIBackgroundProvider | None = None,
+    ) -> None:
         self.feature_names = feature_names
         self.max_rows = max_rows
+        self.background_provider = background_provider or XAIBackgroundProvider.unavailable()
 
     def permutation_contributions(self, model: Any, X_seq: np.ndarray) -> Tuple[np.ndarray, str, bool]:
         sample_count = min(len(X_seq), self.max_rows)
@@ -129,13 +154,52 @@ class SequenceContributionStrategy:
         signs = np.zeros(len(self.feature_names), dtype=float)
         for feature_idx in range(min(X.shape[2], len(self.feature_names))):
             X_masked = X.copy()
-            X_masked[:, :, feature_idx] = np.mean(X_masked[:, :, feature_idx])
+            for lag_idx in range(X.shape[1]):
+                X_masked[:, lag_idx, feature_idx] = self.background_provider.sequence_mask_value(
+                    X_masked, lag_idx, feature_idx
+                )
             masked_pred = np.asarray(model.predict(X_masked), dtype=float).ravel()
             delta = baseline - masked_pred
             importances[feature_idx] = float(np.mean(np.abs(delta)))
             signs[feature_idx] = float(np.mean(delta))
         contribs = (np.sign(signs) * importances).reshape(1, -1)
         return contribs, "sequence_permutation", True
+
+    def feature_lag_contributions(
+        self,
+        model: Any,
+        X_seq: np.ndarray,
+    ) -> Tuple[np.ndarray, List[Dict[str, Any]], str, bool]:
+        sample_count = min(len(X_seq), self.max_rows)
+        X = np.asarray(X_seq[-sample_count:], dtype=float)
+        if X.ndim != 3 or sample_count == 0:
+            return np.zeros((0, len(self.feature_names)), dtype=float), [], "sequence_feature_lag_permutation", True
+        baseline = np.asarray(model.predict(X), dtype=float).ravel()
+        feature_signed = np.zeros(len(self.feature_names), dtype=float)
+        rows: List[Dict[str, Any]] = []
+        for lag_idx in range(X.shape[1]):
+            lag_from_now = int(X.shape[1] - lag_idx)
+            for feature_idx in range(min(X.shape[2], len(self.feature_names))):
+                X_masked = X.copy()
+                X_masked[:, lag_idx, feature_idx] = self.background_provider.sequence_mask_value(
+                    X_masked, lag_idx, feature_idx
+                )
+                masked_pred = np.asarray(model.predict(X_masked), dtype=float).ravel()
+                delta = baseline - masked_pred
+                contribution = float(np.mean(delta))
+                importance = float(np.mean(np.abs(delta)))
+                feature_signed[feature_idx] += contribution
+                rows.append(
+                    {
+                        "Feature": self.feature_names[feature_idx],
+                        "Lag": lag_from_now,
+                        "Contribution": contribution,
+                        "Importance": importance,
+                        "Method": "sequence_feature_lag_permutation",
+                        "Approximate": True,
+                    }
+                )
+        return feature_signed.reshape(1, -1), rows, "sequence_feature_lag_permutation", True
 
     def lime_sequence_local_contributions(self, model: Any, X_seq: np.ndarray) -> Tuple[np.ndarray, str, bool]:
         try:

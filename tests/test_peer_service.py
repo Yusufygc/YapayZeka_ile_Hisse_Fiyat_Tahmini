@@ -40,6 +40,16 @@ def _seed(tmp_path) -> str:
                 "importance": 0.2, "direction": "aşağı", "feature_group": "volatility",
                 "reason": "...", "method": "shap_tree", "contribution": -0.2,
                 "approximate": False}],
+            "group_summaries": [{
+                "feature_group": "cross_sectional",
+                "group_label": "Akran goreli sinyaller",
+                "total_importance": 0.3,
+                "net_contribution": 0.3,
+                "direction": "yukari",
+                "top_features": ["RSI_14_csr"],
+                "reason": "Akran goreli sinyaller akran siralamasini yukari yonde etkileyen faktorler arasinda.",
+                "approximate_ratio": 0.0,
+            }],
         }],
     }))
     return db
@@ -92,6 +102,9 @@ def test_enrich_attaches_peer_xai(tmp_path):
     assert peer.xai_top_positive[0].direction == "yukarı"
     assert len(peer.xai_top_negative) == 1
     assert peer.xai_top_negative[0].contribution == -0.2
+    assert len(peer.xai_group_summaries) == 1
+    assert peer.xai_group_summaries[0].feature_group == "cross_sectional"
+    assert "akran siralamasini yukari" in peer.xai_group_summaries[0].reason
 
 
 def test_enrich_no_xai_graceful(tmp_path):
@@ -101,6 +114,7 @@ def test_enrich_no_xai_graceful(tmp_path):
     assert peer is not None and peer.available
     assert peer.xai_available is False
     assert peer.xai_top_positive == [] and peer.xai_top_negative == []
+    assert peer.xai_group_summaries == []
 
 
 def test_enrich_case_insensitive(tmp_path):

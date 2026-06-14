@@ -59,6 +59,7 @@ class TrainingState:
     wf_fold_metrics: dict = field(default_factory=dict)
     wf_predictions: dict = field(default_factory=dict)
     wf_backtest_inputs: dict = field(default_factory=dict)
+    wf_xai_records: dict = field(default_factory=dict)
     wf_y_true: Any = None
     final_holdout_model: Any = None
     final_holdout_model_name: str | None = None
@@ -284,6 +285,14 @@ class ModelTrainer:
         self._ensure_training_state().wf_backtest_inputs = value
 
     @property
+    def wf_xai_records(self) -> dict:
+        return self._ensure_training_state().wf_xai_records
+
+    @wf_xai_records.setter
+    def wf_xai_records(self, value: dict) -> None:
+        self._ensure_training_state().wf_xai_records = value
+
+    @property
     def wf_y_true(self):
         return self._ensure_training_state().wf_y_true
 
@@ -380,6 +389,7 @@ class ModelTrainer:
                 factory,
                 preprocessor,
                 target_mode=self.dataset_metadata.get("target_mode", "log_return"),
+                feature_names=self.feature_names,
             )
             validator.run(wf_splits)
             validators[name] = validator

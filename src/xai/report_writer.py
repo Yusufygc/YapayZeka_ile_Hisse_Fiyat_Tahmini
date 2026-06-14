@@ -20,6 +20,7 @@ except Exception:  # pragma: no cover - plotting is skipped in minimal/headless 
     plt = None
 
 from src.utils.reporting_utils import route_output_path, with_output_extension, write_csv_and_aligned_view
+from src.xai.manifest import write_xai_manifest
 
 
 class XAIReportWriter:
@@ -40,6 +41,7 @@ class XAIReportWriter:
         daily_reasons = payload.get("daily_reasons")
         signal_reasons = payload.get("signal_reasons")
         trade_explanations = payload.get("trade_explanations")
+        sequence_heatmap = payload.get("sequence_heatmap")
         summary_md = str(payload.get("summary_md", ""))
 
         if isinstance(top_reasons, pd.DataFrame) and not top_reasons.empty:
@@ -84,6 +86,13 @@ class XAIReportWriter:
                     os.path.join(self.output_dir, f"xai_trade_explanations_{suffix}.csv"),
                 )
 
+        if isinstance(sequence_heatmap, pd.DataFrame) and not sequence_heatmap.empty:
+            if self.write_tables:
+                write_csv_and_aligned_view(
+                    sequence_heatmap,
+                    os.path.join(self.output_dir, f"xai_sequence_heatmap_{suffix}.csv"),
+                )
+
         if self.write_markdown:
             summary_path = with_output_extension(os.path.join(self.output_dir, f"xai_summary_{suffix}.md"), ".md")
             os.makedirs(os.path.dirname(summary_path), exist_ok=True)
@@ -91,6 +100,7 @@ class XAIReportWriter:
                 handle.write(summary_md.strip())
                 handle.write("\n")
 
+        write_xai_manifest(payload, suffix=suffix, output_dir=self.output_dir)
         print(f"[OK] XAI raporlari kaydedildi -> {self.output_dir}")
 
     @staticmethod

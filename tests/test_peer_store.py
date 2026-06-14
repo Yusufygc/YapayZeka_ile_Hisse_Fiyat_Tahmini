@@ -36,6 +36,10 @@ def _scored():
         "kolb_price_high": [103.78, 52.00, 21.40],
         "kolb_horizon_days": [5, 5, 5],
         "kolb_band_level": [0.8, 0.8, 0.8],
+        "xai_method": ["shap_tree", None, "shap_tree"],
+        "xai_approximate": [False, None, False],
+        "xai_error": [None, "no_booster", None],
+        "xai_generated_at": ["2026-06-14T10:00:00+00:00", None, "2026-06-14T10:00:00+00:00"],
         "xai_top_features": [
             {"method": "shap_tree", "approximate": False, "caveat": "",
              "top_positive": [{"feature_name": "RSI_14_csr", "contribution": 0.3}],
@@ -109,6 +113,18 @@ def test_xai_top_features_roundtrip(tmp_path):
     assert s.get_peer_score("BBB")["xai_top_features"] is None
 
 
+def test_xai_observability_columns_roundtrip(tmp_path):
+    s = _store(tmp_path)
+    rid = s.insert_run(GlobalRunMeta(model_name="m", as_of_date="d"))
+    s.insert_peer_scores(rid, _scored())
+    aaa = s.get_peer_score("AAA")
+    bbb = s.get_peer_score("BBB")
+    assert aaa["xai_method"] == "shap_tree"
+    assert aaa["xai_approximate"] == 0
+    assert aaa["xai_generated_at"].startswith("2026-06-14")
+    assert bbb["xai_error"] == "no_booster"
+
+
 def test_migration_adds_trend_cols_to_old_db(tmp_path):
     """Eski sema (trend kolonsuz) -> PeerStore acilista ALTER ile ekler."""
     import sqlite3
@@ -127,7 +143,8 @@ def test_migration_adds_trend_cols_to_old_db(tmp_path):
         "PRAGMA table_info(peer_scores)")}
     assert {"trend_label", "trend_prob_up", "trend_expected_return",
             "xai_top_features", "kolb_price_p50", "kolb_price_low",
-            "kolb_price_high", "kolb_horizon_days", "kolb_band_level"} <= cols
+            "kolb_price_high", "kolb_horizon_days", "kolb_band_level",
+            "xai_method", "xai_approximate", "xai_error", "xai_generated_at"} <= cols
 
 
 def test_get_run_peer_scores_sorted(tmp_path):

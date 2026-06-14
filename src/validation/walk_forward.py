@@ -14,6 +14,8 @@ from typing import Any, Dict, List
 
 import numpy as np
 
+from src.xai.background import XAIBackgroundProvider
+from src.xai.strategies import SequenceContributionStrategy, TabularContributionStrategy
 from src.evaluation.financial_metrics import (
     _annualized_sharpe,
     _price_to_simple_returns,
@@ -84,14 +86,24 @@ class WalkForwardValidator:
     Orchestrates model evaluation across chronological splits without leakage.
     """
 
-    def __init__(self, model_initializer: callable, preprocessor_fn: callable, target_mode: str = "log_return"):
+    def __init__(
+        self,
+        model_initializer: callable,
+        preprocessor_fn: callable,
+        target_mode: str = "log_return",
+        feature_names: list[str] | None = None,
+        xai_max_rows: int = 80,
+    ):
         self.model_initializer = model_initializer
         self.preprocessor = preprocessor_fn
         self.target_mode = target_mode
+        self.feature_names = list(feature_names or [])
+        self.xai_max_rows = int(xai_max_rows)
         self.results = []
         self.aggregated_metrics = {}
         self.feature_importances: List[np.ndarray] = []
         self.mean_feature_importance: np.ndarray | None = None
+        self.xai_records: List[Dict[str, Any]] = []
 
     def _target_to_price(self, preds_target: np.ndarray, prev_close: np.ndarray) -> np.ndarray:
         # Lazy-import: joblib bagimliligi run() ortaminda gerekir; modul yuklemede degil.
@@ -124,6 +136,7 @@ class WalkForwardValidator:
             sözlük.
         """
         self.results = []
+        self.xai_records = []
         all_metrics = []
         all_strategy_returns: List[np.ndarray] = []
 
@@ -253,7 +266,98 @@ class WalkForwardValidator:
             "y_true": y_true_final.tolist(),
             "y_pred": preds_final.tolist(),
         }
+        xai_record = self._build_xai_record(
+            model=model,
+            X_train=X_train,
+            X_test=X_test,
+            fold_id=split["split_idx"],
+            dates=dates_aligned,
+            pred_target=preds_target_aligned,
+            pred_price=preds_final,
+            y_true_price=y_true_final,
+        )
+        if xai_record:
+            self.xai_records.append(xai_record)
+            record["xai_method"] = xai_record.get("method")
+            record["xai_approximate"] = xai_record.get("approximate")
         return metrics, fold_strategy_returns, record
+
+    def _build_xai_record(
+        self,
+        *,
+        model: Any,
+        X_train: np.ndarray,
+        X_test: np.ndarray,
+        fold_id: Any,
+        dates: np.ndarray,
+        pred_target: np.ndarray,
+        pred_price: np.ndarray,
+        y_true_price: np.ndarray,
+    ) -> Dict[str, Any]:
+        if not self.feature_names:
+            return {}
+        try:
+            X_train_arr = np.asarray(X_train, dtype=float)
+            X_test_arr = np.asarray(X_test, dtype=float)
+            if X_test_arr.ndim == 2:
+                background = XAIBackgroundProvider.from_arrays(X_train=X_train_arr)
+                strategy = TabularContributionStrategy(
+                    self.feature_names,
+                    max_rows=self.xai_max_rows,
+                    background_provider=background,
+                )
+                estimator = getattr(model, "model", model)
+                if hasattr(estimator, "coef_"):
+                    contribs, method, approximate = strategy.linear_contributions(estimator, X_test_arr)
+                else:
+                    contribs, method, approximate = strategy.tree_contributions(estimator, X_test_arr)
+                heatmap: list[dict] = []
+            elif X_test_arr.ndim == 3:
+                background = XAIBackgroundProvider.from_arrays(X_train_seq=X_train_arr)
+                strategy = SequenceContributionStrategy(
+                    self.feature_names,
+                    max_rows=self.xai_max_rows,
+                    background_provider=background,
+                )
+                contribs, heatmap, method, approximate = strategy.feature_lag_contributions(model, X_test_arr)
+            else:
+                return {}
+            contribs = np.asarray(contribs, dtype=float)
+            if contribs.ndim == 1:
+                contribs = contribs.reshape(1, -1)
+            if contribs.shape[1] != len(self.feature_names):
+                return {}
+            min_len = min(len(contribs), len(dates), len(pred_target), len(pred_price), len(y_true_price))
+            if min_len <= 0:
+                return {}
+            contribs = contribs[-min_len:]
+            fold_importance = {
+                feature: float(value)
+                for feature, value in zip(self.feature_names, np.mean(np.abs(contribs), axis=0))
+            }
+            for row in heatmap:
+                row["Fold"] = fold_id
+            return {
+                "fold": fold_id,
+                "method": method,
+                "approximate": bool(approximate),
+                "background_scope": background.scope,
+                "contributions": contribs.tolist(),
+                "fold_importance": fold_importance,
+                "dates": np.asarray(dates)[-min_len:].tolist(),
+                "pred_target": np.asarray(pred_target, dtype=float)[-min_len:].tolist(),
+                "pred_price": np.asarray(pred_price, dtype=float)[-min_len:].tolist(),
+                "y_true_price": np.asarray(y_true_price, dtype=float)[-min_len:].tolist(),
+                "sequence_heatmap": heatmap,
+            }
+        except Exception as exc:
+            return {
+                "fold": fold_id,
+                "method": "xai_error",
+                "approximate": True,
+                "background_scope": "unavailable",
+                "error": type(exc).__name__,
+            }
 
     def _aggregate_metrics(
         self, all_metrics: List[Dict], all_strategy_returns: List[np.ndarray], verbose: bool

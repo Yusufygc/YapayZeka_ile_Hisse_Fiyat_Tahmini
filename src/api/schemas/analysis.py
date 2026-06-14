@@ -94,11 +94,31 @@ class XaiFactorItem(BaseModel):
     approximate: Optional[bool] = None
 
 
+class XaiGroupSummary(BaseModel):
+    feature_group: str
+    group_label: str
+    total_importance: float
+    net_contribution: float
+    direction: str
+    top_features: List[str] = []
+    reason: str
+    approximate_ratio: float = 0.0
+
+
 class XaiBlock(BaseModel):
     available: bool = False
+    status: str = "missing_artifact"
     method: str = ""
+    method_detail: str = ""
+    approximate_ratio: float = 0.0
     top_positive_reasons: List[XaiFactorItem] = []
     top_negative_reasons: List[XaiFactorItem] = []
+    group_summaries: List[XaiGroupSummary] = []
+    feature_stability_top: Dict[str, float] = {}
+    generated_at: Optional[str] = None
+    run_id: Optional[str] = None
+    background_scope: Optional[str] = None
+    dictionary_coverage: Dict[str, Any] = {}
     model_family_caveat: str = ""
     caveat: str = ""
 
@@ -150,8 +170,12 @@ class PeerBlock(BaseModel):
     xai_available: bool = False
     xai_method: str = ""                          # shap_tree | permutation_fallback
     xai_caveat: str = ""                          # ensemble ise LGB-leg uyarisi
+    xai_approximate: Optional[bool] = None
+    xai_error: Optional[str] = None
+    xai_generated_at: Optional[str] = None
     xai_top_positive: List[XaiFactorItem] = []    # sirayi yukari iten suruculer
     xai_top_negative: List[XaiFactorItem] = []    # sirayi asagi iten suruculer
+    xai_group_summaries: List[XaiGroupSummary] = []
 
 
 class ForecastSourceBlock(BaseModel):

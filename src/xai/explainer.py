@@ -10,9 +10,14 @@ from typing import Any, Dict, Iterable, List, Tuple
 import numpy as np
 import pandas as pd
 
+from src.xai.background import XAIBackgroundProvider
 from src.xai.feature_dictionary import describe_feature, feature_group
 from src.xai.narrative import contribution_sentence, model_summary_sentence
-from src.xai.strategies import SequenceContributionStrategy, TabularContributionStrategy
+from src.xai.strategies import (
+    SequenceContributionStrategy,
+    TabularContributionStrategy,
+    compute_feature_stability_scores,
+)
 
 
 TREE_MODELS = {"XGBoost", "Random Forest", "LightGBM Return"}
@@ -38,6 +43,18 @@ class XAIExplainer:
         self.tabular_strategy = TabularContributionStrategy(feature_names, max_rows=max_rows)
         self.sequence_strategy = SequenceContributionStrategy(feature_names, max_rows=max_rows)
 
+    def _set_background(self, background: XAIBackgroundProvider) -> None:
+        self.tabular_strategy = TabularContributionStrategy(
+            self.feature_names,
+            max_rows=self.max_rows,
+            background_provider=background,
+        )
+        self.sequence_strategy = SequenceContributionStrategy(
+            self.feature_names,
+            max_rows=self.max_rows,
+            background_provider=background,
+        )
+
     def explain_single_split(
         self,
         trained_models: Dict[str, Any],
@@ -49,9 +66,15 @@ class XAIExplainer:
     ) -> Dict[str, pd.DataFrame | str]:
         top_rows: List[Dict[str, Any]] = []
         daily_rows: List[Dict[str, Any]] = []
+        heatmap_rows: List[Dict[str, Any]] = []
         summary_blocks: List[str] = [self._summary_header("latest")]
 
         quantile_predictions = quantile_predictions or {}
+        background = XAIBackgroundProvider.from_arrays(
+            X_train=tensors.get("X_train_s"),
+            X_train_seq=tensors.get("X_train_seq"),
+        )
+        self._set_background(background)
 
         for model_name, model in trained_models.items():
             if model_name not in predictions:
@@ -66,9 +89,10 @@ class XAIExplainer:
                         model_name, model, tensors, predictions, prediction_targets, y_true_aligned
                     )
                 elif model_name in {"LSTM", "LSTM Lite", "AttentionLSTM", "AttentionLSTM v2"}:
-                    model_top, model_daily = self._explain_sequence_permutation(
+                    model_top, model_daily, model_heatmap = self._explain_sequence_permutation(
                         model_name, model, tensors, predictions, prediction_targets, y_true_aligned
                     )
+                    heatmap_rows.extend(model_heatmap)
                 else:
                     model_top, model_daily = self._explain_rule_based(
                         model_name, model, tensors, predictions, prediction_targets, y_true_aligned
@@ -83,7 +107,11 @@ class XAIExplainer:
         payload: Dict[str, Any] = {
             "top_reasons":  pd.DataFrame(top_rows),
             "daily_reasons": pd.DataFrame(daily_rows),
+            "sequence_heatmap": pd.DataFrame(heatmap_rows),
             "summary_md":   "\n\n".join(summary_blocks),
+            "background_scope": background.scope,
+            "run_id": self.dataset_metadata.get("run_id"),
+            "validation_mode": self.dataset_metadata.get("validation_mode", "single_split"),
         }
         return payload
 
@@ -93,14 +121,18 @@ class XAIExplainer:
         wf_y_true: np.ndarray,
         wf_backtest_inputs: Dict[str, Dict[str, Any]] | None = None,
         backtest_results: Dict[str, Dict[str, Any]] | None = None,
+        wf_xai_records: Dict[str, List[Dict[str, Any]]] | None = None,
     ) -> Dict[str, pd.DataFrame | str]:
         rows: List[Dict[str, Any]] = []
         daily_rows: List[Dict[str, Any]] = []
         signal_rows: List[Dict[str, Any]] = []
         trade_rows: List[Dict[str, Any]] = []
+        heatmap_rows: List[Dict[str, Any]] = []
         summary = [self._summary_header("wf")]
         wf_backtest_inputs = wf_backtest_inputs or {}
         backtest_results = backtest_results or {}
+        wf_xai_records = wf_xai_records or {}
+        fold_importances_by_model: Dict[str, List[Dict[str, float]]] = {}
 
         for model_name, preds in wf_predictions.items():
             payload = wf_backtest_inputs.get(model_name, {})
@@ -109,6 +141,27 @@ class XAIExplainer:
             latest_pred = float(np.asarray(preds).ravel()[-1]) if len(preds) else None
             latest_true = float(np.asarray(wf_y_true).ravel()[-1]) if wf_y_true is not None and len(wf_y_true) else None
             sentence = model_summary_sentence(model_name, latest_target, latest_pred, latest_true)
+            records = wf_xai_records.get(model_name, [])
+            if records:
+                model_top, model_daily, model_heatmap, fold_importances = self._rows_from_wf_records(
+                    model_name=model_name,
+                    records=records,
+                    fallback_dates=payload.get("dates"),
+                    fallback_pred_target=pred_target,
+                    fallback_pred_price=np.asarray(preds).ravel(),
+                    fallback_true=wf_y_true,
+                )
+                if model_top or model_daily:
+                    rows.extend(model_top)
+                    daily_rows.extend(model_daily)
+                    heatmap_rows.extend(model_heatmap)
+                    fold_importances_by_model[model_name] = fold_importances
+                    summary.append(
+                        f"## {model_name}\n\n"
+                        f"{sentence}\n\n"
+                        "Walk-forward XAI fold bazli out-of-sample katkilar ve sinyal gerekceleriyle raporlanir."
+                    )
+                    continue
             rows.append(self._row(model_name, "WalkForward_Summary", 1.0, latest_target, sentence, "rule_based", False))
             daily_rows.append({
                 "Model": model_name,
@@ -136,7 +189,12 @@ class XAIExplainer:
             "daily_reasons": pd.DataFrame(daily_rows),
             "signal_reasons": pd.DataFrame(signal_rows),
             "trade_explanations": pd.DataFrame(trade_rows),
+            "sequence_heatmap": pd.DataFrame(heatmap_rows),
             "summary_md": "\n\n".join(summary),
+            "feature_stability_top": self._merge_stability(fold_importances_by_model),
+            "background_scope": self._background_scope_from_records(wf_xai_records),
+            "run_id": self.dataset_metadata.get("run_id"),
+            "validation_mode": "walk_forward",
         }
 
     def _signal_reason_rows(self, model_name: str, backtest_result: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -361,10 +419,10 @@ class XAIExplainer:
         predictions: Dict[str, np.ndarray],
         prediction_targets: Dict[str, np.ndarray],
         y_true_aligned: np.ndarray,
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         X_seq = self._align_rows(np.asarray(tensors["X_test_seq"], dtype=float), len(predictions[model_name]))
-        contribs, method, approximate = self.sequence_strategy.permutation_contributions(model, X_seq)
-        return self._rows_from_contributions(
+        contribs, heatmap, method, approximate = self.sequence_strategy.feature_lag_contributions(model, X_seq)
+        top_rows, daily_rows = self._rows_from_contributions(
             model_name,
             contribs,
             np.asarray(predictions[model_name])[-1:],
@@ -374,6 +432,11 @@ class XAIExplainer:
             approximate=approximate,
             dates=self._align_rows(np.asarray(tensors.get("dates_test", [])), len(predictions[model_name]))[-1:],
         )
+        for row in heatmap:
+            row["Model"] = model_name
+            row["Readable_Feature"] = describe_feature(str(row.get("Feature", "")))
+            row["Feature_Group"] = feature_group(str(row.get("Feature", "")))
+        return top_rows, daily_rows, heatmap
 
     def _explain_rule_based(
         self,
@@ -428,6 +491,8 @@ class XAIExplainer:
         method: str,
         approximate: bool,
         dates: Iterable[Any] | None = None,
+        background_scope: str | None = None,
+        fold_id: Any | None = None,
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         contribs = np.asarray(contribs, dtype=float)
         if contribs.ndim == 1:
@@ -446,7 +511,12 @@ class XAIExplainer:
             feature = self.feature_names[int(feature_idx)]
             contribution = float(global_signed[int(feature_idx)])
             reason = contribution_sentence(feature, contribution, approximate=approximate)
-            rows.append(self._row(model_name, feature, float(global_importance[int(feature_idx)]), contribution, reason, method, approximate))
+            row = self._row(model_name, feature, float(global_importance[int(feature_idx)]), contribution, reason, method, approximate)
+            if background_scope:
+                row["Background_Scope"] = background_scope
+            if fold_id is not None:
+                row["Fold"] = fold_id
+            rows.append(row)
 
         start = max(0, len(contribs) - self.max_rows)
         for local_idx, contrib_row in enumerate(contribs[start:], start=start):
@@ -458,7 +528,7 @@ class XAIExplainer:
             for rank, feature_idx in enumerate(daily_ranked, start=1):
                 feature = self.feature_names[int(feature_idx)]
                 contribution = float(contrib_row[int(feature_idx)])
-                daily.append({
+                daily_row = {
                     "Model": model_name,
                     "Date": date_value,
                     "Predicted_Direction": self._direction(pred_target),
@@ -472,8 +542,94 @@ class XAIExplainer:
                     "Reason": contribution_sentence(feature, contribution, approximate=approximate),
                     "Method": method,
                     "Approximate": approximate,
-                })
+                }
+                if background_scope:
+                    daily_row["Background_Scope"] = background_scope
+                if fold_id is not None:
+                    daily_row["Fold"] = fold_id
+                daily.append(daily_row)
         return rows, daily
+
+    def _rows_from_wf_records(
+        self,
+        *,
+        model_name: str,
+        records: List[Dict[str, Any]],
+        fallback_dates: Any,
+        fallback_pred_target: np.ndarray,
+        fallback_pred_price: np.ndarray,
+        fallback_true: np.ndarray,
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, float]]]:
+        all_contribs: List[np.ndarray] = []
+        all_dates: List[Any] = []
+        all_pred_target: List[float] = []
+        all_pred_price: List[float] = []
+        all_true: List[float] = []
+        heatmap_rows: List[Dict[str, Any]] = []
+        fold_importances: List[Dict[str, float]] = []
+        method = "walk_forward_attribution"
+        approximate = False
+        background_scope = "unavailable"
+        for record in records:
+            contribs = np.asarray(record.get("contributions", []), dtype=float)
+            if contribs.ndim != 2 or contribs.size == 0:
+                continue
+            all_contribs.append(contribs)
+            all_dates.extend(record.get("dates", []))
+            all_pred_target.extend(record.get("pred_target", []))
+            all_pred_price.extend(record.get("pred_price", []))
+            all_true.extend(record.get("y_true_price", []))
+            method = str(record.get("method") or method)
+            approximate = approximate or bool(record.get("approximate", False))
+            background_scope = str(record.get("background_scope") or background_scope)
+            fold_imp = record.get("fold_importance")
+            if isinstance(fold_imp, dict):
+                fold_importances.append({str(k): float(v) for k, v in fold_imp.items()})
+            for row in record.get("sequence_heatmap", []) or []:
+                if isinstance(row, dict):
+                    heatmap_row = dict(row)
+                    heatmap_row["Model"] = model_name
+                    heatmap_row.setdefault("Fold", record.get("fold"))
+                    heatmap_row.setdefault("Readable_Feature", describe_feature(str(row.get("Feature", ""))))
+                    heatmap_row.setdefault("Feature_Group", feature_group(str(row.get("Feature", ""))))
+                    heatmap_rows.append(heatmap_row)
+        if not all_contribs:
+            return [], [], heatmap_rows, fold_importances
+        contribs_all = np.vstack(all_contribs)
+        dates = all_dates or list(np.asarray(fallback_dates).ravel()[-len(contribs_all):])
+        pred_target = all_pred_target or list(np.asarray(fallback_pred_target).ravel()[-len(contribs_all):])
+        pred_price = all_pred_price or list(np.asarray(fallback_pred_price).ravel()[-len(contribs_all):])
+        y_true = all_true or list(np.asarray(fallback_true).ravel()[-len(contribs_all):])
+        top_rows, daily_rows = self._rows_from_contributions(
+            model_name,
+            contribs_all,
+            pred_price,
+            pred_target,
+            y_true,
+            method,
+            approximate,
+            dates=dates,
+            background_scope=background_scope,
+        )
+        return top_rows, daily_rows, heatmap_rows, fold_importances
+
+    def _merge_stability(self, fold_importances_by_model: Dict[str, List[Dict[str, float]]]) -> Dict[str, float]:
+        merged: Dict[str, float] = {}
+        for model_name, fold_importances in fold_importances_by_model.items():
+            scores = compute_feature_stability_scores(fold_importances, top_k=self.top_k)
+            for feature, score in scores.items():
+                merged[f"{model_name}:{feature}"] = score
+        return dict(sorted(merged.items(), key=lambda item: item[1], reverse=True)[: self.top_k * 3])
+
+    @staticmethod
+    def _background_scope_from_records(records_by_model: Dict[str, List[Dict[str, Any]]]) -> str:
+        scopes = {
+            str(record.get("background_scope"))
+            for records in records_by_model.values()
+            for record in records
+            if record.get("background_scope")
+        }
+        return ",".join(sorted(scopes)) if scopes else "unavailable"
 
     def _row(
         self,

@@ -11,7 +11,7 @@ import json
 import os
 from typing import Optional
 
-from src.api.schemas.analysis import AnalysisResponse, PeerBlock, XaiFactorItem
+from src.api.schemas.analysis import AnalysisResponse, PeerBlock, XaiFactorItem, XaiGroupSummary
 
 
 def _default_db_path() -> str:
@@ -46,6 +46,21 @@ def _xai_factor(raw: dict) -> XaiFactorItem:
     )
 
 
+def _xai_group_summary(raw: dict) -> XaiGroupSummary:
+    return XaiGroupSummary(
+        feature_group=str(raw.get("feature_group", "")),
+        group_label=str(raw.get("group_label", "")),
+        total_importance=float(raw.get("total_importance", 0) or 0),
+        net_contribution=float(raw.get("net_contribution", 0) or 0),
+        direction=str(raw.get("direction", "")),
+        top_features=[str(item) for item in raw.get("top_features", [])]
+        if isinstance(raw.get("top_features", []), list)
+        else [],
+        reason=str(raw.get("reason", "")),
+        approximate_ratio=float(raw.get("approximate_ratio", 0) or 0),
+    )
+
+
 def _parse_peer_xai(v) -> Optional[dict]:
     """peer_scores.xai_top_features JSON'unu parse et. Yok/bozuk -> None."""
     if not v:
@@ -60,6 +75,11 @@ def _parse_peer_xai(v) -> Optional[dict]:
         return None
     pos = [_xai_factor(f) for f in obj.get("top_positive", []) if isinstance(f, dict)]
     neg = [_xai_factor(f) for f in obj.get("top_negative", []) if isinstance(f, dict)]
+    groups = [
+        _xai_group_summary(f)
+        for f in obj.get("group_summaries", [])
+        if isinstance(f, dict)
+    ]
     if not pos and not neg:
         return None
     return {
@@ -67,6 +87,7 @@ def _parse_peer_xai(v) -> Optional[dict]:
         "caveat": str(obj.get("caveat", "")),
         "top_positive": pos,
         "top_negative": neg,
+        "group_summaries": groups,
     }
 
 
@@ -111,10 +132,14 @@ class PeerEnrichmentService:
                 kolb_horizon_days=row.get("kolb_horizon_days"),
                 kolb_band_level=row.get("kolb_band_level"),
                 xai_available=xai is not None,
-                xai_method="" if xai is None else xai["method"],
+                xai_method=str(row.get("xai_method") or ("" if xai is None else xai["method"])),
                 xai_caveat="" if xai is None else xai["caveat"],
+                xai_approximate=row.get("xai_approximate"),
+                xai_error=row.get("xai_error"),
+                xai_generated_at=row.get("xai_generated_at"),
                 xai_top_positive=[] if xai is None else xai["top_positive"],
                 xai_top_negative=[] if xai is None else xai["top_negative"],
+                xai_group_summaries=[] if xai is None else xai["group_summaries"],
             )
         except Exception:  # serving katmani API'yi asla bozmasin
             return None

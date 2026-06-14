@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """xai/product_summary.py birim testleri."""
 import os
+import json
 import tempfile
 import textwrap
 
@@ -145,6 +146,52 @@ class TestBuildXaiProductSummary:
         assert result.top_positive_reasons[0].method == "sequence"
         assert result.top_positive_reasons[0].contribution == pytest.approx(0.03)
         assert result.top_positive_reasons[0].approximate is True
+        assert result.group_summaries
+        technical = result.group_summaries[0]
+        assert technical.feature_group == "technical"
+        assert technical.total_importance == pytest.approx(0.17)
+        assert technical.net_contribution == pytest.approx(0.02)
+        assert technical.direction == "yukari"
+        assert technical.approximate_ratio == 1.0
+
+    def test_group_summaries_include_macro_and_market_rows_beyond_top_k(self):
+        tmpdir = tempfile.mkdtemp()
+        xai_csv = os.path.join(tmpdir, "ASELS", "latest", "xai", "csv")
+        os.makedirs(xai_csv)
+        _write_csv(
+            xai_csv,
+            "xai_top_reasons_wf.csv",
+            """
+            Model;Feature;Readable_Feature;Feature_Group;Importance;Contribution;Direction;Reason;Method;Approximate
+            LSTM;RSI_14;RSI;technical;0.50;0.03;positive;technical reason;sequence;False
+            LSTM;USDTRY_Return;USDTRY return;macro;0.30;-0.02;negative;macro reason;sequence;True
+            LSTM;BIST100_Return;BIST100 return;market_relative;0.20;0.01;positive;market reason;sequence;False
+            """,
+        )
+
+        result = build_xai_product_summary("ASELS", "LSTM", outputs_base=tmpdir, top_k=1)
+        groups = {item.feature_group: item for item in result.group_summaries}
+
+        assert set(groups) >= {"technical", "macro", "market_relative"}
+        assert groups["macro"].direction == "asagi"
+        assert groups["macro"].net_contribution == pytest.approx(-0.02)
+        assert groups["macro"].top_features == ["USDTRY_Return"]
+        assert "model tahminini asagi" in groups["macro"].reason
+
+    def test_legacy_importance_group_summary_without_contribution_is_attention(self):
+        outputs = self._make_outputs(
+            "X",
+            "XGBoost",
+            """
+            Feature,Mean_Importance_WF
+            USDTRY_Return,0.40
+            RSI_14,0.20
+            """
+        )
+        result = build_xai_product_summary("X", "XGBoost", outputs_base=outputs, top_k=1)
+        groups = {item.feature_group: item for item in result.group_summaries}
+        assert groups["macro"].direction == "dikkat"
+        assert groups["macro"].total_importance == pytest.approx(0.40)
 
     def test_walk_forward_summary_has_specific_non_generic_label(self):
         tmpdir = tempfile.mkdtemp()
@@ -200,3 +247,39 @@ class TestBuildXaiProductSummary:
 
         assert result.available is True
         assert result.top_positive_reasons[0].feature_name == "LFeature"
+
+    def test_manifest_metadata_is_exposed(self):
+        tmpdir = tempfile.mkdtemp()
+        xai_csv = os.path.join(tmpdir, "ASELS", "runs", "run-x", "xai", "csv")
+        xai_dir = os.path.dirname(xai_csv)
+        os.makedirs(xai_csv)
+        _write_csv(
+            xai_csv,
+            "xai_top_reasons_wf.csv",
+            """
+            Model;Feature;Readable_Feature;Feature_Group;Importance;Contribution;Direction;Reason;Method;Approximate
+            LSTM;Return;Gunluk getiri;technical;0.12;0.03;positive;reason;sequence_feature_lag_permutation;True
+            """,
+        )
+        with open(os.path.join(xai_dir, "xai_manifest.json"), "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "run_id": "run-x",
+                    "created_at": "2026-06-14T10:00:00+00:00",
+                    "method_detail": "sequence_feature_lag_permutation",
+                    "approximate_ratio": 1.0,
+                    "background_scope": "train_slice_sequence",
+                    "top_feature_stability": {"LSTM:Return": 1.0},
+                    "dictionary_coverage": {"total": 1, "covered": 1, "ratio": 1.0, "missing": []},
+                },
+                handle,
+            )
+
+        result = build_xai_product_summary("ASELS", "LSTM", outputs_base=tmpdir, run_id="run-x")
+
+        assert result.status == "fallback"
+        assert result.method == "sequence_feature_lag_permutation"
+        assert result.method_detail == "sequence_feature_lag_permutation"
+        assert result.approximate_ratio == 1.0
+        assert result.feature_stability_top == {"LSTM:Return": 1.0}
+        assert result.background_scope == "train_slice_sequence"

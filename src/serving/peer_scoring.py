@@ -17,6 +17,7 @@ Confidence burada DEGIL: `segment_confidence` (segment_IC x tradability) ayri.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -127,6 +128,14 @@ def score_latest_universe(
                                    top_k=cfg.xai_top_k)
             if xai:
                 out["xai_top_features"] = out["symbol"].map(xai)
-        except Exception:  # XAI hatasi skorlamayi bozmasin
-            pass
+                out["xai_method"] = out["xai_top_features"].map(
+                    lambda v: v.get("method") if isinstance(v, dict) else None
+                )
+                out["xai_approximate"] = out["xai_top_features"].map(
+                    lambda v: bool(v.get("approximate")) if isinstance(v, dict) else None
+                )
+                out["xai_generated_at"] = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+        except Exception as exc:  # XAI hatasi skorlamayi bozmasin
+            out["xai_error"] = f"{type(exc).__name__}: {exc}"
+            out["xai_generated_at"] = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
     return out

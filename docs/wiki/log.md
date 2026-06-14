@@ -1,3 +1,38 @@
+## [2026-06-14] Feature | XAI makro/gosterge grup ozetleri
+
+- Analysis API `xai.group_summaries` ve `peer.xai_group_summaries` alanlarini
+  additive olarak tasir; faktor listeleri geriye uyumlu kaldi.
+- `src/xai/group_summary.py` ortak helper'i XAI satirlarindan makro, teknik,
+  piyasa/sector, hacim, volatilite, lag ve akran-goreli grup ozetleri uretir.
+- Feature dictionary global makro seriler ve sektor endeksi feature'lari icin
+  okunabilir etiket/grup reason kapsamini genisletti.
+- Dogrulama: `dl_env` hedef regresyon seti 59 passed; tam test paketi
+  760 passed, 19 warnings.
+
+## [2026-06-14] Decision | XAI makro ve gosterge detaylari
+
+- XAI urun dilinde makro ekonomik degiskenler ve teknik gostergeler karara
+  etki eden faktor olarak gosterilebilir; semantik "modele verilen feature
+  tahmini/ranki su yonde etkiledi" ile sinirlidir, nedensellik iddiasi
+  kurulmaz.
+- Kalici not `docs/wiki/xai-audit-2026-06-12.md` icine eklendi: makro/gosterge
+  faktorleri feature dictionary, factor-level reason alanlari, sequence
+  heatmap ve grup bazli ozetlerle sunulacak.
+
+## [2026-06-14] Feature | XAI audit uygulamasi
+
+- XAI writer artik run-level manifest (`xai_manifest_{suffix}.json` +
+  `xai_manifest.json`), dictionary coverage, background scope,
+  method/fallback/approximate metadata ve sequence heatmap ciktisi uretir.
+- Walk-forward fold modelleri persist edilmeden fold icinde attribution
+  hesaplanir; Analysis API'de XAI durumu `xai.status` alanina ayrildi,
+  `analysis_status` forecast/model sagligina odaklandi.
+- AttentionLSTM v2 attention export'u temporal diagnostic olarak etiketlendi;
+  Kol-B peer XAI ensemble-level permutation, peer-rank dili ve PeerStore
+  observability kolonlariyla sertlestirildi.
+- Dogrulama: `dl_env` ortaminda focused XAI/API/peer regresyon seti 82 passed;
+  tam test paketi 757 passed, 19 warnings.
+
 ## [2026-06-14] Refactor | P4-B pooled matrix downcast uygulandi
 
 - Pooled OOS ve serving scoring akislari `src/data/pooled_matrix.py` uzerinden
