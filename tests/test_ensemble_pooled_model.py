@@ -45,6 +45,20 @@ def test_predict_before_fit_raises():
         EnsemblePooledModel(_cfg()).predict(np.zeros((3, 4)))
 
 
+def test_predict_rejects_non_2d_input_after_fit():
+    X, y = _toy()
+    m = EnsemblePooledModel(_cfg()).fit(X, y)
+    with pytest.raises(ValueError, match="2D X"):
+        m.predict(np.zeros(4))
+
+
+def test_predict_rejects_single_row_cross_section_after_fit():
+    X, y = _toy()
+    m = EnsemblePooledModel(_cfg()).fit(X, y)
+    with pytest.raises(ValueError, match="en az 2 satir"):
+        m.predict(X[:1])
+
+
 def test_invalid_blend_weight_raises():
     with pytest.raises(ValueError):
         EnsemblePooledModel(_cfg(blend_weight_lgb=1.5))

@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Owner-backed services for ``DataManager``."""
+"""Explicit context/state services for ``DataManager``."""
 
 from __future__ import annotations
 
 import hashlib
-import importlib
 import json
 import os
+from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
@@ -18,11 +18,57 @@ from src.features.feature_cache import FeatureCache
 from src.features.feature_pipeline import FeaturePipeline
 from src.features.macro_pipeline import MacroPipeline
 from src.features.sector_mapping import resolve_sector_mapping
-from src.pipeline.evaluation_services import _OwnerBackedService
+from src.pipeline.config import DataConfig, ValidationConfig
 from src.utils.data_splitter import TimeSeriesSplitter
 
 
-class DataIngestionService(_OwnerBackedService):
+@dataclass
+class DataManagerContext:
+    """Read-mostly dependencies shared by explicit DataManager services."""
+
+    data_cfg: DataConfig
+    val_cfg: ValidationConfig
+    models_dir: str
+    validation_config: dict
+    stock_symbol: str = ""
+    project_root: str = ""
+    macro_cache_dir: str = ""
+    universe_file: str | None = None
+
+
+@dataclass
+class DataManagerState:
+    """Mutable runtime state shared by explicit DataManager services."""
+
+    df: pd.DataFrame | None = None
+    feature_names: list = field(default_factory=list)
+    tensors: dict = field(default_factory=dict)
+    wf_splits: list = field(default_factory=list)
+    selection_df: pd.DataFrame | None = None
+    final_holdout_df: pd.DataFrame | None = None
+    scaling_reports: list[dict] = field(default_factory=list)
+    _prepare_tensors_call_idx: int = 0
+    _wf_mode: bool = False
+    dataset_metadata: dict = field(default_factory=dict)
+    dataset_hash: str = "N/A"
+    corporate_action_report: dict = field(default_factory=dict)
+    feature_groups: dict[str, str] = field(default_factory=dict)
+    feature_pruning_report: dict = field(default_factory=dict)
+    sector_mapping_report: dict = field(default_factory=dict)
+    survivorship_bias_report: dict = field(default_factory=dict)
+    training_window_report: dict = field(default_factory=dict)
+
+
+class DataIngestionService:
+    def __init__(
+        self,
+        ctx: DataManagerContext,
+        state: DataManagerState,
+        quality_service: "DataQualityReportingService",
+    ):
+        self.ctx = ctx
+        self.state = state
+        self.quality_service = quality_service
 
     def run(self) -> None:
         print("\n" + "=" * 60)
@@ -30,33 +76,37 @@ class DataIngestionService(_OwnerBackedService):
         print("=" * 60)
 
         # Ham hisse verisi
-        if self.data_cfg.auto_update_data:
+        if self.ctx.data_cfg.auto_update_data:
             DataUpdater.check_and_update(
-                self.data_cfg.data_file,
-                self.stock_symbol,
-                interactive=self.data_cfg.auto_update_interactive,
+                self.ctx.data_cfg.data_file,
+                self.ctx.stock_symbol,
+                interactive=self.ctx.data_cfg.auto_update_interactive,
             )
-        raw_df = load_data(self.data_cfg.data_file)
-        self.corporate_action_report = dict(raw_df.attrs.get("corporate_action_report", {}))
-        raw_df = self._apply_training_window(raw_df)
+        raw_df = load_data(self.ctx.data_cfg.data_file)
+        self.state.corporate_action_report = dict(
+            raw_df.attrs.get("corporate_action_report", {})
+        )
+        raw_df = self.apply_training_window(raw_df)
 
         # Makro veri (isteğe bağlı)
         macro_df = None
-        if self.data_cfg.use_macro:
-            macro_df = self._fetch_macro(raw_df)
+        if self.ctx.data_cfg.use_macro:
+            macro_df = self.fetch_macro(raw_df)
 
         sector_mapping = resolve_sector_mapping(
-            self.stock_symbol, getattr(self, "universe_file", None)
+            self.ctx.stock_symbol, self.ctx.universe_file
         )
-        self.sector_mapping_report = sector_mapping.to_dict()
+        self.state.sector_mapping_report = sector_mapping.to_dict()
 
         # Teknik + makro özellikler (cache destekli)
         self._engineer_features_cached(raw_df, macro_df, sector_mapping)
 
-        self.survivorship_bias_report = self._check_survivorship_bias()
+        self.state.survivorship_bias_report = (
+            self.quality_service.check_survivorship_bias()
+        )
 
         self._print_ingestion_summary(macro_df)
-        self._refresh_dataset_metadata()
+        self.refresh_dataset_metadata()
 
     def _engineer_features_cached(self, raw_df, macro_df, sector_mapping) -> None:
         """Teknik + makro özellikleri üretir (FeatureCache destekli) ve self.df,
@@ -66,12 +116,12 @@ class DataIngestionService(_OwnerBackedService):
         cache'e yazar. Korelasyon-pruning fit'i final holdout'u hariç tutar
         (`prune_fit_tail`) — feature-seçim sızıntısı önlemi.
         """
-        feature_cache_dir = os.path.join(self.project_root, "data", "feature_cache")
+        feature_cache_dir = os.path.join(self.ctx.project_root, "data", "feature_cache")
         _cache = FeatureCache(cache_dir=feature_cache_dir, ttl_hours=24.0)
-        _cache_key = _cache.make_key(self.data_cfg.data_file, self.data_cfg)
+        _cache_key = _cache.make_key(self.ctx.data_cfg.data_file, self.ctx.data_cfg)
         _cache_hit = _cache.get(_cache_key)
 
-        macro_expected = bool(self.data_cfg.use_macro)
+        macro_expected = bool(self.ctx.data_cfg.use_macro)
         macro_available = macro_df is not None and not macro_df.empty
 
         if _cache_hit is not None:
@@ -84,40 +134,40 @@ class DataIngestionService(_OwnerBackedService):
             if macro_expected and not self._has_macro_features(cached_names):
                 _cache._evict(_cache_key)
             else:
-                self.df = cached_df
-                self.feature_names = _meta["feature_names"]
-                self.feature_groups = _meta.get("feature_groups", {})
-                self.feature_pruning_report = _meta.get("feature_pruning_report", {})
-                self.sector_mapping_report = _meta.get(
+                self.state.df = cached_df
+                self.state.feature_names = _meta["feature_names"]
+                self.state.feature_groups = _meta.get("feature_groups", {})
+                self.state.feature_pruning_report = _meta.get("feature_pruning_report", {})
+                self.state.sector_mapping_report = _meta.get(
                     "sector_mapping_report",
-                    self.sector_mapping_report,
+                    self.state.sector_mapping_report,
                 )
                 print("  [CACHE] Ozellik muhendisligi cache'den yuklendi.")
                 return
 
         feature_pipeline = FeaturePipeline(
-            feature_mode=self.data_cfg.feature_mode,
-            prune_correlated_features=self.data_cfg.prune_correlated_features,
-            correlation_threshold=self.data_cfg.correlation_threshold,
-            lag_feature_count=self.data_cfg.lag_feature_count,
+            feature_mode=self.ctx.data_cfg.feature_mode,
+            prune_correlated_features=self.ctx.data_cfg.prune_correlated_features,
+            correlation_threshold=self.ctx.data_cfg.correlation_threshold,
+            lag_feature_count=self.ctx.data_cfg.lag_feature_count,
         )
         # Leakage onlemi: korelasyon pruning fit'i final holdout'u haric
         # tutsun (feature-secim sizmasi onlemi). Holdout tail engineered
         # frame'in sonundan kesilir; pruning de ayni tail'i corr'dan disar.
         prune_fit_tail = int(
-            getattr(self, "validation_config", {}).get("final_holdout_size", 0) or 0
+            self.ctx.validation_config.get("final_holdout_size", 0) or 0
         )
-        self.df = feature_pipeline.engineer_features(
+        self.state.df = feature_pipeline.engineer_features(
             raw_df,
             macro_df=macro_df,
-            symbol=self.stock_symbol,
+            symbol=self.ctx.stock_symbol,
             sector_mapping=sector_mapping,
             prune_fit_tail=prune_fit_tail,
         )
-        self.feature_names = feature_pipeline.feature_names
-        self.feature_groups = feature_pipeline.feature_groups
-        self.feature_pruning_report = feature_pipeline.pruning_report
-        self.sector_mapping_report = feature_pipeline.sector_mapping_report
+        self.state.feature_names = feature_pipeline.feature_names
+        self.state.feature_groups = feature_pipeline.feature_groups
+        self.state.feature_pruning_report = feature_pipeline.pruning_report
+        self.state.sector_mapping_report = feature_pipeline.sector_mapping_report
         if macro_expected and not macro_available:
             # Makro istendi fakat alinamadi: degraded (makro-yoksun) frame'i cache'leme.
             # Aksi halde gecici bir makro cekim hatasi cache'i zehirler ve sonraki
@@ -126,12 +176,12 @@ class DataIngestionService(_OwnerBackedService):
         else:
             _cache.put(
                 _cache_key,
-                self.df,
+                self.state.df,
                 {
-                    "feature_names": self.feature_names,
-                    "feature_groups": self.feature_groups,
-                    "feature_pruning_report": self.feature_pruning_report,
-                    "sector_mapping_report": self.sector_mapping_report,
+                    "feature_names": self.state.feature_names,
+                    "feature_groups": self.state.feature_groups,
+                    "feature_pruning_report": self.state.feature_pruning_report,
+                    "sector_mapping_report": self.state.sector_mapping_report,
                 },
             )
 
@@ -147,19 +197,19 @@ class DataIngestionService(_OwnerBackedService):
     def _print_ingestion_summary(self, macro_df) -> None:
         """Veri boyutu, teknik/makro özellik sayıları, kurumsal aksiyon, pruning
         ve eğitim penceresi özetini yazdırır (yan etkisiz, yalnız print)."""
-        has_rel_str = "Relative_Strength" in self.feature_names
-        has_sec_str = "Sector_Relative_Strength" in self.feature_names
+        has_rel_str = "Relative_Strength" in self.state.feature_names
+        has_sec_str = "Sector_Relative_Strength" in self.state.feature_names
         macro_base = len(MacroPipeline.macro_feature_names(include_rates=True))
         macro_count = macro_base + (1 if has_rel_str else 0) + (1 if has_sec_str else 0)
-        tech_count = len(self.feature_names) - (
+        tech_count = len(self.state.feature_names) - (
             macro_count
-            if self.data_cfg.use_macro and macro_df is not None and not macro_df.empty
+            if self.ctx.data_cfg.use_macro and macro_df is not None and not macro_df.empty
             else 0
         )
 
-        print(f"  Veri boyutu      : {self.df.shape[0]} satır × {self.df.shape[1]} sütun")
+        print(f"  Veri boyutu      : {self.state.df.shape[0]} satır × {self.state.df.shape[1]} sütun")
         print(f"  Teknik özellikler: {tech_count}")
-        if self.data_cfg.use_macro and macro_df is not None and not macro_df.empty:
+        if self.ctx.data_cfg.use_macro and macro_df is not None and not macro_df.empty:
             print(
                 f"  Makro özellikler : {macro_count}  "
                 f"(USDTRY_Return, USDTRY_Volatility7, "
@@ -167,36 +217,36 @@ class DataIngestionService(_OwnerBackedService):
                 f"Rate_Level, Rate_Change, CPI_YoY, CPI_MoM, Real_Rate, "
                 f"Relative_Strength, Sector_Relative_Strength)"
             )
-        print(f"  Toplam özellik   : {len(self.feature_names)}")
-        if self.corporate_action_report.get("warning"):
-            print(f"  [DATA] Uyari       : {self.corporate_action_report['warning']}")
-        elif self.corporate_action_report:
+        print(f"  Toplam özellik   : {len(self.state.feature_names)}")
+        if self.state.corporate_action_report.get("warning"):
+            print(f"  [DATA] Uyari       : {self.state.corporate_action_report['warning']}")
+        elif self.state.corporate_action_report:
             print(
                 "  [DATA] Price source : "
-                f"{self.corporate_action_report.get('price_source')} "
-                f"(max Close/Adj diff={self.corporate_action_report.get('max_abs_adj_close_diff_pct', 0):.4f}%)"
+                f"{self.state.corporate_action_report.get('price_source')} "
+                f"(max Close/Adj diff={self.state.corporate_action_report.get('max_abs_adj_close_diff_pct', 0):.4f}%)"
             )
-        if self.feature_pruning_report.get("enabled"):
+        if self.state.feature_pruning_report.get("enabled"):
             print(
                 "  [FEATURE] Pruning   : "
-                f"{len(self.feature_pruning_report.get('dropped_features', []))} feature dropped"
+                f"{len(self.state.feature_pruning_report.get('dropped_features', []))} feature dropped"
             )
-        if self.training_window_report:
+        if self.state.training_window_report:
             print(
                 "  [DATA] Train window  : "
-                f"{self.training_window_report.get('effective_training_window_years_label')} "
-                f"({self.training_window_report.get('effective_date_start')} -> "
-                f"{self.training_window_report.get('effective_date_end')}, "
-                f"{self.training_window_report.get('history_days')} satir)"
+                f"{self.state.training_window_report.get('effective_training_window_years_label')} "
+                f"({self.state.training_window_report.get('effective_date_start')} -> "
+                f"{self.state.training_window_report.get('effective_date_end')}, "
+                f"{self.state.training_window_report.get('history_days')} satir)"
             )
 
     def apply_training_window(self, raw_df: pd.DataFrame) -> pd.DataFrame:
-        cfg = getattr(self, "data_cfg", self)
+        cfg = self.ctx.data_cfg
         if raw_df is None or raw_df.empty:
-            self.training_window_report = {
+            self.state.training_window_report = {
                 "status": "empty_dataset",
                 "requested_training_window_years": cfg.training_window_years,
-                "window_candidates": self._format_window_candidates(),
+                "window_candidates": self.format_window_candidates(),
                 "min_history_days": cfg.min_history_days,
                 "new_listing_min_days": cfg.new_listing_min_days,
             }
@@ -242,7 +292,7 @@ class DataIngestionService(_OwnerBackedService):
 
         effective_start = pd.to_datetime(effective_df["Date"].iloc[0]).normalize()
         effective_end = pd.to_datetime(effective_df["Date"].iloc[-1]).normalize()
-        self.training_window_report = {
+        self.state.training_window_report = {
             "status": status,
             "raw_date_start": raw_start.strftime("%Y-%m-%d"),
             "raw_date_end": raw_end.strftime("%Y-%m-%d"),
@@ -257,7 +307,7 @@ class DataIngestionService(_OwnerBackedService):
             "new_listing_min_days": cfg.new_listing_min_days,
             "new_listing_mode": bool(new_listing_mode),
             "insufficient_history_warning": bool(insufficient_history),
-            "window_candidates": self._format_window_candidates(),
+            "window_candidates": self.format_window_candidates(),
             "cutoff_date": (
                 "" if cutoff_date is None else pd.to_datetime(cutoff_date).strftime("%Y-%m-%d")
             ),
@@ -266,7 +316,7 @@ class DataIngestionService(_OwnerBackedService):
         return effective_df
 
     def format_window_candidates(self) -> list[str]:
-        cfg = getattr(self, "data_cfg", self)
+        cfg = self.ctx.data_cfg
         return ["all" if years is None else f"{int(years)}y" for years in cfg.window_candidates]
 
     def fetch_macro(self, raw_df: pd.DataFrame) -> pd.DataFrame:
@@ -277,9 +327,9 @@ class DataIngestionService(_OwnerBackedService):
             end = dates.max().strftime("%Y-%m-%d")
 
             mp = MacroPipeline(
-                cache_dir=self.macro_cache_dir,
-                rate_release_lag_days=self.data_cfg.macro_rate_lag_days,
-                cpi_release_lag_days=self.data_cfg.macro_cpi_lag_days,
+                cache_dir=self.ctx.macro_cache_dir,
+                rate_release_lag_days=self.ctx.data_cfg.macro_rate_lag_days,
+                cpi_release_lag_days=self.ctx.data_cfg.macro_cpi_lag_days,
             )
             macro_df = mp.get_macro_features(start_date=start, end_date=end)
 
@@ -293,56 +343,58 @@ class DataIngestionService(_OwnerBackedService):
             return pd.DataFrame()
 
     def refresh_dataset_metadata(self) -> None:
-        if self.df is None or self.df.empty:
-            self.dataset_metadata = {}
-            self.dataset_hash = "N/A"
+        if self.state.df is None or self.state.df.empty:
+            self.state.dataset_metadata = {}
+            self.state.dataset_hash = "N/A"
             return
 
-        date_start = pd.to_datetime(self.df["Date"].iloc[0]).strftime("%Y-%m-%d")
-        date_end = pd.to_datetime(self.df["Date"].iloc[-1]).strftime("%Y-%m-%d")
-        self.dataset_metadata = {
-            "stock_symbol": self.stock_symbol,
-            "target_mode": self.data_cfg.target_mode,
-            "feature_mode": self.data_cfg.feature_mode,
-            "scaling_mode": self.data_cfg.scaling_mode,
+        date_start = pd.to_datetime(self.state.df["Date"].iloc[0]).strftime("%Y-%m-%d")
+        date_end = pd.to_datetime(self.state.df["Date"].iloc[-1]).strftime("%Y-%m-%d")
+        self.state.dataset_metadata = {
+            "stock_symbol": self.ctx.stock_symbol,
+            "target_mode": self.ctx.data_cfg.target_mode,
+            "feature_mode": self.ctx.data_cfg.feature_mode,
+            "scaling_mode": self.ctx.data_cfg.scaling_mode,
             "target_semantics": "X[t] uses information known after close t; y[t] is t+1 return/price.",
             "execution_lag": "Signals generated after close t are applied to the aligned next realized bar.",
             "macro_release_lag": {
-                "rate_days": self.data_cfg.macro_rate_lag_days,
-                "cpi_days": self.data_cfg.macro_cpi_lag_days,
+                "rate_days": self.ctx.data_cfg.macro_rate_lag_days,
+                "cpi_days": self.ctx.data_cfg.macro_cpi_lag_days,
             },
-            "validation_config": self.validation_config,
+            "validation_config": self.ctx.validation_config,
             "date_range": f"{date_start}:{date_end}",
-            "features_count": len(self.feature_names),
-            "features": self.feature_names,
-            "feature_groups": self.feature_groups,
-            "feature_pruning": self.feature_pruning_report,
-            "sector_mapping": self.sector_mapping_report,
-            "corporate_action": self.corporate_action_report,
-            "survivorship_bias": self.survivorship_bias_report,
-            "training_window": self.training_window_report,
+            "features_count": len(self.state.feature_names),
+            "features": self.state.feature_names,
+            "feature_groups": self.state.feature_groups,
+            "feature_pruning": self.state.feature_pruning_report,
+            "sector_mapping": self.state.sector_mapping_report,
+            "corporate_action": self.state.corporate_action_report,
+            "survivorship_bias": self.state.survivorship_bias_report,
+            "training_window": self.state.training_window_report,
         }
-        payload = json.dumps(self.dataset_metadata, ensure_ascii=False, sort_keys=True)
-        self.dataset_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+        payload = json.dumps(self.state.dataset_metadata, ensure_ascii=False, sort_keys=True)
+        self.state.dataset_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-class TensorPreparationService(_OwnerBackedService):
+class TensorPreparationService:
+    def __init__(self, ctx: DataManagerContext, state: DataManagerState):
+        self.ctx = ctx
+        self.state = state
 
     def _target_horizon(self) -> int:
         """Egitim hedefinin ileri ufku (E2 Faz 1). h=1 -> mevcut davranis."""
-        return max(1, int(getattr(self.data_cfg, "target_horizon", 1) or 1))
+        return max(1, int(getattr(self.ctx.data_cfg, "target_horizon", 1) or 1))
 
     def build_target_series(self, close_values: np.ndarray) -> np.ndarray:
-        self._ensure_config_objects()
         h = self._target_horizon()
-        if self.data_cfg.target_mode == "log_return":
+        if self.ctx.data_cfg.target_mode == "log_return":
             return np.log(close_values[h:] / close_values[:-h])
-        if self.data_cfg.target_mode == "return":
+        if self.ctx.data_cfg.target_mode == "return":
             return (close_values[h:] / close_values[:-h]) - 1.0
-        if self.data_cfg.target_mode == "price":
+        if self.ctx.data_cfg.target_mode == "price":
             return close_values[h:]
         raise ValueError(
-            f"Desteklenmeyen target_mode: {self.data_cfg.target_mode}. "
+            f"Desteklenmeyen target_mode: {self.ctx.data_cfg.target_mode}. "
             "Beklenen: price, return, log_return"
         )
 
@@ -361,12 +413,11 @@ class TensorPreparationService(_OwnerBackedService):
         Cikti: {h: np.ndarray (len = len(close) - h)}. Tek-horizon path
         (mevcut `build_target_series`) ile geriye uyumludur — h=1 ayni sonuc.
         """
-        self._ensure_config_objects()
         close = np.asarray(close_values, dtype=float).ravel()
         if close.size == 0:
             return {int(h): np.asarray([], dtype=float) for h in horizons}
         out: dict[int, np.ndarray] = {}
-        mode = self.data_cfg.target_mode
+        mode = self.ctx.data_cfg.target_mode
         for h_raw in horizons:
             h = int(h_raw)
             if h <= 0:
@@ -416,7 +467,6 @@ class TensorPreparationService(_OwnerBackedService):
         Böylece aynı gün bilgisinden aynı gün hedef üretilmez. Tree ve sequence
         modeller aynı tahmin problemi üzerinde çalışır.
         """
-        self._ensure_config_objects()
         exclude = {"Date", "Close"}
         features = [c for c in train_df.columns if c not in exclude]
 
@@ -450,18 +500,18 @@ class TensorPreparationService(_OwnerBackedService):
             X_test,
             y_train,
             y_test,
-            save_dir=self.models_dir,
-            scaling_mode=self.data_cfg.scaling_mode,
-            save_scaler=not self._wf_mode,  # WF fold'larında diske yazma
+            save_dir=self.ctx.models_dir,
+            scaling_mode=self.ctx.data_cfg.scaling_mode,
+            save_scaler=not self.state._wf_mode,  # WF fold'larında diske yazma
         )
         self.record_scaling_report(train_df, test_df, scaler_X)
 
         X_train_seq, y_train_seq = create_sequences(
-            X_train_s, y_train_s, time_steps=self.data_cfg.time_steps
+            X_train_s, y_train_s, time_steps=self.ctx.data_cfg.time_steps
         )
 
         # İlk test örneği için son time_steps-1 train günü + ilk test günü kullanılır.
-        prefix_len = max(0, self.data_cfg.time_steps - 1)
+        prefix_len = max(0, self.ctx.data_cfg.time_steps - 1)
         if context_df is not None and prefix_len > 0:
             prefix_source = pd.concat([train_df.tail(prefix_len), context_df], ignore_index=True)
             X_prefix_raw = prefix_source[features].tail(prefix_len).values
@@ -479,7 +529,7 @@ class TensorPreparationService(_OwnerBackedService):
         X_test_input = np.vstack((X_prefix_s, X_test_s))
         y_test_input = np.vstack((y_prefix_s, y_test_s))
         X_test_seq, y_test_seq = create_sequences(
-            X_test_input, y_test_input, time_steps=self.data_cfg.time_steps
+            X_test_input, y_test_input, time_steps=self.ctx.data_cfg.time_steps
         )
 
         return {
@@ -503,16 +553,15 @@ class TensorPreparationService(_OwnerBackedService):
             "prev_close_test": test_prev_close,
             "market_regime_test": market_regime_test,
             "train_close_last": float(train_close[-1]),
-            "target_mode": self.data_cfg.target_mode,
-            "dates_train": train_df["Date"].iloc[1:] if "Date" in train_df.columns else None,
-            "dates_prediction": test_df["Date"].iloc[:-1] if "Date" in test_df.columns else None,
-            "dates_test": test_df["Date"].iloc[1:] if "Date" in test_df.columns else None,
+            "target_mode": self.ctx.data_cfg.target_mode,
+            "dates_train": train_df["Date"].iloc[h:] if "Date" in train_df.columns else None,
+            "dates_prediction": test_df["Date"].iloc[:-h] if "Date" in test_df.columns else None,
+            "dates_test": test_df["Date"].iloc[h:] if "Date" in test_df.columns else None,
         }
 
     def record_scaling_report(
         self, train_df: pd.DataFrame, test_df: pd.DataFrame, scaler_X: object
     ) -> None:
-        self._ensure_config_objects()
         clip_report = dict(getattr(scaler_X, "clip_report_", {}) or {})
         if not clip_report:
             clip_report = {
@@ -522,20 +571,23 @@ class TensorPreparationService(_OwnerBackedService):
                 "clip_high": None,
             }
 
-        self._prepare_tensors_call_idx += 1
+        self.state._prepare_tensors_call_idx += 1
         train_clip = float(clip_report.get("train_clip_rate_pct", 0.0) or 0.0)
         test_clip = float(clip_report.get("test_clip_rate_pct", 0.0) or 0.0)
         warning = ""
-        if test_clip >= self.data_cfg.clip_shift_warning_threshold_pct and test_clip > train_clip:
+        if (
+            test_clip >= self.ctx.data_cfg.clip_shift_warning_threshold_pct
+            and test_clip > train_clip
+        ):
             warning = (
                 "distribution_shift_warning: test clip rate is high relative to train "
                 f"({test_clip:.3f}% vs {train_clip:.3f}%)."
             )
             print(f"  [WARN] {warning}")
 
-        self.scaling_reports.append(
+        self.state.scaling_reports.append(
             {
-                "call_idx": self._prepare_tensors_call_idx,
+                "call_idx": self.state._prepare_tensors_call_idx,
                 "scaler_fit_start": (
                     pd.to_datetime(train_df["Date"].iloc[0]).strftime("%Y-%m-%d")
                     if "Date" in train_df.columns
@@ -568,66 +620,76 @@ class TensorPreparationService(_OwnerBackedService):
         # ── Train/Test Bölme ──────────────────────────────────────────────────────
 
 
-class ValidationSplitService(_OwnerBackedService):
+class ValidationSplitService:
+    def __init__(
+        self,
+        ctx: DataManagerContext,
+        state: DataManagerState,
+        prepare_tensors,
+    ):
+        self.ctx = ctx
+        self.state = state
+        self.prepare_tensors = prepare_tensors
 
     def split_data(self, validation_mode: str) -> None:
-        self._ensure_config_objects()
-        splitter = importlib.import_module("src.pipeline.data_manager").TimeSeriesSplitter
+        splitter = TimeSeriesSplitter
         print("\n" + "=" * 60)
         print("  ADIM 2 | Train/Test Split (DataManager)")
         print("=" * 60)
 
         if validation_mode == "single_split":
-            self._wf_mode = False  # single split: scaler diske yazılır
+            self.state._wf_mode = False  # single split: scaler diske yazılır
             train_df, test_df, _, _ = splitter.single_split(
-                self.df, test_ratio=self.data_cfg.test_ratio
+                self.state.df, test_ratio=self.ctx.data_cfg.test_ratio
             )
-            self.selection_df = train_df.copy()
-            self.final_holdout_df = test_df.copy()
-            self.tensors = self.prepare_tensors(train_df, test_df)
+            self.state.selection_df = train_df.copy()
+            self.state.final_holdout_df = test_df.copy()
+            self.state.tensors = self.prepare_tensors(train_df, test_df)
 
         elif validation_mode == "walk_forward":
-            self._wf_mode = True  # WF fold'larında scaler diske yazılmaz
-            wf_source_df = self.df
-            holdout_size = int(self.validation_config.get("final_holdout_size", 0) or 0)
+            self.state._wf_mode = True  # WF fold'larında scaler diske yazılmaz
+            wf_source_df = self.state.df
+            holdout_size = int(self.ctx.validation_config.get("final_holdout_size", 0) or 0)
             min_required = (
-                self.validation_config["wf_min_train_size"]
-                + self.validation_config["wf_embargo_size"]
-                + self.validation_config["wf_test_size"] * self.validation_config["wf_n_splits"]
+                self.ctx.validation_config["wf_min_train_size"]
+                + self.ctx.validation_config["wf_embargo_size"]
+                + self.ctx.validation_config["wf_test_size"]
+                * self.ctx.validation_config["wf_n_splits"]
                 + holdout_size
             )
-            if holdout_size > 0 and len(self.df) >= min_required:
-                wf_source_df = self.df.iloc[:-holdout_size].copy()
-                self.selection_df = wf_source_df.copy()
-                self.final_holdout_df = self.df.iloc[-holdout_size:].copy()
+            if holdout_size > 0 and len(self.state.df) >= min_required:
+                wf_source_df = self.state.df.iloc[:-holdout_size].copy()
+                self.state.selection_df = wf_source_df.copy()
+                self.state.final_holdout_df = self.state.df.iloc[-holdout_size:].copy()
                 print(
                     "  [INFO] Final untouched holdout ayrildi "
-                    f"({len(self.final_holdout_df)} satir): "
-                    f"{self.final_holdout_df['Date'].iloc[0]} -> {self.final_holdout_df['Date'].iloc[-1]}"
+                    f"({len(self.state.final_holdout_df)} satir): "
+                    f"{self.state.final_holdout_df['Date'].iloc[0]} -> "
+                    f"{self.state.final_holdout_df['Date'].iloc[-1]}"
                 )
             else:
-                self.selection_df = wf_source_df.copy()
-                self.final_holdout_df = None
+                self.state.selection_df = wf_source_df.copy()
+                self.state.final_holdout_df = None
                 print(
                     "  [WARN] Final holdout icin yeterli veri yok; tum veri walk-forward seciminde kullanilacak."
                 )
 
-            self.wf_splits = splitter.walk_forward_splits(
+            self.state.wf_splits = splitter.walk_forward_splits(
                 wf_source_df,
-                n_splits=self.validation_config["wf_n_splits"],
-                min_train_size=self.validation_config["wf_min_train_size"],
-                test_size=self.validation_config["wf_test_size"],
+                n_splits=self.ctx.validation_config["wf_n_splits"],
+                min_train_size=self.ctx.validation_config["wf_min_train_size"],
+                test_size=self.ctx.validation_config["wf_test_size"],
                 # Sliding window: yalnızca son ~2.7 yıl (~700 iş günü) kullanılır.
                 # Durağan olmayan (trend gösteren) BIST hisselerinde MinMaxScaler'ın
                 # neden olduğu sistematik küçük tahmini engeller.
-                max_train_size=self.validation_config["wf_max_train_size"],
-                embargo_size=self.validation_config["wf_embargo_size"],
+                max_train_size=self.ctx.validation_config["wf_max_train_size"],
+                embargo_size=self.ctx.validation_config["wf_embargo_size"],
             )
-            if not self.wf_splits:
+            if not self.state.wf_splits:
                 required_for_one = (
-                    self.validation_config["wf_min_train_size"]
-                    + self.validation_config["wf_embargo_size"]
-                    + self.validation_config["wf_test_size"]
+                    self.ctx.validation_config["wf_min_train_size"]
+                    + self.ctx.validation_config["wf_embargo_size"]
+                    + self.ctx.validation_config["wf_test_size"]
                 )
                 raise ValueError(
                     "Walk-forward split olusturulamadi: "
@@ -638,21 +700,22 @@ class ValidationSplitService(_OwnerBackedService):
                 )
             print(
                 "  [INFO] Walk-Forward splitleri olusturuldu "
-                f"({len(self.wf_splits)} adet, {self.validation_config['wf_window_type']} window, "
-                f"test={self.validation_config['wf_test_size']}, "
-                f"max_train={self.validation_config['wf_max_train_size']})."
+                f"({len(self.state.wf_splits)} adet, "
+                f"{self.ctx.validation_config['wf_window_type']} window, "
+                f"test={self.ctx.validation_config['wf_test_size']}, "
+                f"max_train={self.ctx.validation_config['wf_max_train_size']})."
             )
 
     def get_validation_protocol_data(self) -> pd.DataFrame:
         rows = []
-        for split in self.wf_splits:
+        for split in self.state.wf_splits:
             train_df = split["train"]
             test_df = split["test"]
             rows.append(
                 {
                     "Split": split["split_idx"],
                     "Protocol": "walk_forward",
-                    "Window_Type": self.validation_config["wf_window_type"],
+                    "Window_Type": self.ctx.validation_config["wf_window_type"],
                     "Train_Rows": len(train_df),
                     "Test_Rows": len(test_df),
                     "Train_Date_Start": split.get("train_date_start"),
@@ -666,46 +729,54 @@ class ValidationSplitService(_OwnerBackedService):
                     "Test_Start": split.get("test_start"),
                     "Scaler_Fit_Start": split.get("train_date_start"),
                     "Scaler_Fit_End": split.get("train_date_end"),
-                    "Features_Count": len(self.feature_names),
-                    "Features": ",".join(self.feature_names),
+                    "Features_Count": len(self.state.feature_names),
+                    "Features": ",".join(self.state.feature_names),
                     "Selection_Set": "walk_forward_train_windows",
                     "Evaluation_Set": "walk_forward_test_window",
                     "Final_Holdout_Used_For_Selection": False,
                 }
             )
 
-        if self.final_holdout_df is not None and not self.final_holdout_df.empty:
+        if self.state.final_holdout_df is not None and not self.state.final_holdout_df.empty:
             rows.append(
                 {
                     "Split": "final_holdout",
                     "Protocol": "final_holdout",
-                    "Window_Type": self.validation_config["wf_window_type"],
-                    "Train_Rows": len(self.selection_df) if self.selection_df is not None else 0,
-                    "Test_Rows": len(self.final_holdout_df),
+                    "Window_Type": self.ctx.validation_config["wf_window_type"],
+                    "Train_Rows": (
+                        len(self.state.selection_df)
+                        if self.state.selection_df is not None
+                        else 0
+                    ),
+                    "Test_Rows": len(self.state.final_holdout_df),
                     "Train_Date_Start": (
-                        self.selection_df["Date"].iloc[0]
-                        if self.selection_df is not None and not self.selection_df.empty
+                        self.state.selection_df["Date"].iloc[0]
+                        if self.state.selection_df is not None
+                        and not self.state.selection_df.empty
                         else None
                     ),
                     "Train_Date_End": (
-                        self.selection_df["Date"].iloc[-1]
-                        if self.selection_df is not None and not self.selection_df.empty
+                        self.state.selection_df["Date"].iloc[-1]
+                        if self.state.selection_df is not None
+                        and not self.state.selection_df.empty
                         else None
                     ),
-                    "Test_Date_Start": self.final_holdout_df["Date"].iloc[0],
-                    "Test_Date_End": self.final_holdout_df["Date"].iloc[-1],
+                    "Test_Date_Start": self.state.final_holdout_df["Date"].iloc[0],
+                    "Test_Date_End": self.state.final_holdout_df["Date"].iloc[-1],
                     "Scaler_Fit_Start": (
-                        self.selection_df["Date"].iloc[0]
-                        if self.selection_df is not None and not self.selection_df.empty
+                        self.state.selection_df["Date"].iloc[0]
+                        if self.state.selection_df is not None
+                        and not self.state.selection_df.empty
                         else None
                     ),
                     "Scaler_Fit_End": (
-                        self.selection_df["Date"].iloc[-1]
-                        if self.selection_df is not None and not self.selection_df.empty
+                        self.state.selection_df["Date"].iloc[-1]
+                        if self.state.selection_df is not None
+                        and not self.state.selection_df.empty
                         else None
                     ),
-                    "Features_Count": len(self.feature_names),
-                    "Features": ",".join(self.feature_names),
+                    "Features_Count": len(self.state.feature_names),
+                    "Features": ",".join(self.state.feature_names),
                     "Selection_Set": "full_selection_period",
                     "Evaluation_Set": "untouched_final_holdout",
                     "Final_Holdout_Used_For_Selection": False,
@@ -715,23 +786,26 @@ class ValidationSplitService(_OwnerBackedService):
         return pd.DataFrame(rows)
 
 
-class DataQualityReportingService(_OwnerBackedService):
+class DataQualityReportingService:
+    def __init__(self, ctx: DataManagerContext, state: DataManagerState):
+        self.ctx = ctx
+        self.state = state
 
     def check_survivorship_bias(self) -> dict:
-        if self.df is None or self.df.empty:
+        if self.state.df is None or self.state.df.empty:
             return {"survivorship_bias_warning": True, "status": "empty_dataset"}
 
-        date_start = pd.to_datetime(self.df["Date"].iloc[0]).normalize()
-        date_end = pd.to_datetime(self.df["Date"].iloc[-1]).normalize()
+        date_start = pd.to_datetime(self.state.df["Date"].iloc[0]).normalize()
+        date_end = pd.to_datetime(self.state.df["Date"].iloc[-1]).normalize()
         report = {
-            "universe_file": self.universe_file,
-            "symbol": self.stock_symbol,
+            "universe_file": self.ctx.universe_file,
+            "symbol": self.ctx.stock_symbol,
             "date_start": date_start.strftime("%Y-%m-%d"),
             "date_end": date_end.strftime("%Y-%m-%d"),
             "required_schema": "Symbol,Listed_Date,Delisted_Date,Status",
         }
 
-        if not self.universe_file or not os.path.exists(self.universe_file):
+        if not self.ctx.universe_file or not os.path.exists(self.ctx.universe_file):
             report.update(
                 {
                     "universe_file_exists": False,
@@ -745,7 +819,7 @@ class DataQualityReportingService(_OwnerBackedService):
             return report
 
         try:
-            universe = pd.read_csv(self.universe_file)
+            universe = pd.read_csv(self.ctx.universe_file)
             required = {"Symbol", "Listed_Date", "Delisted_Date", "Status"}
             missing = sorted(required - set(universe.columns))
             if missing:
@@ -761,7 +835,7 @@ class DataQualityReportingService(_OwnerBackedService):
                 return report
 
             symbol_rows = universe[
-                universe["Symbol"].astype(str).str.upper() == self.stock_symbol.upper()
+                universe["Symbol"].astype(str).str.upper() == self.ctx.stock_symbol.upper()
             ].copy()
             if symbol_rows.empty:
                 report.update(
@@ -809,17 +883,17 @@ class DataQualityReportingService(_OwnerBackedService):
     def get_data_quality_reports(self) -> dict:
         reports = {}
 
-        reports["corporate_actions"] = [self.corporate_action_report or {}]
+        reports["corporate_actions"] = [self.state.corporate_action_report or {}]
 
         feature_rows = [
             {"Feature": feature, "Feature_Group": group}
-            for feature, group in sorted(self.feature_groups.items())
+            for feature, group in sorted(self.state.feature_groups.items())
         ]
         reports["feature_groups"] = feature_rows
 
         dropped = (
-            self.feature_pruning_report.get("dropped_features", [])
-            if self.feature_pruning_report
+            self.state.feature_pruning_report.get("dropped_features", [])
+            if self.state.feature_pruning_report
             else []
         )
         pruning_rows = dropped or [
@@ -828,17 +902,17 @@ class DataQualityReportingService(_OwnerBackedService):
                 "correlated_with": "",
                 "abs_corr": "",
                 "enabled": (
-                    bool(self.feature_pruning_report.get("enabled", False))
-                    if self.feature_pruning_report
+                    bool(self.state.feature_pruning_report.get("enabled", False))
+                    if self.state.feature_pruning_report
                     else False
                 ),
-                "threshold": self.data_cfg.correlation_threshold,
+                "threshold": self.ctx.data_cfg.correlation_threshold,
             }
         ]
         reports["feature_pruning"] = pruning_rows
 
-        reports["scaling_clip"] = self.scaling_reports
-        reports["survivorship"] = [self.survivorship_bias_report or {}]
-        reports["training_window"] = [self.training_window_report or {}]
+        reports["scaling_clip"] = self.state.scaling_reports
+        reports["survivorship"] = [self.state.survivorship_bias_report or {}]
+        reports["training_window"] = [self.state.training_window_report or {}]
 
         return reports

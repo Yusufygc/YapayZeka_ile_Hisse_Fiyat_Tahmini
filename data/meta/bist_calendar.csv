@@ -2214,3 +2214,4 @@ Date,Is_Trading_Day,Session_Type,Note
 2027-06-10,True,full,Regular session
 2027-06-11,True,full,Regular session
 2027-06-12,False,closed,Weekend
+2027-06-13,False,closed,Weekend

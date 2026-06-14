@@ -28,6 +28,7 @@ from src.evaluation.evaluator import compute_metrics, plot_comparison, plot_pred
 from src.experiments.experiment_tracker import ExperimentTracker
 from src.pipeline.config import ExecutionConfig, ModelConfig
 from src.pipeline.evaluation_workflows import (
+    EvaluationWorkflowServices,
     FinalHoldoutEvaluationWorkflow,
     SingleSplitEvaluationWorkflow,
     WalkForwardEvaluationWorkflow,
@@ -340,6 +341,22 @@ class EvaluationManager:
         self.context.signal_calibration_min_trades = value
 
     @property
+    def signal_calibration_train_ratio(self) -> float:
+        return self.context.signal_calibration_train_ratio
+
+    @signal_calibration_train_ratio.setter
+    def signal_calibration_train_ratio(self, value: float) -> None:
+        self.context.signal_calibration_train_ratio = value
+
+    @property
+    def min_signal_evaluation_folds(self) -> int:
+        return self.context.min_signal_evaluation_folds
+
+    @min_signal_evaluation_folds.setter
+    def min_signal_evaluation_folds(self, value: int) -> None:
+        self.context.min_signal_evaluation_folds = value
+
+    @property
     def signal_calibration_reject_behavior(self) -> str:
         return self.context.signal_calibration_reject_behavior
 
@@ -618,9 +635,21 @@ class EvaluationManager:
         self.backtest_service = BacktestService(self.context, self.state)
         self.signal_calibration_service = SignalCalibrationService(self.context, self.state)
         self.metrics_reporting_service = MetricsReportingService(self.context, self.state)
-        self.single_split_workflow = SingleSplitEvaluationWorkflow(self)
-        self.walk_forward_workflow = WalkForwardEvaluationWorkflow(self)
-        self.final_holdout_workflow = FinalHoldoutEvaluationWorkflow(self)
+        workflow_services = EvaluationWorkflowServices(
+            prediction=self.prediction_service,
+            backtest=self.backtest_service,
+            signal_calibration=self.signal_calibration_service,
+            metrics=self.metrics_reporting_service,
+        )
+        self.single_split_workflow = SingleSplitEvaluationWorkflow(
+            self.context, self.state, workflow_services
+        )
+        self.walk_forward_workflow = WalkForwardEvaluationWorkflow(
+            self.context, self.state, workflow_services
+        )
+        self.final_holdout_workflow = FinalHoldoutEvaluationWorkflow(
+            self.context, self.state, workflow_services
+        )
 
     def _ensure_services(self) -> None:
         if not all(

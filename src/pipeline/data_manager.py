@@ -26,6 +26,8 @@ from src.features.feature_cache import FeatureCache
 from src.features.macro_pipeline import MacroPipeline
 from src.pipeline.config import DataConfig, ValidationConfig
 from src.pipeline.data_services import (
+    DataManagerContext,
+    DataManagerState,
     DataIngestionService,
     DataQualityReportingService,
     TensorPreparationService,
@@ -71,6 +73,7 @@ class DataManager:
         self.macro_cache_dir = macro_cache_dir
 
         # State variables
+        self.data_state = DataManagerState()
         self.df: pd.DataFrame = None
         self.feature_names: list = []
         self.tensors: dict = {}
@@ -128,15 +131,32 @@ class DataManager:
         # Aynı path'e tekrar tekrar yazılması (overwrite) inference için
         # hangi fold'un scaler'ının geçerli olduğunu belirsizleştirir.
         self._wf_mode: bool = False
+        self._refresh_data_context()
         self._init_pipeline_services()
 
     def _init_pipeline_services(self) -> None:
-        self.data_ingestion_service = DataIngestionService(self)
-        self.tensor_preparation_service = TensorPreparationService(self)
-        self.validation_split_service = ValidationSplitService(self)
-        self.data_quality_service = DataQualityReportingService(self)
+        self._refresh_data_context()
+        self.data_quality_service = DataQualityReportingService(
+            self.data_context, self.data_state
+        )
+        self.data_ingestion_service = DataIngestionService(
+            self.data_context,
+            self.data_state,
+            self.data_quality_service,
+        )
+        self.tensor_preparation_service = TensorPreparationService(
+            self.data_context, self.data_state
+        )
+        self.validation_split_service = ValidationSplitService(
+            self.data_context,
+            self.data_state,
+            self.prepare_tensors,
+        )
 
     def _ensure_pipeline_services(self) -> None:
+        self._ensure_data_state()
+        if all(hasattr(self, attr) for attr in ("data_cfg", "val_cfg", "models_dir")):
+            self._refresh_data_context()
         if not all(
             hasattr(self, attr)
             for attr in (
@@ -147,6 +167,213 @@ class DataManager:
             )
         ):
             self._init_pipeline_services()
+
+    def _prepare_data_services(self) -> None:
+        self._ensure_config_objects()
+        self._ensure_pipeline_services()
+
+    def _ensure_data_state(self) -> DataManagerState:
+        if "data_state" not in self.__dict__:
+            self.__dict__["data_state"] = DataManagerState()
+        return self.__dict__["data_state"]
+
+    def _refresh_data_context(self) -> None:
+        state = self._ensure_data_state()
+        validation_config = getattr(self, "validation_config", {})
+        if "data_context" not in self.__dict__:
+            self.__dict__["data_context"] = DataManagerContext(
+                data_cfg=self.data_cfg,
+                val_cfg=self.val_cfg,
+                models_dir=self.models_dir,
+                validation_config=validation_config,
+                stock_symbol=self.stock_symbol,
+                project_root=self.project_root,
+                macro_cache_dir=self.macro_cache_dir,
+                universe_file=self.universe_file,
+            )
+            return
+        self.data_context.data_cfg = self.data_cfg
+        self.data_context.val_cfg = self.val_cfg
+        self.data_context.models_dir = self.models_dir
+        self.data_context.validation_config = validation_config
+        self.data_context.stock_symbol = self.stock_symbol
+        self.data_context.project_root = self.project_root
+        self.data_context.macro_cache_dir = self.macro_cache_dir
+        self.data_context.universe_file = self.universe_file
+        self.__dict__["data_state"] = state
+
+    def _set_context_value(self, attr: str, value) -> None:
+        self.__dict__[f"_{attr}"] = value
+        if "data_context" in self.__dict__:
+            setattr(self.__dict__["data_context"], attr, value)
+
+    @property
+    def stock_symbol(self) -> str:
+        return self.__dict__.get("_stock_symbol", "")
+
+    @stock_symbol.setter
+    def stock_symbol(self, value: str) -> None:
+        self._set_context_value("stock_symbol", value)
+
+    @property
+    def project_root(self) -> str:
+        return self.__dict__.get("_project_root", "")
+
+    @project_root.setter
+    def project_root(self, value: str) -> None:
+        self._set_context_value("project_root", value)
+
+    @property
+    def macro_cache_dir(self) -> str:
+        return self.__dict__.get("_macro_cache_dir", "")
+
+    @macro_cache_dir.setter
+    def macro_cache_dir(self, value: str) -> None:
+        self._set_context_value("macro_cache_dir", value)
+
+    @property
+    def universe_file(self) -> str | None:
+        return self.__dict__.get("_universe_file")
+
+    @universe_file.setter
+    def universe_file(self, value: str | None) -> None:
+        self._set_context_value("universe_file", value)
+
+    @property
+    def df(self) -> pd.DataFrame | None:
+        return self._ensure_data_state().df
+
+    @df.setter
+    def df(self, value: pd.DataFrame | None) -> None:
+        self._ensure_data_state().df = value
+
+    @property
+    def feature_names(self) -> list:
+        return self._ensure_data_state().feature_names
+
+    @feature_names.setter
+    def feature_names(self, value: list) -> None:
+        self._ensure_data_state().feature_names = value
+
+    @property
+    def tensors(self) -> dict:
+        return self._ensure_data_state().tensors
+
+    @tensors.setter
+    def tensors(self, value: dict) -> None:
+        self._ensure_data_state().tensors = value
+
+    @property
+    def wf_splits(self) -> list:
+        return self._ensure_data_state().wf_splits
+
+    @wf_splits.setter
+    def wf_splits(self, value: list) -> None:
+        self._ensure_data_state().wf_splits = value
+
+    @property
+    def selection_df(self) -> pd.DataFrame | None:
+        return self._ensure_data_state().selection_df
+
+    @selection_df.setter
+    def selection_df(self, value: pd.DataFrame | None) -> None:
+        self._ensure_data_state().selection_df = value
+
+    @property
+    def final_holdout_df(self) -> pd.DataFrame | None:
+        return self._ensure_data_state().final_holdout_df
+
+    @final_holdout_df.setter
+    def final_holdout_df(self, value: pd.DataFrame | None) -> None:
+        self._ensure_data_state().final_holdout_df = value
+
+    @property
+    def scaling_reports(self) -> list[dict]:
+        return self._ensure_data_state().scaling_reports
+
+    @scaling_reports.setter
+    def scaling_reports(self, value: list[dict]) -> None:
+        self._ensure_data_state().scaling_reports = value
+
+    @property
+    def dataset_metadata(self) -> dict:
+        return self._ensure_data_state().dataset_metadata
+
+    @dataset_metadata.setter
+    def dataset_metadata(self, value: dict) -> None:
+        self._ensure_data_state().dataset_metadata = value
+
+    @property
+    def dataset_hash(self) -> str:
+        return self._ensure_data_state().dataset_hash
+
+    @dataset_hash.setter
+    def dataset_hash(self, value: str) -> None:
+        self._ensure_data_state().dataset_hash = value
+
+    @property
+    def corporate_action_report(self) -> dict:
+        return self._ensure_data_state().corporate_action_report
+
+    @corporate_action_report.setter
+    def corporate_action_report(self, value: dict) -> None:
+        self._ensure_data_state().corporate_action_report = value
+
+    @property
+    def feature_groups(self) -> dict[str, str]:
+        return self._ensure_data_state().feature_groups
+
+    @feature_groups.setter
+    def feature_groups(self, value: dict[str, str]) -> None:
+        self._ensure_data_state().feature_groups = value
+
+    @property
+    def feature_pruning_report(self) -> dict:
+        return self._ensure_data_state().feature_pruning_report
+
+    @feature_pruning_report.setter
+    def feature_pruning_report(self, value: dict) -> None:
+        self._ensure_data_state().feature_pruning_report = value
+
+    @property
+    def sector_mapping_report(self) -> dict:
+        return self._ensure_data_state().sector_mapping_report
+
+    @sector_mapping_report.setter
+    def sector_mapping_report(self, value: dict) -> None:
+        self._ensure_data_state().sector_mapping_report = value
+
+    @property
+    def survivorship_bias_report(self) -> dict:
+        return self._ensure_data_state().survivorship_bias_report
+
+    @survivorship_bias_report.setter
+    def survivorship_bias_report(self, value: dict) -> None:
+        self._ensure_data_state().survivorship_bias_report = value
+
+    @property
+    def training_window_report(self) -> dict:
+        return self._ensure_data_state().training_window_report
+
+    @training_window_report.setter
+    def training_window_report(self, value: dict) -> None:
+        self._ensure_data_state().training_window_report = value
+
+    @property
+    def _prepare_tensors_call_idx(self) -> int:
+        return self._ensure_data_state()._prepare_tensors_call_idx
+
+    @_prepare_tensors_call_idx.setter
+    def _prepare_tensors_call_idx(self, value: int) -> None:
+        self._ensure_data_state()._prepare_tensors_call_idx = value
+
+    @property
+    def _wf_mode(self) -> bool:
+        return self._ensure_data_state()._wf_mode
+
+    @_wf_mode.setter
+    def _wf_mode(self, value: bool) -> None:
+        self._ensure_data_state()._wf_mode = value
 
     @staticmethod
     def _config_kwargs(config_cls, values: dict) -> dict:
@@ -231,6 +458,19 @@ class DataManager:
             )
         if not hasattr(self, "models_dir"):
             self.models_dir = getattr(self, "models_dir", os.path.join("outputs", "_models"))
+        if not self.stock_symbol:
+            self.stock_symbol = os.path.splitext(os.path.basename(self.data_cfg.data_file))[0]
+        if not self.project_root:
+            self.project_root = os.path.dirname(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            )
+        if not self.macro_cache_dir:
+            self.macro_cache_dir = os.path.join(self.project_root, "data", "macro")
+        if self.universe_file is None:
+            self.universe_file = getattr(self.data_cfg, "universe_file", None)
+        if self.universe_file and not os.path.isabs(self.universe_file):
+            self.universe_file = os.path.join(self.project_root, self.universe_file)
+            self.data_cfg.universe_file = self.universe_file
         if not hasattr(self, "scaling_reports"):
             self.scaling_reports = []
         if not hasattr(self, "_prepare_tensors_call_idx"):
@@ -281,30 +521,31 @@ class DataManager:
         for attr, default in state_defaults.items():
             if not hasattr(self, attr):
                 setattr(self, attr, default)
+        self._refresh_data_context()
 
     # ── Veri Yükleme & Özellik Mühendisliği ──────────────────────────────────
     def ingest_and_engineer(self) -> None:
-        self._ensure_pipeline_services()
+        self._prepare_data_services()
         return self.data_ingestion_service.run()
 
     def _apply_training_window(self, raw_df: pd.DataFrame) -> pd.DataFrame:
-        self._ensure_pipeline_services()
+        self._prepare_data_services()
         return self.data_ingestion_service.apply_training_window(raw_df)
 
     def _format_window_candidates(self) -> list[str]:
-        self._ensure_pipeline_services()
+        self._prepare_data_services()
         return self.data_ingestion_service.format_window_candidates()
 
     def _check_survivorship_bias(self) -> dict:
-        self._ensure_pipeline_services()
+        self._prepare_data_services()
         return self.data_quality_service.check_survivorship_bias()
 
     def _fetch_macro(self, raw_df: pd.DataFrame) -> pd.DataFrame:
-        self._ensure_pipeline_services()
+        self._prepare_data_services()
         return self.data_ingestion_service.fetch_macro(raw_df)
 
     def _refresh_dataset_metadata(self) -> None:
-        self._ensure_pipeline_services()
+        self._prepare_data_services()
         return self.data_ingestion_service.refresh_dataset_metadata()
 
     def build_run_metadata(
@@ -364,7 +605,7 @@ class DataManager:
 
     # ── Tensör Hazırlama ──────────────────────────────────────────────────────
     def _build_target_series(self, close_values: np.ndarray) -> np.ndarray:
-        self._ensure_pipeline_services()
+        self._prepare_data_services()
         return self.tensor_preparation_service.build_target_series(close_values)
 
     @staticmethod
@@ -377,7 +618,7 @@ class DataManager:
         test_df: pd.DataFrame,
         context_df: pd.DataFrame | None = None,
     ) -> dict:
-        self._ensure_pipeline_services()
+        self._prepare_data_services()
         return self.tensor_preparation_service.prepare_tensors(
             train_df, test_df, context_df=context_df
         )
@@ -385,17 +626,17 @@ class DataManager:
     def _record_scaling_report(
         self, train_df: pd.DataFrame, test_df: pd.DataFrame, scaler_X: object
     ) -> None:
-        self._ensure_pipeline_services()
+        self._prepare_data_services()
         return self.tensor_preparation_service.record_scaling_report(train_df, test_df, scaler_X)
 
     def split_data(self, validation_mode: str) -> None:
-        self._ensure_pipeline_services()
+        self._prepare_data_services()
         return self.validation_split_service.split_data(validation_mode)
 
     def get_validation_protocol_data(self) -> pd.DataFrame:
-        self._ensure_pipeline_services()
+        self._prepare_data_services()
         return self.validation_split_service.get_validation_protocol_data()
 
     def get_data_quality_reports(self) -> dict:
-        self._ensure_pipeline_services()
+        self._prepare_data_services()
         return self.data_quality_service.get_data_quality_reports()

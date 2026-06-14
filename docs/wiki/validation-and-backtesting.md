@@ -2,9 +2,9 @@
 title: Validation and Backtesting
 type: concept
 status: active
-last_updated: 2026-05-25
+last_updated: 2026-06-14
 owner: llm
-source_count: 8
+source_count: 9
 ---
 
 # Validation and Backtesting
@@ -282,6 +282,14 @@ reported calibration diagnostics.
 ## Backtest Engine
 
 `src/backtesting/engine.py` converts signals into simulated P&L.
+
+As of P3 (2026-06-14), `run_backtest()` is a thin orchestrator over explicit
+data-contract helpers in `src/backtesting/contracts.py`. The helper layer owns
+tail-alignment across price/prediction/date arrays, defaulting
+`prediction_dates` to `dates`, realized/observed return calculation,
+execution/cost array assembly, and the stable empty-result schema. This refactor
+is behavior-preserving: public `run_backtest()` arguments, output dict shape,
+order/trade/equity report columns, and leakage guard semantics are unchanged.
 
 The default `ExecutionConfig` uses `signal_mode="simple"` with
 `commission_bps=0.0` and `slippage_bps=0.0`. In this mode the engine is

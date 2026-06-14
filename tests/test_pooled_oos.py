@@ -61,6 +61,21 @@ class _ConstUp:
         return np.full(len(X), 1e-3)
 
 
+class _DTypeRecorder:
+    """Model inputs should arrive as float32 matrices/vectors."""
+
+    calls: list[tuple[str, np.dtype, bool]] = []
+
+    def fit(self, X, y):
+        self.calls.append(("fit_X", X.dtype, bool(X.flags["C_CONTIGUOUS"])))
+        self.calls.append(("fit_y", y.dtype, bool(y.flags["C_CONTIGUOUS"])))
+        return self
+
+    def predict(self, X):
+        self.calls.append(("predict_X", X.dtype, bool(X.flags["C_CONTIGUOUS"])))
+        return np.zeros(len(X), dtype=np.float32)
+
+
 def _folds(panel):
     return PooledPurgedWalkForward(_cfg_cv()).split(panel)
 
@@ -177,3 +192,15 @@ def test_result_exposes_ic_summary():
     panel = _panel()
     res = evaluate_per_symbol(panel, _folds(panel), _LinModel)
     assert set(res.ic) >= {"ic_mean", "ic_std", "icir", "pct_positive", "n_days"}
+
+
+def test_evaluate_per_symbol_feeds_float32_fold_matrices():
+    panel = _panel()
+    _DTypeRecorder.calls = []
+
+    evaluate_per_symbol(panel, _folds(panel), _DTypeRecorder)
+
+    assert _DTypeRecorder.calls
+    for _, dtype, contiguous in _DTypeRecorder.calls:
+        assert dtype == np.float32
+        assert contiguous

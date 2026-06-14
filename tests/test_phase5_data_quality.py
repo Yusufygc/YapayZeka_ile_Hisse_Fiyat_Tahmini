@@ -3,7 +3,7 @@
 import os
 import shutil
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
@@ -25,8 +25,11 @@ class Phase5DataQualityTests(unittest.TestCase):
     def test_feature_pipeline_adds_volume_and_lag_features(self):
         try:
             from src.features.feature_pipeline import FeaturePipeline
+            import ta as _ta_module
         except ImportError as exc:
             self.skipTest(f"FeaturePipeline dependency missing: {exc}")
+        if isinstance(_ta_module, MagicMock):
+            self.skipTest("ta conftest stub (MagicMock) - production dep gerekli")
 
         rows = 80
         df = pd.DataFrame(
@@ -197,8 +200,14 @@ class Phase5DataQualityTests(unittest.TestCase):
         with (
             patch("src.pipeline.data_services.DataUpdater.check_and_update") as updater,
             patch("src.pipeline.data_services.load_data", return_value=frame),
-            patch.object(DataManager, "_apply_training_window", side_effect=lambda df: df),
-            patch.object(DataManager, "_check_survivorship_bias", return_value={}),
+            patch(
+                "src.pipeline.data_services.DataIngestionService.apply_training_window",
+                side_effect=lambda df: df,
+            ),
+            patch(
+                "src.pipeline.data_services.DataQualityReportingService.check_survivorship_bias",
+                return_value={},
+            ),
             patch("src.pipeline.data_services.FeatureCache") as cache_cls,
         ):
             cache_cls.return_value.make_key.return_value = "k"
@@ -236,8 +245,14 @@ class Phase5DataQualityTests(unittest.TestCase):
         with (
             patch("src.pipeline.data_services.DataUpdater.check_and_update") as updater,
             patch("src.pipeline.data_services.load_data", return_value=frame),
-            patch.object(DataManager, "_apply_training_window", side_effect=lambda df: df),
-            patch.object(DataManager, "_check_survivorship_bias", return_value={}),
+            patch(
+                "src.pipeline.data_services.DataIngestionService.apply_training_window",
+                side_effect=lambda df: df,
+            ),
+            patch(
+                "src.pipeline.data_services.DataQualityReportingService.check_survivorship_bias",
+                return_value={},
+            ),
             patch("src.pipeline.data_services.FeatureCache") as cache_cls,
         ):
             cache_cls.return_value.make_key.return_value = "k"

@@ -2,9 +2,9 @@
 title: Model Catalog
 type: concept
 status: active
-last_updated: 2026-05-25
+last_updated: 2026-06-14
 owner: llm
-source_count: 9
+source_count: 11
 ---
 
 # Model Catalog
@@ -113,6 +113,22 @@ Registry: `category="tree"`, `role="candidate"`,
 `ensemble_eligible=False` (scalar ensembles cannot combine quantile output
 correctly), `requires=("lightgbm",)`. Feeds the analysis API
 `forecast.points[*].{p10_close, p50_close, p90_close}` fields.
+
+### Kol-B Pooled Models
+
+Kol-B peer scoring uses pooled cross-sectional models outside the per-symbol
+Kol-A production candidate list. The active ensemble combines
+`GlobalPooledModel` (LightGBM) with multi-seed `TorchMLPModel` legs and blends
+same-date cross-sectional percentile ranks.
+
+As of P4-A/P4-B (2026-06-14), `TorchMLPModel` keeps its sklearn-like
+`fit(X, y)` / `predict(X)` API but trains and predicts through contiguous
+`float32` NumPy arrays plus `TensorDataset` / `DataLoader` mini-batches.
+Pooled OOS and serving scoring build fold/latest-slice matrices through
+`src/data/pooled_matrix.py`, and `GlobalPooledModel` / `EnsemblePooledModel`
+consume those matrices without re-upcasting to `float64`. This reduces peak
+allocation without changing the ensemble blend, seed determinism, peer scoring
+schema, or serving contract.
 
 ### Deep Sequence Models
 

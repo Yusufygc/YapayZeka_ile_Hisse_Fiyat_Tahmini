@@ -43,13 +43,82 @@ def _manager(tmp_path, *, val_cfg: ValidationConfig | None = None,
     )
 
 
-def test_data_manager_composes_owner_backed_services(tmp_path):
+def test_data_manager_composes_p2b_data_services(tmp_path):
     manager = _manager(tmp_path)
 
     assert isinstance(manager.data_ingestion_service, DataIngestionService)
     assert isinstance(manager.tensor_preparation_service, TensorPreparationService)
     assert isinstance(manager.validation_split_service, ValidationSplitService)
     assert isinstance(manager.data_quality_service, DataQualityReportingService)
+    assert manager.data_ingestion_service.state is manager.data_state
+    assert manager.data_quality_service.state is manager.data_state
+    assert manager.tensor_preparation_service.state is manager.data_state
+    assert manager.validation_split_service.state is manager.data_state
+    assert manager.data_ingestion_service.ctx is manager.data_context
+    assert manager.data_quality_service.ctx is manager.data_context
+
+
+def test_data_services_module_no_longer_imports_owner_backed_service():
+    import src.pipeline.data_services as data_services
+    import src.pipeline.evaluation_services as evaluation_services
+
+    assert "_OwnerBackedService" not in vars(data_services)
+    assert "_OwnerBackedService" not in vars(evaluation_services)
+
+
+def test_data_manager_state_aliases_remain_backward_compatible(tmp_path):
+    manager = _manager(tmp_path)
+    frame = _frame(10)
+
+    manager.df = frame
+    manager.feature_names = ["Feature_A"]
+    manager.tensors = {"ok": True}
+    manager.wf_splits = [{"split_idx": 1}]
+    manager.selection_df = frame.iloc[:5].copy()
+    manager.final_holdout_df = frame.iloc[5:].copy()
+    manager.scaling_reports = [{"call_idx": 1}]
+    manager.dataset_metadata = {"target_mode": "log_return"}
+    manager.dataset_hash = "hash"
+    manager.corporate_action_report = {"price_source": "Close"}
+    manager.feature_groups = {"Feature_A": "technical"}
+    manager.feature_pruning_report = {"enabled": True}
+    manager.sector_mapping_report = {"sector": "XBANK"}
+    manager.survivorship_bias_report = {"status": "covered"}
+    manager.training_window_report = {"status": "window_applied"}
+    manager._prepare_tensors_call_idx = 7
+    manager._wf_mode = True
+
+    assert manager.data_state.df is frame
+    assert manager.data_state.feature_names == ["Feature_A"]
+    assert manager.data_state.tensors == {"ok": True}
+    assert manager.data_state.wf_splits == [{"split_idx": 1}]
+    assert len(manager.data_state.selection_df) == 5
+    assert len(manager.data_state.final_holdout_df) == 5
+    assert manager.data_state.scaling_reports == [{"call_idx": 1}]
+    assert manager.data_state.dataset_metadata == {"target_mode": "log_return"}
+    assert manager.data_state.dataset_hash == "hash"
+    assert manager.data_state.corporate_action_report == {"price_source": "Close"}
+    assert manager.data_state.feature_groups == {"Feature_A": "technical"}
+    assert manager.data_state.feature_pruning_report == {"enabled": True}
+    assert manager.data_state.sector_mapping_report == {"sector": "XBANK"}
+    assert manager.data_state.survivorship_bias_report == {"status": "covered"}
+    assert manager.data_state.training_window_report == {"status": "window_applied"}
+    assert manager.data_state._prepare_tensors_call_idx == 7
+    assert manager.data_state._wf_mode is True
+
+
+def test_data_manager_context_aliases_remain_backward_compatible(tmp_path):
+    manager = _manager(tmp_path)
+
+    manager.project_root = str(tmp_path)
+    manager.macro_cache_dir = os.path.join(str(tmp_path), "macro")
+    manager.universe_file = os.path.join(str(tmp_path), "universe.csv")
+    manager.stock_symbol = "ALIAS"
+
+    assert manager.data_context.project_root == str(tmp_path)
+    assert manager.data_context.macro_cache_dir == os.path.join(str(tmp_path), "macro")
+    assert manager.data_context.universe_file == os.path.join(str(tmp_path), "universe.csv")
+    assert manager.data_context.stock_symbol == "ALIAS"
 
 
 def test_prepare_tensors_records_train_only_scaler_scope(tmp_path):
@@ -141,7 +210,7 @@ def test_target_horizon_5_uses_5day_forward_return(tmp_path):
 
 
 def test_prepare_tensors_horizon_aligns_x_and_target(tmp_path):
-    """h=5'te X satir sayisi ve original_y_test_aligned dogru hizalanir."""
+    """h=5'te X/y satirlari ve tarih metadatasi dogru hizalanir."""
     manager = _manager(tmp_path, target_horizon=5)
     df = _frame(40)
 
@@ -154,6 +223,9 @@ def test_prepare_tensors_horizon_aligns_x_and_target(tmp_path):
     test_close = df.iloc[25:]["Close"].to_numpy(dtype=float)
     np.testing.assert_allclose(tensors["original_y_test_aligned"], test_close[5:])
     np.testing.assert_allclose(tensors["prev_close_test"], test_close[:-5])
+    assert list(tensors["dates_prediction"]) == list(df.iloc[25:]["Date"].iloc[:-5])
+    assert list(tensors["dates_test"]) == list(df.iloc[25:]["Date"].iloc[5:])
+    assert list(tensors["dates_train"]) == list(df.iloc[:25]["Date"].iloc[5:])
 
 
 # --------------------------------------------------------------------------- #

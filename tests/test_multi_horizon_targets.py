@@ -14,26 +14,24 @@ import pytest
 
 # Heavy chain (joblib/sklearn) gerekiyor — yoksa skip.
 try:
-    from src.pipeline.data_services import TensorPreparationService
+    from src.pipeline.config import DataConfig, ValidationConfig
+    from src.pipeline.data_services import (
+        DataManagerContext,
+        DataManagerState,
+        TensorPreparationService,
+    )
 except ModuleNotFoundError as exc:
     pytest.skip(f"data_services import failed: {exc}", allow_module_level=True)
 
 
-class _StubDataCfg:
-    def __init__(self, target_mode="log_return"):
-        self.target_mode = target_mode
-
-
-class _StubOwner:
-    def __init__(self, target_mode="log_return"):
-        self.data_cfg = _StubDataCfg(target_mode)
-
-    def _ensure_config_objects(self):  # no-op
-        return None
-
-
 def _make_service(target_mode="log_return"):
-    return TensorPreparationService(_StubOwner(target_mode))
+    ctx = DataManagerContext(
+        data_cfg=DataConfig(data_file="TEST.csv", target_mode=target_mode),
+        val_cfg=ValidationConfig(),
+        models_dir="outputs/_models",
+        validation_config={},
+    )
+    return TensorPreparationService(ctx, DataManagerState())
 
 
 def test_default_horizons_returns_four_keys():

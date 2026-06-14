@@ -17,3 +17,4 @@ pandas-datareader==0.10.0   # FRED API -> CPI verisi; faiz TCMB EVDS'den alinir
 pandas-market-calendars==4.4.0
 statsmodels==0.14.6
 shap==0.49.1
+PySide6==6.7.1

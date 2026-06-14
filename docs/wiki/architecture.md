@@ -2,7 +2,7 @@
 title: Architecture
 type: concept
 status: active
-last_updated: 2026-06-01
+last_updated: 2026-06-14
 owner: llm
 source_count: 14
 ---
@@ -40,8 +40,7 @@ ForecastingPipeline                         src/pipeline/orchestrator.py
 ## Pipeline Service Decomposition
 
 The 2026-05-17 Phase 3 refactor keeps the main pipeline classes as public
-facades while moving stage orchestration into owner-backed workflow/service
-classes:
+facades while moving stage orchestration into workflow/service classes:
 
 ```text
 DataManager
@@ -80,22 +79,20 @@ constructor, where `EvaluationContext` is the read-only config/identity bag and
 `evaluation_services.py`). The mixin bodies now read/write `self.ctx.X` /
 `self.state.X` instead of forwarding to the owner.
 
-Migration status (2026-06-01, E1 closed at Faz 7): all four evaluation services —
+Migration status (2026-06-14, E1 closed at Faz 7, P2-C applied): all four evaluation services —
 `PredictionService` (Faz 3.1), `BacktestService` (Faz 3.2),
 `SignalCalibrationService` (Faz 3.3) and `MetricsReportingService` (Faz 3.4) —
 are converted to DI and no longer inherit `_OwnerBackedService`. `ForecastRunner`
 moved to `ForecastContext` DI and `_OwnerBackedForecastService` was deleted
-(Faz 5). The four `DataManager` services were made fail-loud (Faz 6).
-
-`_OwnerBackedService` is **intentionally retained** as the forwarding base for
-the remaining owner-forward consumers: the three evaluation workflows
-(`SingleSplit/WalkForward/FinalHoldout EvaluationWorkflow`), the three training
-workflows (`FinalHoldout/SingleSplit/WalkForward TrainingWorkflow`), and the four
-`DataManager` services — all of which both read and write shared owner state
-(the service↔workflow integration contract). Converting those 10 classes to DI
-is a large, high-regression-risk effort the epic deliberately deferred (§1 / §8,
-training is out of E1 scope); it is tracked as a **future epic** rather than
-forced into Faz 7. All forwarded writes are now fail-loud against typos.
+(Faz 5). The four `DataManager` services were made fail-loud (Faz 6), then
+P2-A converted `TensorPreparationService` and `ValidationSplitService` to
+explicit `DataManagerContext`/`DataManagerState` DI. P2-B converted
+`DataIngestionService` and `DataQualityReportingService` to the same explicit
+contract, including symbol/project/macro/universe context and dataset/report
+state fields. P2-C converted the three evaluation workflows and three training
+workflows to explicit context/state DI and removed the last forwarding base.
+`_OwnerBackedService` no longer exists in `src/pipeline/evaluation_services.py`;
+the remaining owner-forward scope is 0 classes.
 
 `EvaluationManager` still exposes `manager.X ⇄ manager.context.X` /
 `manager.state.X` property forwards so the workflows keep reading the same

@@ -25,6 +25,7 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
+from src.data.pooled_matrix import as_float32_matrix, as_float32_vector
 from src.models.global_pooled_model import GlobalPooledConfig, GlobalPooledModel
 from src.models.torch_mlp_model import TorchMLPConfig, TorchMLPModel
 
@@ -63,8 +64,8 @@ class EnsemblePooledModel:
         self.mlps: list[TorchMLPModel] = []
 
     def fit(self, X, y):
-        X = np.asarray(X, dtype=float)
-        y = np.asarray(y, dtype=float).ravel()
+        X = as_float32_matrix(X)
+        y = as_float32_vector(y)
 
         lgb_cfg = GlobalPooledConfig(**{**self.cfg.lgb.__dict__,
                                         "cat_indices": tuple(self.cfg.cat_indices)})
@@ -82,7 +83,15 @@ class EnsemblePooledModel:
     def predict(self, X):
         if self.lgb is None or not self.mlps:
             raise RuntimeError("EnsemblePooledModel egitilmedi (once fit cagir).")
-        X = np.asarray(X, dtype=float)
+        raw_shape = np.shape(X)
+        if np.ndim(X) != 2:
+            raise ValueError(f"EnsemblePooledModel.predict 2D X bekler, geldi: {raw_shape}")
+        X = as_float32_matrix(X)
+        if len(X) < 2:
+            raise ValueError(
+                "EnsemblePooledModel.predict tek tarihli cross-section icin en az "
+                "2 satir bekler; tek sembol rank-blend anlamsizdir."
+            )
         lgb_pred = np.asarray(self.lgb.predict(X), dtype=float).ravel()
         mlp_stack = np.vstack([np.asarray(m.predict(X), dtype=float).ravel() for m in self.mlps])
         mlp_pred = mlp_stack.mean(axis=0)

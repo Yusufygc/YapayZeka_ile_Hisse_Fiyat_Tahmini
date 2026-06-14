@@ -2,9 +2,9 @@
 title: Refactor Analysis 2026-06-12
 type: audit
 status: active
-last_updated: 2026-06-12
+last_updated: 2026-06-14
 owner: llm
-source_count: 18
+source_count: 21
 ---
 
 # Refactor Analysis 2026-06-12
@@ -28,21 +28,67 @@ and updates the risk picture after E1/E2 work.
   Kol-A remains per-symbol absolute forecasting; Kol-B is pooled cross-sectional
   ranking with IC/ICIR as the correct validation lens. The two outputs should
   stay separate in API language and confidence handling.
-- **The largest remaining code-quality risk is stateful orchestration, not a
-  simple missing helper.** Evaluation services and `ForecastRunner` moved to DI,
-  but training/evaluation/DataManager workflows still inherit
-  `_OwnerBackedService` and write owner state. Fail-loud guards reduce typo risk,
-  but SRP/test isolation is still weaker than explicit state-passing.
+- **The largest remaining code-quality risk is now memory/performance scale, not
+  owner-forward magic.** Evaluation services, ForecastRunner, all four
+  DataManager services, and all six training/evaluation workflows now use
+  explicit context/state DI. P3 also slimmed the backtest engine behind explicit
+  data contracts without changing validation semantics.
 - **Pooled serving needs stricter contract guards.** `EnsemblePooledModel.predict`
   assumes one cross-section/date. That is correct for nightly serving, but the
   model API should fail loudly if multi-date batches are accidentally passed.
-- **Memory pressure exists in pooled deep training.** `TorchMLPModel.fit` converts
-  the full feature matrix to one Torch tensor, and ensemble training repeats this
-  for multiple seeds. This is acceptable for offline nightly runs today, but it
-  should be moved toward dataset/dataloader batching if the universe or features
-  grow.
+- **Memory pressure is reduced on the pooled model path.** P4-A moved
+  `TorchMLPModel` away from full normalized Torch tensor allocation toward
+  float32 mini-batch fit/predict. P4-B then moved pooled OOS, serving scoring,
+  and pooled model wrappers onto shared contiguous `float32` matrix helpers.
 
 ## Critical Refactor Priorities
+
+## Implementation Update 2026-06-14
+
+- **P0 guard dalgasi tamamlandi:** Kol-A ana `ForecastingPipeline` akisi artik
+  `target_horizon > 1` degerini production backtest/forecast semantigi
+  tamamlanana kadar fail-loud engeller. `src.cli.forecast --horizon-days` bu
+  guard'dan etkilenmez; o parametre forward forecast ufkudur, `DataConfig.target_horizon`
+  degildir.
+- **Tensor tarih metadatasi h-aware oldu:** `TensorPreparationService` icinde
+  `dates_train`, `dates_prediction` ve `dates_test` artik `h` ufkuna gore
+  hizalanir. `h=1` davranisi korunur; `h>1` icin helper/research seviyesinde
+  tarih metadatasi dogrudur fakat production backtest hala guard altindadir.
+- **P1 serving contract guard eklendi:** `score_latest_universe()` default
+  strict modda multi-date paneli reddeder; eski latest-date secimi yalniz
+  `PeerScoringConfig(strict_single_date=False)` ile acilir. `EnsemblePooledModel.predict()`
+  2D input ve en az iki satirli cross-section bekler.
+- **P2-A DataManager DI dilimi tamamlandi:** `TensorPreparationService` ve
+  `ValidationSplitService` artik `_OwnerBackedService` mirasi kullanmaz; explicit
+  `DataManagerContext` + `DataManagerState` ile calisir. `DataManager` public
+  attribute kontrati property alias'larla korunur. Ingestion, data-quality,
+  training workflows ve evaluation workflows owner-backed olarak bilincli sekilde
+  P2-B/P2-C'ye ertelendi.
+- **P2-B DataManager ingestion/data-quality DI dilimi tamamlandi:** `DataIngestionService`
+  ve `DataQualityReportingService` de owner-forward mirasindan cikarildi. `DataManagerContext`
+  stock/project/macro/universe alanlarini, `DataManagerState` dataset/report
+  alanlarini tasir; `DataManager` public attribute kontrati property alias'larla
+  korunur. `src/pipeline/data_services.py` artik `_OwnerBackedService` import
+  etmez.
+- **P2-C workflow DI dilimi tamamlandi:** 3 training workflow ve 3 evaluation
+  workflow explicit context/state/services DI sozlesmesine tasindi. `_OwnerBackedService`
+  tamamen silindi; kalan owner-forward kapsam 0 siniftir.
+- **P3 backtest slimming tamamlandi:** `run_backtest()` public API'si korunarak
+  hizalama, realized/observed return, execution/cost ve bos sonuc sozlesmeleri
+  `src/backtesting/contracts.py` icindeki test edilebilir data-contract
+  helper'larina tasindi. Default `simple` long/flat semantigi, rapor kolonlari,
+  maliyet hesaplari ve leakage guard davranisi degismedi.
+- **P4-A Torch MLP batching tamamlandi:** `TorchMLPModel.fit()` ve `predict()`
+  artik full standardized matrix/full Torch tensor olusturmak yerine contiguous
+  `float32` NumPy + `TensorDataset/DataLoader` batch akisini kullanir. Train-only
+  `mu/sd` `float32` saklanir; embedding mimarisi, seed determinism ve
+  `EnsemblePooledModel` public kontrati degismedi.
+- **P4-B pooled matrix downcast tamamlandi:** pooled OOS ve serving scoring
+  akislari `src/data/pooled_matrix.py` uzerinden fold/latest-slice bazli
+  contiguous `float32` feature/target matrix uretir. `GlobalPooledModel` ve
+  `EnsemblePooledModel` artik bu input'u tekrar `float64`'a upcast etmez.
+- **Kalan is:** P0'un tam h-aware backtest/forecast semantigi, P1 ensemble-OOS
+  calibration ve daha genis panel assembly/profiling temizligi henuz yapilmadi.
 
 ### P0 - Horizon-Aware Alignment
 
@@ -69,31 +115,39 @@ backtest, or forecast output:
 
 ### P2 - Stateful Workflow Decomposition
 
-- Convert the remaining `_OwnerBackedService` consumers in
-  `evaluation_workflows.py`, `training_workflows.py`, and `data_services.py` to
-  explicit context/state objects in small slices.
-- Prioritize `TensorPreparationService` and `ValidationSplitService` because
-  they own leakage and tensor contracts.
-- Keep characterization tests ahead of each migration; do not rewrite all
-  workflows in one PR.
+- **Completed 2026-06-14:** all four `DataManager` services and all six
+  training/evaluation workflows now use explicit context/state DI.
+- `_OwnerBackedService` was deleted from `evaluation_services.py`; future cleanup
+  should focus on shrinking orchestration/backtest functions rather than
+  forwarding removal.
 
 ### P3 - Backtest and Signal Engine Slimming
 
-- Split `run_backtest` into a thin orchestrator plus data-contract helpers for
-  alignment, signal frame, execution arrays, cost arrays, trade rows, and equity
-  output.
-- Keep default `simple` long/flat semantics unchanged.
-- Add tests that prove `prediction_date`, `execution date`, and realized return
-  use the intended horizon.
+- **Completed 2026-06-14:** `run_backtest` is now a thin orchestrator. Input
+  tail-alignment, default prediction-date handling, realized/observed return
+  calculation, execution/cost arrays, and empty-result schema are isolated in
+  `src/backtesting/contracts.py`.
+- Default `simple` long/flat semantics, `legacy`/`professional` signal modes,
+  trade/equity output shape, fold propagation, transaction-cost columns, and
+  order-report date columns are unchanged.
+- Regression coverage lives in `tests/test_backtest_engine_contract.py` plus the
+  existing phase/leakage/report suites.
 
 ### P4 - Memory and Performance
 
-- Move `TorchMLPModel.fit` to `TensorDataset` / `DataLoader` batching rather than
-  materializing the entire matrix as one tensor.
-- Downcast dense pooled numeric features to `float32` after train-only
-  preprocessing where precision loss is acceptable.
-- Avoid repeated dataframe copies in pooled feature assembly and nightly scoring
-  unless mutation isolation is required.
+- **P4-A completed 2026-06-14:** `TorchMLPModel.fit` and `predict` now use
+  contiguous `float32` input arrays plus `TensorDataset` / `DataLoader`
+  mini-batches. Numeric features are standardized per batch from train-only
+  `mu/sd`; categorical id columns remain raw for embeddings.
+- Public sklearn-like model API, seed determinism, multi-seed ensemble blend,
+  and serving cross-section contract are unchanged.
+- **P4-B completed 2026-06-14:** pooled OOS and nightly scoring now build
+  contiguous `float32` matrices through `src/data/pooled_matrix.py`. Fold-level
+  train/test matrices are created only for the active fold, and serving latest
+  cross-section scoring uses the same helper.
+- `GlobalPooledModel` and `EnsemblePooledModel` consume `float32` matrices
+  without re-upcasting to `float64`; public prediction outputs, peer scoring
+  schema, XAI behavior, and rank-blend semantics are unchanged.
 
 ## Recommended Execution Order
 

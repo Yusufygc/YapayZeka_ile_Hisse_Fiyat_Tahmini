@@ -31,6 +31,40 @@ def test_model_trainer_composes_training_workflows(tmp_path):
     assert isinstance(trainer.single_split_training_workflow, SingleSplitTrainingWorkflow)
     assert isinstance(trainer.walk_forward_training_workflow, WalkForwardTrainingWorkflow)
     assert isinstance(trainer.final_holdout_training_workflow, FinalHoldoutTrainingWorkflow)
+    assert trainer.single_split_training_workflow.ctx is trainer.training_context
+    assert trainer.walk_forward_training_workflow.ctx is trainer.training_context
+    assert trainer.final_holdout_training_workflow.ctx is trainer.training_context
+    assert trainer.single_split_training_workflow.state is trainer.training_state
+    assert trainer.walk_forward_training_workflow.state is trainer.training_state
+    assert trainer.final_holdout_training_workflow.state is trainer.training_state
+
+
+def test_training_workflows_module_no_longer_imports_owner_backed_service():
+    import src.pipeline.training_workflows as training_workflows
+
+    assert "_OwnerBackedService" not in vars(training_workflows)
+
+
+def test_model_trainer_context_state_aliases_remain_backward_compatible(tmp_path):
+    trainer = _trainer(tmp_path)
+
+    trainer.stock_symbol = "ALIAS"
+    trainer.feature_names = ["A"]
+    trainer.dataset_hash = "hash2"
+    trainer.dataset_metadata = {"target_mode": "return"}
+    trainer.trained_models = {"M": object()}
+    trainer.wf_results = {"M": {"RMSE": 1.0}}
+    trainer.wf_y_true = np.array([1.0])
+    trainer.final_holdout_model_name = "M"
+
+    assert trainer.training_context.stock_symbol == "ALIAS"
+    assert trainer.training_context.feature_names == ["A"]
+    assert trainer.training_context.dataset_hash == "hash2"
+    assert trainer.training_context.dataset_metadata == {"target_mode": "return"}
+    assert "M" in trainer.training_state.trained_models
+    assert trainer.training_state.wf_results == {"M": {"RMSE": 1.0}}
+    np.testing.assert_allclose(trainer.training_state.wf_y_true, np.array([1.0]))
+    assert trainer.training_state.final_holdout_model_name == "M"
 
 
 def test_train_public_methods_delegate_to_workflows(tmp_path):

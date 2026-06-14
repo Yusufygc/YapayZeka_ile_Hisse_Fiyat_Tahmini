@@ -3,8 +3,7 @@
 evaluation_services.py - EvaluationManager servis kompozisyon katmani.
 
 Bu modul, eski mixin is mantigini manager mirasindan ayirip servis
-nesnelerine tasir. Servisler mevcut davranisi korumak icin owner-backed
-calisir; EvaluationManager public orkestrasyon yuzeyi olarak kalir.
+nesnelerine tasir. EvaluationManager public orkestrasyon yuzeyi olarak kalir.
 """
 
 from __future__ import annotations
@@ -29,9 +28,7 @@ class EvaluationContext:
 
     Faz 2 (E1 owner-forward epiği): servislerin owner'dan OKUDUĞU tüm config/
     identity attribute'ları burada toplanır. EvaluationManager bu alanları
-    property forward ile (`manager.X` <-> `manager.context.X`) açar; owner-forward
-    servisler/workflow'lar getattr üzerinden aynı context'ten okur. Faz 3'te
-    servisler doğrudan `self.ctx.X` kullanacak.
+    property forward ile (`manager.X` <-> `manager.context.X`) açar.
 
     Tüm alanlar default'ludur: `__init__`'i atlayan (`__new__`) mekanizma testleri
     için boş `EvaluationContext()` kurulabilir olmalı (bkz. `manager.context` lazy
@@ -60,6 +57,8 @@ class EvaluationContext:
     xai_dir: str = ""
     # Faz 3.2: BacktestService'in okuduğu exe_cfg flag'leri (READ-ONLY).
     write_trade_logs: bool = False
+    signal_calibration_train_ratio: float = 0.70
+    min_signal_evaluation_folds: int = 3
     signal_calibration_min_trades: int = 6
     signal_calibration_reject_behavior: str = "no_trade"
     auto_signal_diagnostics: bool = True
@@ -90,8 +89,8 @@ class EvaluationState:
 
     Faz 1 (E1 owner-forward epiği): EvaluationManager'in tüm mutable evaluation
     state'i artık burada tutulur. Manager bu alanları property forward ile
-    (`manager.X` <-> `manager.state.X`) açar; servisler/workflow'lar owner-forward
-    üzerinden aynı state'e yazar/okur. Faz 3'te servisler `self.state.X`'e geçer.
+    (`manager.X` <-> `manager.state.X`) açar; servisler ve workflow'lar explicit
+    DI ile aynı state'e yazar/okur.
     """
 
     predictions: Dict[str, np.ndarray] = field(default_factory=dict)
@@ -112,63 +111,6 @@ class EvaluationState:
     signal_config: Any = None
     signal_threshold_source: str = "default_config"
     signal_threshold_calibration_summary: Dict[str, Any] = field(default_factory=dict)
-
-
-class _OwnerBackedService:
-    """
-    Compatibility adapter while the old mixin logic is moved behind services.
-
-    The mixin methods read/write attributes such as predictions, signal_config
-    and dataset_metadata. Forwarding those operations to the owner keeps public
-    behavior stable while EvaluationManager no longer inherits the mixins.
-
-    Writes are fail-loud: a forwarded assignment must either target an attribute
-    that already exists on the owner (every owner pre-initializes its own state
-    in ``__init__``) or be one of the few attributes that are legitimately
-    lazy-created on first use (``_LAZY_FORWARDED_WRITES``). This closes the
-    silent-typo encapsulation hole of the old blanket ``__setattr__`` (a mistyped
-    attribute used to create a new owner attribute silently) while keeping the
-    shared base usable across every service family (evaluation, training/eval
-    workflows, data-manager services), each of which forwards to a different
-    owner with a different state surface.
-    """
-
-    # Attributes that may be created on the owner on first write because they are
-    # intentionally lazy-initialized rather than set in the owner's __init__.
-    _LAZY_FORWARDED_WRITES = frozenset({"ensemble_weight_scope"})
-
-    # Fail-loud guard. Enabled for every owner-forward family — evaluation services,
-    # training/eval workflows, and (since Faz 6) DataManager services. Each owner
-    # pre-initializes its full mutable state surface in ``__init__`` (and DataManager
-    # also via ``_ensure_config_objects`` for ``__new__``-built legacy objects), so a
-    # forwarded write to an unknown attribute is a typo and must raise.
-    _FAIL_LOUD = True
-
-    def __init__(self, owner: Any) -> None:
-        object.__setattr__(self, "_owner", owner)
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._owner, name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name == "_owner":
-            object.__setattr__(self, name, value)
-            return
-        owner = object.__getattribute__(self, "_owner")
-        if (
-            self._FAIL_LOUD
-            and not hasattr(owner, name)
-            and name not in self._LAZY_FORWARDED_WRITES
-        ):
-            raise AttributeError(
-                f"{type(self).__name__} tried to set unknown owner attribute "
-                f"'{name}'. Owner-forwarded writes must target an attribute the "
-                f"owner initialized (or a declared lazy attribute); this guards "
-                f"against silent typos. Initialize it in the owner's __init__ or "
-                f"add it to _OwnerBackedService._LAZY_FORWARDED_WRITES if the "
-                f"write is intentional."
-            )
-        setattr(owner, name, value)
 
 
 class PredictionService(_PredictionEngineMixin):
@@ -221,8 +163,7 @@ class MetricsReportingService(_MetricsReporterMixin):
     commission/slippage_bps, stock_symbol, feature_names, xai_dir,
     write_xai_tables, write_markdown_reports) / `self.state.X` (mutable runtime:
     predictions, prediction_targets, quantile_predictions, y_true_aligned,
-    ensemble_weights, latest_backtest_results) kullanır. Son owner-backed servisti;
-    `_OwnerBackedService` artık hiçbir evaluation servisi tarafından kullanılmıyor.
+    ensemble_weights, latest_backtest_results) kullanır.
     """
 
     def __init__(self, ctx: EvaluationContext, state: EvaluationState) -> None:

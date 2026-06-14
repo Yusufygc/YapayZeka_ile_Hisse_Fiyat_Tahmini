@@ -27,6 +27,8 @@ from typing import Callable, Sequence
 import numpy as np
 import pandas as pd
 
+from src.data.pooled_matrix import as_float32_matrix, as_float32_vector
+
 # loader/oos ile ayni "ozellik olmayan" kolonlar. target* varyantlari (target,
 # target_cs, ...) ASLA feature olmamali -> sizinti.
 _BASE_NON_FEAT = {
@@ -124,8 +126,8 @@ class GlobalPooledModel:
     def fit(self, X, y):
         import lightgbm as lgb
 
-        X = np.asarray(X, dtype=float)
-        y = np.asarray(y, dtype=float).ravel()
+        X = as_float32_matrix(X)
+        y = as_float32_vector(y)
         cat = list(self.cfg.cat_indices)
         dset = lgb.Dataset(
             X, label=y,
@@ -141,7 +143,7 @@ class GlobalPooledModel:
     def predict(self, X):
         if self.booster is None:
             raise RuntimeError("GlobalPooledModel egitilmedi.")
-        return np.asarray(self.booster.predict(np.asarray(X, dtype=float)), dtype=float)
+        return np.asarray(self.booster.predict(as_float32_matrix(X)), dtype=float)
 
 
 def make_global_model_factory(

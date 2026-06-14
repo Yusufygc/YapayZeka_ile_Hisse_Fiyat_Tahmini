@@ -4,6 +4,8 @@ model_trainer.py - Model Egitim Orkestratoru
 """
 
 import os
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
 import numpy as np
 
@@ -36,6 +38,51 @@ XGBoostModel = model_factory.XGBoostModel
 RandomForestModel = model_factory.RandomForestModel
 
 
+@dataclass
+class TrainingContext:
+    stock_symbol: str = ""
+    tracker: ExperimentTracker | None = None
+    feature_names: list = field(default_factory=list)
+    selected_models: list = field(default_factory=list)
+    candidate_models: set = field(default_factory=set)
+    benchmark_models: set = field(default_factory=set)
+    dataset_hash: str = "N/A"
+    dataset_metadata: dict = field(default_factory=dict)
+    model_config: dict = field(default_factory=dict)
+    deep_config: dict = field(default_factory=dict)
+
+
+@dataclass
+class TrainingState:
+    trained_models: dict = field(default_factory=dict)
+    wf_results: dict = field(default_factory=dict)
+    wf_fold_metrics: dict = field(default_factory=dict)
+    wf_predictions: dict = field(default_factory=dict)
+    wf_backtest_inputs: dict = field(default_factory=dict)
+    wf_y_true: Any = None
+    final_holdout_model: Any = None
+    final_holdout_model_name: str | None = None
+
+
+@dataclass
+class TrainingHelpers:
+    model_class_for_name: Callable
+    make_prophet: Callable
+    make_arima: Callable
+    make_lstm: Callable
+    make_lstm_lite: Callable
+    make_attention_lstm_v2: Callable
+    has_min_sequences: Callable
+    wf_has_min_sequences: Callable
+    skip: Callable
+    wf_run: Callable
+    baseline_specs: Callable
+    linear_baseline_specs: Callable
+    boosting_baseline_specs: Callable
+    sequence_baseline_specs: Callable
+    dump_feature_importances: Callable
+
+
 class ModelTrainer:
     def __init__(
         self,
@@ -47,33 +94,55 @@ class ModelTrainer:
         dataset_metadata: dict | None = None,
         model_config: dict | None = None,
     ):
-        self.stock_symbol = stock_symbol
-        self.tracker = tracker
-        self.feature_names = feature_names
-        self.selected_models = normalize_candidate_models(selected_models)
-        self.candidate_models = set(self.selected_models)
-        self.benchmark_models = set(_BENCHMARK_MODELS)
-        self.dataset_hash = dataset_hash
-        self.dataset_metadata = dataset_metadata or {}
-        self.model_config = model_config or self.dataset_metadata.get("model_config", {})
-        self.deep_config = self._build_deep_config(self.model_config.get("deep_learning", {}))
-
-        self.trained_models = {}
-        self.wf_results = {}
-        self.wf_fold_metrics = {}
-        self.wf_predictions = {}
-        self.wf_backtest_inputs = {}
-        self.wf_y_true = None
-        self.final_holdout_model = None
-        self.final_holdout_model_name = None
+        dataset_metadata = dataset_metadata or {}
+        model_config = model_config or dataset_metadata.get("model_config", {})
+        selected_models = normalize_candidate_models(selected_models)
+        self.training_context = TrainingContext(
+            stock_symbol=stock_symbol,
+            tracker=tracker,
+            feature_names=feature_names,
+            selected_models=selected_models,
+            candidate_models=set(selected_models),
+            benchmark_models=set(_BENCHMARK_MODELS),
+            dataset_hash=dataset_hash,
+            dataset_metadata=dataset_metadata,
+            model_config=model_config,
+            deep_config=self._build_deep_config(model_config.get("deep_learning", {})),
+        )
+        self.training_state = TrainingState()
         self._init_training_workflows()
 
     def _init_training_workflows(self) -> None:
-        self.single_split_training_workflow = SingleSplitTrainingWorkflow(self)
-        self.walk_forward_training_workflow = WalkForwardTrainingWorkflow(self)
-        self.final_holdout_training_workflow = FinalHoldoutTrainingWorkflow(self)
+        helpers = TrainingHelpers(
+            model_class_for_name=self._model_class_for_name,
+            make_prophet=self._make_prophet,
+            make_arima=self._make_arima,
+            make_lstm=self._make_lstm,
+            make_lstm_lite=self._make_lstm_lite,
+            make_attention_lstm_v2=self._make_attention_lstm_v2,
+            has_min_sequences=self._has_min_sequences,
+            wf_has_min_sequences=self._wf_has_min_sequences,
+            skip=self._skip,
+            wf_run=self._wf_run,
+            baseline_specs=self._baseline_specs,
+            linear_baseline_specs=self._linear_baseline_specs,
+            boosting_baseline_specs=self._boosting_baseline_specs,
+            sequence_baseline_specs=self._sequence_baseline_specs,
+            dump_feature_importances=self._dump_feature_importances,
+        )
+        self.single_split_training_workflow = SingleSplitTrainingWorkflow(
+            self.training_context, self.training_state, helpers
+        )
+        self.walk_forward_training_workflow = WalkForwardTrainingWorkflow(
+            self.training_context, self.training_state, helpers
+        )
+        self.final_holdout_training_workflow = FinalHoldoutTrainingWorkflow(
+            self.training_context, self.training_state, helpers
+        )
 
     def _ensure_training_workflows(self) -> None:
+        self._ensure_training_context()
+        self._ensure_training_state()
         if not all(
             hasattr(self, attr)
             for attr in (
@@ -83,6 +152,160 @@ class ModelTrainer:
             )
         ):
             self._init_training_workflows()
+
+    def _ensure_training_context(self) -> TrainingContext:
+        if "training_context" not in self.__dict__:
+            self.__dict__["training_context"] = TrainingContext()
+        return self.__dict__["training_context"]
+
+    def _ensure_training_state(self) -> TrainingState:
+        if "training_state" not in self.__dict__:
+            self.__dict__["training_state"] = TrainingState()
+        return self.__dict__["training_state"]
+
+    @property
+    def stock_symbol(self) -> str:
+        return self._ensure_training_context().stock_symbol
+
+    @stock_symbol.setter
+    def stock_symbol(self, value: str) -> None:
+        self._ensure_training_context().stock_symbol = value
+
+    @property
+    def tracker(self) -> ExperimentTracker | None:
+        return self._ensure_training_context().tracker
+
+    @tracker.setter
+    def tracker(self, value: ExperimentTracker | None) -> None:
+        self._ensure_training_context().tracker = value
+
+    @property
+    def feature_names(self) -> list:
+        return self._ensure_training_context().feature_names
+
+    @feature_names.setter
+    def feature_names(self, value: list) -> None:
+        self._ensure_training_context().feature_names = value
+
+    @property
+    def selected_models(self) -> list:
+        return self._ensure_training_context().selected_models
+
+    @selected_models.setter
+    def selected_models(self, value: list) -> None:
+        self._ensure_training_context().selected_models = value
+
+    @property
+    def candidate_models(self) -> set:
+        return self._ensure_training_context().candidate_models
+
+    @candidate_models.setter
+    def candidate_models(self, value: set) -> None:
+        self._ensure_training_context().candidate_models = value
+
+    @property
+    def benchmark_models(self) -> set:
+        return self._ensure_training_context().benchmark_models
+
+    @benchmark_models.setter
+    def benchmark_models(self, value: set) -> None:
+        self._ensure_training_context().benchmark_models = value
+
+    @property
+    def dataset_hash(self) -> str:
+        return self._ensure_training_context().dataset_hash
+
+    @dataset_hash.setter
+    def dataset_hash(self, value: str) -> None:
+        self._ensure_training_context().dataset_hash = value
+
+    @property
+    def dataset_metadata(self) -> dict:
+        return self._ensure_training_context().dataset_metadata
+
+    @dataset_metadata.setter
+    def dataset_metadata(self, value: dict) -> None:
+        self._ensure_training_context().dataset_metadata = value
+
+    @property
+    def model_config(self) -> dict:
+        return self._ensure_training_context().model_config
+
+    @model_config.setter
+    def model_config(self, value: dict) -> None:
+        self._ensure_training_context().model_config = value
+
+    @property
+    def deep_config(self) -> dict:
+        return self._ensure_training_context().deep_config
+
+    @deep_config.setter
+    def deep_config(self, value: dict) -> None:
+        self._ensure_training_context().deep_config = value
+
+    @property
+    def trained_models(self) -> dict:
+        return self._ensure_training_state().trained_models
+
+    @trained_models.setter
+    def trained_models(self, value: dict) -> None:
+        self._ensure_training_state().trained_models = value
+
+    @property
+    def wf_results(self) -> dict:
+        return self._ensure_training_state().wf_results
+
+    @wf_results.setter
+    def wf_results(self, value: dict) -> None:
+        self._ensure_training_state().wf_results = value
+
+    @property
+    def wf_fold_metrics(self) -> dict:
+        return self._ensure_training_state().wf_fold_metrics
+
+    @wf_fold_metrics.setter
+    def wf_fold_metrics(self, value: dict) -> None:
+        self._ensure_training_state().wf_fold_metrics = value
+
+    @property
+    def wf_predictions(self) -> dict:
+        return self._ensure_training_state().wf_predictions
+
+    @wf_predictions.setter
+    def wf_predictions(self, value: dict) -> None:
+        self._ensure_training_state().wf_predictions = value
+
+    @property
+    def wf_backtest_inputs(self) -> dict:
+        return self._ensure_training_state().wf_backtest_inputs
+
+    @wf_backtest_inputs.setter
+    def wf_backtest_inputs(self, value: dict) -> None:
+        self._ensure_training_state().wf_backtest_inputs = value
+
+    @property
+    def wf_y_true(self):
+        return self._ensure_training_state().wf_y_true
+
+    @wf_y_true.setter
+    def wf_y_true(self, value) -> None:
+        self._ensure_training_state().wf_y_true = value
+
+    @property
+    def final_holdout_model(self):
+        return self._ensure_training_state().final_holdout_model
+
+    @final_holdout_model.setter
+    def final_holdout_model(self, value) -> None:
+        self._ensure_training_state().final_holdout_model = value
+
+    @property
+    def final_holdout_model_name(self) -> str | None:
+        return self._ensure_training_state().final_holdout_model_name
+
+    @final_holdout_model_name.setter
+    def final_holdout_model_name(self, value: str | None) -> None:
+        self._ensure_training_state().final_holdout_model_name = value
 
     @staticmethod
     def _build_deep_config(config: dict) -> dict:

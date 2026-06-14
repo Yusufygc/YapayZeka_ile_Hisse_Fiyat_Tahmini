@@ -1,0 +1,74 @@
+/* Custom Component Styles: Log Viewer, Status Cards, and Indicators */
+
+/* Log Viewer Styles */
+QPlainTextEdit#log_viewer {
+    background-color: #020617; /* Very dark slate */
+    color: #e2e8f0; /* Light gray */
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 12px;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    padding: 8px;
+}
+
+/* Info and Metric Cards */
+QFrame#status_card {
+    background-color: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    padding: 12px;
+}
+
+QFrame#status_card:hover {
+    border-color: #475569;
+}
+
+QLabel#card_title {
+    font-size: 14px;
+    font-weight: bold;
+    color: #94a3b8; /* Secondary text color */
+}
+
+QLabel#card_value {
+    font-size: 20px;
+    font-weight: bold;
+    color: #3b82f6; /* Accent color */
+}
+
+QLabel#card_desc {
+    font-size: 11px;
+    color: #64748b;
+}
+
+/* Success / Warning / Danger labels */
+QLabel#label_success {
+    color: #22c55e; /* Green 500 */
+    font-weight: bold;
+}
+
+QLabel#label_warning {
+    color: #eab308; /* Yellow 500 */
+    font-weight: bold;
+}
+
+QLabel#label_danger {
+    color: #ef4444; /* Red 500 */
+    font-weight: bold;
+}
+
+/* GroupBox styling for framing parameters */
+QGroupBox {
+    border: 1px solid #334155;
+    border-radius: 8px;
+    margin-top: 12px;
+    padding-top: 16px;
+    font-weight: bold;
+    color: #f8fafc;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0 5px;
+}

@@ -2,7 +2,7 @@
 title: Wiki Index
 type: index
 status: active
-last_updated: 2026-06-12
+last_updated: 2026-06-14
 owner: llm
 ---
 
@@ -38,6 +38,7 @@ linked pages below.
 - [E2 Faz 2 Pooled CV Design](e2-faz2-pooled-cv-design.md): Pooled panel loader + tarih-bazli purged coklu-pencere CV detayli tasarimi; leakage taksonomisi (capraz-sembol / horizon / feature), modul plani (`src/data/pooled_loader.py`, `src/validation/pooled_cv.py`), test plani, acceptance, acik sorular.
 - [E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md): Egitim tarafi redesign — tek-hisse overfit'i gidermek icin ~592 hisseyi havuzlayan tek kosullu global model; per-symbol urun/`GET /analysis/{symbol}` kontrati korunur; grup-purged coklu-pencere OOS, cold-start, opsiyonel per-symbol fine-tune. Dal: `feat/e2-pooled-global-model`.
 - [Product Decision Support Design](product-decision-support-design.md): Desktop AI decision-support product boundary, target architecture, MVP scope, and phase roadmap.
+- [Desktop GUI Application](desktop-gui-application.md): PySide6-based corporate desktop application interface, subprocess architecture, modular QSS styling, and testing.
 - [Analysis API Contract](analysis-api-contract.md): `GET /analysis/{symbol}` response schema, status codes, and confidence label definition.
 - [Confidence and Risk Policy](confidence-and-risk-policy.md): Confidence label derivation rules, signal-diagnosis mapping, eligibility status, and data-quality gates.
 - [LLM Explanation Policy](llm-explanation-policy.md): AI explanation layer role, forbidden actions, response structure, system prompt skeleton, and disclaimer.
@@ -57,15 +58,15 @@ linked pages below.
   thinner orchestrator (deleted 10 dead delegations, 1035 → 979 lines). Faz 5
   moved `ForecastRunner` to `ForecastContext` DI and **deleted**
   `_OwnerBackedForecastService`. Faz 6 made the 4 `DataManager` services
-  fail-loud. Faz 7 (cleanup) deleted the temporary
-  `tools/owner_forward_inventory.py` and updated docs. The `_OwnerBackedService`
-  base is **intentionally retained**: it still backs 3 evaluation workflows, 3
-  training workflows, and the 4 `DataManager` services — all read+write shared
-  owner state (the service↔workflow integration contract). Converting those 10
-  classes to DI to fully delete the base is deferred to a **future epic (E1.x)**
-  per epic §1/§8 (high-regression-risk, training out of scope). All forwarded
-  writes are now fail-loud against typos; behavior unchanged, locked by golden
-  tests in `tests/test_owner_forward_contract.py`.
+  fail-loud. P2-A converted `TensorPreparationService` and
+  `ValidationSplitService` to explicit `DataManagerContext`/`DataManagerState`
+  DI; P2-B then converted `DataIngestionService` and
+  `DataQualityReportingService` to the same explicit DI contract. P2-C converted
+  the 3 training workflows and 3 evaluation workflows to explicit context/state
+  DI and deleted `_OwnerBackedService`. Faz 7 (cleanup) deleted the temporary
+  `tools/owner_forward_inventory.py` and updated docs. The remaining
+  owner-forward scope is now **0 classes**; behavior is unchanged and locked by
+  golden tests in `tests/test_owner_forward_contract.py`.
   See [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md).
 - **E2 pooled global model (branch `feat/e2-pooled-global-model`, Faz 2–8 ✅,
   2026-06-04):** one conditioned LightGBM trained across ~589 BIST stocks with a

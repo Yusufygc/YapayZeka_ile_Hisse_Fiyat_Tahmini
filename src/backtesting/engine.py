@@ -18,6 +18,7 @@ from typing import Any, Dict
 import numpy as np
 import pandas as pd
 
+from src.backtesting import contracts as backtest_contracts
 from src.backtesting import equity as equity_helpers
 from src.backtesting import execution as execution_helpers
 from src.backtesting import trades as trade_helpers
@@ -78,66 +79,30 @@ def run_backtest(
     Returns:
         equity_curve, işlemler, pozisyonlar ve özet alanlarını içeren sözlük.
     """
-    prices = np.asarray(y_true_price, dtype=float).ravel()
-    pred_price = np.asarray(pred_price, dtype=float).ravel()
-    prev_close = np.asarray(prev_close, dtype=float).ravel()
-    pred_target_arr = None if pred_target is None else np.asarray(pred_target, dtype=float).ravel()
-    fold_id_arr = None if fold_ids is None else np.asarray(fold_ids).ravel()
-    market_regime_arr = None if market_regime is None else np.asarray(market_regime, dtype=float).ravel()
+    inputs = backtest_contracts.prepare_backtest_inputs(
+        dates=dates,
+        prediction_dates=prediction_dates,
+        y_true_price=y_true_price,
+        pred_price=pred_price,
+        prev_close=prev_close,
+        pred_target=pred_target,
+        fold_ids=fold_ids,
+        market_regime=market_regime,
+    )
+    if inputs.n == 0:
+        return backtest_contracts.empty_backtest_result(model_name, validation_mode)
 
-    if dates is None:
-        dates = pd.RangeIndex(start=0, stop=len(prices), step=1)
-    dates = pd.to_datetime(pd.Index(dates))
-    if prediction_dates is None:
-        prediction_dates = dates
-    prediction_dates = pd.to_datetime(pd.Index(prediction_dates))
-
-    lengths = [len(prices), len(pred_price), len(prev_close), len(dates), len(prediction_dates)]
-    if pred_target_arr is not None:
-        lengths.append(len(pred_target_arr))
-    if fold_id_arr is not None:
-        lengths.append(len(fold_id_arr))
-    if market_regime_arr is not None:
-        lengths.append(len(market_regime_arr))
-    n = min(lengths) if lengths else 0
-    if n == 0:
-        return {
-            "model_name": model_name,
-            "validation_mode": validation_mode,
-            "equity_curve": pd.DataFrame(columns=["Date", "Equity", "BuyHold_Equity", "Position", "Desired_Position", "Signal", "Net_Return"]),
-            "trades": pd.DataFrame(columns=["Model", "Fold", "Entry_Date", "Exit_Date", "Entry_Price", "Exit_Price", "Gross_Return", "Net_Return", "Holding_Period"]),
-            "series": {},
-        }
-
-    prices = prices[-n:]
-    pred_price = pred_price[-n:]
-    prev_close = prev_close[-n:]
-    dates = dates[-n:]
-    prediction_dates = prediction_dates[-n:]
-    if pred_target_arr is not None:
-        pred_target_arr = pred_target_arr[-n:]
-    if fold_id_arr is not None:
-        fold_id_arr = fold_id_arr[-n:]
-    else:
-        fold_id_arr = np.full(n, "all", dtype=object)
-    if market_regime_arr is not None:
-        market_regime_arr = market_regime_arr[-n:]
-    else:
-        market_regime_arr = np.zeros(n, dtype=float)
-
-    realized_returns = (prices / np.maximum(prev_close, 1e-12)) - 1.0
-    observed_returns = np.concatenate(([0.0], realized_returns[:-1]))
-    buy_hold_equity = np.cumprod(1.0 + realized_returns)
+    returns = backtest_contracts.compute_return_frame(inputs.prices, inputs.prev_close)
 
     signal_mode, signal_frame, decision_positions, signals = _build_signal_frame(
         signal_mode=signal_mode,
-        n=n,
-        pred_target_arr=pred_target_arr,
-        pred_price=pred_price,
-        prev_close=prev_close,
+        n=inputs.n,
+        pred_target_arr=inputs.pred_target,
+        pred_price=inputs.pred_price,
+        prev_close=inputs.prev_close,
         target_mode=target_mode,
-        observed_returns=observed_returns,
-        market_regime_arr=market_regime_arr,
+        observed_returns=returns.observed_returns,
+        market_regime_arr=inputs.market_regime,
         commission_bps=commission_bps,
         slippage_bps=slippage_bps,
         signal_config=signal_config,
@@ -145,78 +110,89 @@ def run_backtest(
         model_metrics=model_metrics or {},
     )
 
-    execution = _execution_arrays(decision_positions)
-    costs = _cost_arrays(
-        entry_events=execution["entry_events"],
-        exit_events_for_cost=execution["exit_events_for_cost"],
+    execution_frame = backtest_contracts.build_execution_frame(
+        decision_positions=decision_positions,
+        realized_returns=returns.realized_returns,
         commission_bps=commission_bps,
         slippage_bps=slippage_bps,
     )
-    gross_strategy_returns = execution["positions"] * realized_returns
-    net_strategy_returns = gross_strategy_returns - costs["transaction_costs"]
-    equity = np.cumprod(1.0 + net_strategy_returns)
-
-    execution_positions = execution["positions"]
-    previous_execution_positions = execution["previous_positions"]
-    entry_events = execution["entry_events"]
-    exit_events = execution["exit_events"]
-    exit_events_for_cost = execution["exit_events_for_cost"]
-    position_changes = execution["position_changes"]
-    transaction_costs = costs["transaction_costs"]
-    commission_costs = costs["commission_costs"]
-    slippage_costs = costs["slippage_costs"]
-    entry_transaction_costs = costs["entry_transaction_costs"]
-    exit_transaction_costs = costs["exit_transaction_costs"]
 
     trade_rows = _trade_rows(
-        n=n,
+        n=inputs.n,
         model_name=model_name,
-        fold_id_arr=fold_id_arr,
-        dates=dates,
-        prediction_dates=prediction_dates,
-        prev_close=prev_close,
-        prices=prices,
-        realized_returns=realized_returns,
-        net_strategy_returns=net_strategy_returns,
-        execution_positions=execution_positions,
+        fold_id_arr=inputs.fold_ids,
+        dates=inputs.dates,
+        prediction_dates=inputs.prediction_dates,
+        prev_close=inputs.prev_close,
+        prices=inputs.prices,
+        realized_returns=returns.realized_returns,
+        net_strategy_returns=execution_frame.net_strategy_returns,
+        execution_positions=execution_frame.positions,
         signal_frame=signal_frame,
     )
 
     equity_curve = _build_equity_curve(
-        prediction_dates=prediction_dates,
-        dates=dates,
-        equity=equity,
-        buy_hold_equity=buy_hold_equity,
-        execution_positions=execution_positions,
+        prediction_dates=inputs.prediction_dates,
+        dates=inputs.dates,
+        equity=execution_frame.equity,
+        buy_hold_equity=returns.buy_hold_equity,
+        execution_positions=execution_frame.positions,
         decision_positions=decision_positions,
         signals=signals,
-        gross_strategy_returns=gross_strategy_returns,
-        net_strategy_returns=net_strategy_returns,
-        transaction_costs=transaction_costs,
-        commission_costs=commission_costs,
-        slippage_costs=slippage_costs,
-        entry_transaction_costs=entry_transaction_costs,
-        exit_transaction_costs=exit_transaction_costs,
-        entry_events=entry_events,
-        exit_events_for_cost=exit_events_for_cost,
-        realized_returns=realized_returns,
-        observed_returns=observed_returns,
-        pred_price=pred_price,
-        prices=prices,
-        prev_close=prev_close,
-        fold_id_arr=fold_id_arr,
-        pred_target_arr=pred_target_arr,
+        gross_strategy_returns=execution_frame.gross_strategy_returns,
+        net_strategy_returns=execution_frame.net_strategy_returns,
+        transaction_costs=execution_frame.transaction_costs,
+        commission_costs=execution_frame.commission_costs,
+        slippage_costs=execution_frame.slippage_costs,
+        entry_transaction_costs=execution_frame.entry_transaction_costs,
+        exit_transaction_costs=execution_frame.exit_transaction_costs,
+        entry_events=execution_frame.entry_events,
+        exit_events_for_cost=execution_frame.exit_events_for_cost,
+        realized_returns=returns.realized_returns,
+        observed_returns=returns.observed_returns,
+        pred_price=inputs.pred_price,
+        prices=inputs.prices,
+        prev_close=inputs.prev_close,
+        fold_id_arr=inputs.fold_ids,
+        pred_target_arr=inputs.pred_target,
         signal_frame=signal_frame,
     )
 
     _attach_executable_orders(
         equity_curve,
-        previous_execution_positions=previous_execution_positions,
-        execution_positions=execution_positions,
-        entry_events=entry_events,
-        exit_events=exit_events,
+        previous_execution_positions=execution_frame.previous_positions,
+        execution_positions=execution_frame.positions,
+        entry_events=execution_frame.entry_events,
+        exit_events=execution_frame.exit_events,
     )
 
+    return _format_backtest_result(
+        model_name=model_name,
+        validation_mode=validation_mode,
+        signal_mode=signal_mode,
+        equity_curve=equity_curve,
+        trade_rows=trade_rows,
+        execution_frame=execution_frame,
+        decision_positions=decision_positions,
+        signals=signals,
+        realized_returns=returns.realized_returns,
+        signal_frame=signal_frame,
+    )
+
+
+def _format_backtest_result(
+    *,
+    model_name: str,
+    validation_mode: str,
+    signal_mode: str,
+    equity_curve: pd.DataFrame,
+    trade_rows: list[Dict[str, Any]],
+    execution_frame: backtest_contracts.BacktestExecutionFrame,
+    decision_positions: np.ndarray,
+    signals: np.ndarray,
+    realized_returns: np.ndarray,
+    signal_frame: pd.DataFrame,
+) -> Dict[str, Any]:
     return {
         "model_name": model_name,
         "validation_mode": validation_mode,
@@ -224,13 +200,13 @@ def run_backtest(
         "equity_curve": equity_curve,
         "trades": pd.DataFrame(trade_rows),
         "series": {
-            "positions": execution_positions,
+            "positions": execution_frame.positions,
             "desired_positions": decision_positions,
-            "execution_positions": execution_positions,
+            "execution_positions": execution_frame.positions,
             "signals": signals,
-            "position_changes": position_changes,
-            "transaction_costs": transaction_costs,
-            "strategy_returns": net_strategy_returns,
+            "position_changes": execution_frame.position_changes,
+            "transaction_costs": execution_frame.transaction_costs,
+            "strategy_returns": execution_frame.net_strategy_returns,
             "buy_hold_returns": realized_returns,
             "signal_frame": signal_frame,
         },

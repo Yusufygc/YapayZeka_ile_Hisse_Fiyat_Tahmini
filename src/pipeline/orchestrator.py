@@ -39,6 +39,7 @@ from src.pipeline.model_scope import (
     resolve_candidates,
 )
 from src.pipeline.model_trainer import ModelTrainer
+from src.pipeline.horizon_policy import assert_kola_production_horizon_supported
 from src.utils.reproducibility import set_global_seed
 from src.pipeline.artifacts import (
     write_window_selection_decision,
@@ -51,6 +52,7 @@ class ForecastingPipeline:
     def __init__(self, cfg: PipelineConfig):
         # cfg'yi saklıyoruz — EvaluationManager'a geçirilecek
         self._cfg = cfg
+        assert_kola_production_horizon_supported(cfg.data)
         self._init_config_attrs(cfg)
         set_global_seed(42)
         self._init_run_identity(cfg.models)

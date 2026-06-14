@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Owner-backed evaluation workflows for ``EvaluationManager``."""
+"""Explicit dependency-injected evaluation workflows for ``EvaluationManager``."""
 
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -11,7 +12,6 @@ import pandas as pd
 from src.evaluation.evaluator import compute_metrics, plot_comparison
 from src.evaluation.financial_metrics import compute_quantile_metrics
 from src.forecasting.artifacts import save_forecast_artifact_package
-from src.pipeline.evaluation_services import _OwnerBackedService
 from src.pipeline.model_result_exporter import (
     export_final_holdout_result,
     export_single_split_result,
@@ -136,7 +136,248 @@ def _attach_guard_metadata(svc, metrics: dict) -> dict:
     return svc._attach_model_family_metadata(metrics)
 
 
-class SingleSplitEvaluationWorkflow(_OwnerBackedService):
+@dataclass
+class EvaluationWorkflowServices:
+    prediction: object
+    backtest: object
+    signal_calibration: object
+    metrics: object
+
+
+class _EvaluationWorkflowBase:
+    def __init__(self, ctx, state, services: EvaluationWorkflowServices) -> None:
+        self.ctx = ctx
+        self.state = state
+        self.services = services
+
+    @property
+    def stock_symbol(self) -> str:
+        return self.ctx.stock_symbol
+
+    @property
+    def outputs_dir(self) -> str:
+        return self.ctx.outputs_dir
+
+    @property
+    def models_dir(self) -> str:
+        return self.ctx.models_dir
+
+    @property
+    def tracker(self):
+        return self.ctx.tracker
+
+    @property
+    def feature_names(self) -> list:
+        return self.ctx.feature_names
+
+    @property
+    def dataset_hash(self) -> str:
+        return self.ctx.dataset_hash
+
+    @property
+    def dataset_metadata(self) -> dict:
+        return self.ctx.dataset_metadata
+
+    @property
+    def stock_db(self):
+        return self.ctx.stock_db
+
+    @property
+    def xai_dir(self) -> str:
+        return self.ctx.xai_dir
+
+    @property
+    def enable_signal_execution_calibration(self) -> bool:
+        return self.ctx.enable_signal_execution_calibration
+
+    @property
+    def predictions(self) -> dict:
+        return self.state.predictions
+
+    @predictions.setter
+    def predictions(self, value: dict) -> None:
+        self.state.predictions = value
+
+    @property
+    def prediction_targets(self) -> dict:
+        return self.state.prediction_targets
+
+    @prediction_targets.setter
+    def prediction_targets(self, value: dict) -> None:
+        self.state.prediction_targets = value
+
+    @property
+    def quantile_predictions(self) -> dict:
+        return self.state.quantile_predictions
+
+    @quantile_predictions.setter
+    def quantile_predictions(self, value: dict) -> None:
+        self.state.quantile_predictions = value
+
+    @property
+    def single_backtest_inputs(self) -> dict:
+        return self.state.single_backtest_inputs
+
+    @single_backtest_inputs.setter
+    def single_backtest_inputs(self, value: dict) -> None:
+        self.state.single_backtest_inputs = value
+
+    @property
+    def latest_tensors(self) -> dict:
+        return self.state.latest_tensors
+
+    @property
+    def latest_model_metrics(self) -> dict:
+        return self.state.latest_model_metrics
+
+    @property
+    def y_true_aligned(self):
+        return self.state.y_true_aligned
+
+    @property
+    def y_true_target_aligned(self):
+        return self.state.y_true_target_aligned
+
+    @property
+    def prev_close_aligned(self):
+        return self.state.prev_close_aligned
+
+    @property
+    def signal_threshold_calibration_summary(self) -> dict:
+        return self.state.signal_threshold_calibration_summary
+
+    def _add_walk_forward_ensembles(self, *args, **kwargs):
+        return self.services.prediction._add_walk_forward_ensembles(*args, **kwargs)
+
+    def _predict_single_model(self, model_name: str, model, tensors: dict):
+        return self.services.prediction._predict_single_model(model_name, model, tensors)
+
+    def _run_backtests(self, backtest_inputs: dict, suffix: str, model_metrics_by_model=None):
+        return self.services.backtest._run_backtests(backtest_inputs, suffix, model_metrics_by_model)
+
+    def _calibrate_signal_quality_thresholds(self, wf_fold_metrics: dict) -> None:
+        return self.services.signal_calibration._calibrate_signal_quality_thresholds(wf_fold_metrics)
+
+    def _signal_threshold_metadata(self) -> dict:
+        return self.services.signal_calibration._signal_threshold_metadata()
+
+    def _calibrate_walk_forward_signal_parameters(self, **kwargs) -> dict:
+        object.__setattr__(
+            self.services.signal_calibration,
+            "_signal_calibration_grid",
+            self.services.signal_calibration._signal_calibration_grid,
+        )
+        return self.services.signal_calibration._calibrate_walk_forward_signal_parameters(**kwargs)
+
+    def _attach_composite_scores(self, metrics: dict) -> dict:
+        return self.services.metrics._attach_composite_scores(metrics)
+
+    def _attach_model_scope_metadata(self, metrics: dict) -> dict:
+        return self.services.metrics._attach_model_scope_metadata(metrics)
+
+    def _attach_leakage_guard_metadata(self, metrics: dict) -> dict:
+        return self.services.metrics._attach_leakage_guard_metadata(metrics)
+
+    def _attach_model_family_metadata(self, metrics: dict) -> dict:
+        return self.services.metrics._attach_model_family_metadata(metrics)
+
+    def _filter_reportable_models(self, data: dict, metrics_dict: dict | None = None) -> dict:
+        return self.services.metrics._filter_reportable_models(data, metrics_dict)
+
+    def _enrich_wf_fold_metrics(self, wf_fold_metrics: dict) -> dict:
+        return self.services.metrics._enrich_wf_fold_metrics(wf_fold_metrics)
+
+    def _get_wf_fold_metric_report(self, wf_fold_metrics: dict) -> dict:
+        return self.services.metrics._get_wf_fold_metric_report(wf_fold_metrics)
+
+    def _select_best_model(self, metrics_dict: dict) -> str | None:
+        return self.services.metrics._select_best_model(metrics_dict)
+
+    def _get_xai_single_split(self, trained_models: dict, tensors: dict):
+        return self.services.metrics._get_xai_single_split(trained_models, tensors)
+
+    def _get_xai_walk_forward(self, wf_predictions: dict, wf_y_true, wf_backtest_inputs=None):
+        return self.services.metrics._get_xai_walk_forward(
+            wf_predictions, wf_y_true, wf_backtest_inputs
+        )
+
+    def _split_walk_forward_signal_sets(
+        self,
+        wf_fold_metrics: dict,
+        wf_backtest_inputs: dict,
+    ) -> tuple[dict, dict, dict, dict]:
+        fold_values = set()
+        for model_rows in wf_fold_metrics.values():
+            for row in model_rows:
+                if row.get("Fold") is not None:
+                    fold_values.add(row.get("Fold"))
+        for payload in wf_backtest_inputs.values():
+            fold_ids = payload.get("fold_ids")
+            if fold_ids is not None:
+                fold_values.update(np.asarray(fold_ids).ravel().tolist())
+
+        folds = sorted(fold_values)
+        min_eval = int(getattr(self.ctx, "min_signal_evaluation_folds", 3))
+        train_ratio = float(getattr(self.ctx, "signal_calibration_train_ratio", 0.70))
+        if len(folds) <= min_eval:
+            metadata = {
+                "status": "skipped_insufficient_folds",
+                "fold_count": int(len(folds)),
+                "min_signal_evaluation_folds": min_eval,
+                "calibration_folds": [],
+                "evaluation_folds": folds,
+            }
+            return {}, {}, wf_backtest_inputs, metadata
+
+        split_idx = int(np.floor(len(folds) * train_ratio))
+        split_idx = max(1, min(split_idx, len(folds) - min_eval))
+        calibration_folds = set(folds[:split_idx])
+        evaluation_folds = set(folds[split_idx:])
+
+        calibration_metrics = {
+            model_name: [row for row in rows if row.get("Fold") in calibration_folds]
+            for model_name, rows in wf_fold_metrics.items()
+        }
+        calibration_inputs = self._filter_backtest_inputs_by_folds(
+            wf_backtest_inputs, calibration_folds
+        )
+        evaluation_inputs = self._filter_backtest_inputs_by_folds(
+            wf_backtest_inputs, evaluation_folds
+        )
+        metadata = {
+            "status": "applied",
+            "fold_count": int(len(folds)),
+            "calibration_train_ratio": train_ratio,
+            "min_signal_evaluation_folds": min_eval,
+            "calibration_folds": list(folds[:split_idx]),
+            "evaluation_folds": list(folds[split_idx:]),
+        }
+        return calibration_metrics, calibration_inputs, evaluation_inputs, metadata
+
+    @staticmethod
+    def _filter_backtest_inputs_by_folds(backtest_inputs: dict, selected_folds: set) -> dict:
+        filtered = {}
+        for model_name, payload in backtest_inputs.items():
+            fold_ids = payload.get("fold_ids")
+            if fold_ids is None:
+                filtered[model_name] = payload
+                continue
+            fold_arr = np.asarray(fold_ids)
+            mask = np.isin(fold_arr, list(selected_folds))
+            if not np.any(mask):
+                continue
+            new_payload = {}
+            for key, value in payload.items():
+                arr = np.asarray(value)
+                if arr.ndim > 0 and len(arr) == len(mask):
+                    new_payload[key] = arr[mask]
+                else:
+                    new_payload[key] = value
+            filtered[model_name] = new_payload
+        return filtered
+
+
+class SingleSplitEvaluationWorkflow(_EvaluationWorkflowBase):
     def run(self, trained_models: dict):
         print("\n" + "=" * 60)
         print("  ADIM 7 | Degerlendirme ve Registry (EvaluationManager)")
@@ -250,7 +491,7 @@ class SingleSplitEvaluationWorkflow(_OwnerBackedService):
 
 
 
-class WalkForwardEvaluationWorkflow(_OwnerBackedService):
+class WalkForwardEvaluationWorkflow(_EvaluationWorkflowBase):
     def run(
         self,
         wf_results: dict,
@@ -432,7 +673,7 @@ class WalkForwardEvaluationWorkflow(_OwnerBackedService):
             print(f'  [WARN] WF tahmin grafigi kaydedilemedi: {exc}')
 
 
-class FinalHoldoutEvaluationWorkflow(_OwnerBackedService):
+class FinalHoldoutEvaluationWorkflow(_EvaluationWorkflowBase):
     def run(self, model_name: str, model, tensors: dict):
         print("\n" + "=" * 60)
         print("  ADIM 8 | Final Untouched Holdout Degerlendirmesi")

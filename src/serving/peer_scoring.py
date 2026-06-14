@@ -21,6 +21,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from src.data.pooled_matrix import pooled_feature_matrix
+
 
 @dataclass(frozen=True)
 class PeerScoringConfig:
@@ -31,6 +33,7 @@ class PeerScoringConfig:
     min_names: int = 15      # bundan az sembol -> peer skoru anlamsiz
     enable_xai: bool = True   # E2 Kol-B: per-symbol SHAP attribution uret
     xai_top_k: int = 5        # sembol basina arti/eksi surucu sayisi
+    strict_single_date: bool = True  # multi-date serving input kontrat hatasidir
 
 
 def _label(pct: float, lo: float, hi: float) -> str:
@@ -92,17 +95,23 @@ def score_latest_universe(
     """Egitilmis modelle EN GUNCEL tarihin evren satirlarini skorla -> peer.
 
     panel_latest: en guncel skorlama tarihinin TUM sembol satirlari (her sembol
-    bir satir, `feature_cols` + symbol + Date). Tek tarih beklenir; birden fazla
-    tarih varsa en yenisi alinir.
+    bir satir, `feature_cols` + symbol + Date). Varsayilan strict modda tek tarih
+    beklenir; eski latest-date secimi yalniz `strict_single_date=False` ile acilir.
     """
     cfg = cfg or PeerScoringConfig()
     df = panel_latest
     if date_col in df.columns and df[date_col].nunique() > 1:
+        if cfg.strict_single_date:
+            raise ValueError(
+                "score_latest_universe tek skorlama tarihi bekler; multi-date "
+                "panel alindi. Eski latest-date secimi icin "
+                "PeerScoringConfig(strict_single_date=False) kullanin."
+            )
         latest = df[date_col].max()
         df = df[df[date_col] == latest]
     else:
         latest = df[date_col].iloc[0] if date_col in df.columns and len(df) else ""
-    X = df[feature_cols].to_numpy(dtype=float)
+    X = pooled_feature_matrix(df, feature_cols)
     preds = np.asarray(model.predict(X), dtype=float).ravel()
     scored = df[[cfg.symbol_col]].copy()
     scored[cfg.pred_col] = preds

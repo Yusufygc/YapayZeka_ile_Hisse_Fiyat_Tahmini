@@ -26,6 +26,7 @@ from typing import Callable, Sequence
 import numpy as np
 import pandas as pd
 
+from src.data.pooled_matrix import pooled_feature_matrix, pooled_target_array
 from src.validation.pooled_cv import PooledFold
 
 ModelFactory = Callable[[], object]
@@ -177,8 +178,7 @@ def evaluate_per_symbol(
     use_folds = [f for f in folds if cfg.include_holdout or not f.is_final_holdout]
     sym_all = panel[cfg.symbol_col].to_numpy()
     date_all = panel["Date"].to_numpy() if "Date" in panel.columns else np.arange(len(panel))
-    y_all = panel[cfg.target_col].to_numpy(dtype=float)
-    X_all = panel[feats].to_numpy(dtype=float)
+    y_all = pooled_target_array(panel, cfg.target_col)
 
     pred_rows: list[pd.DataFrame] = []
     n_used = 0
@@ -187,8 +187,11 @@ def evaluate_per_symbol(
         if not tr.any() or not te.any():
             continue
         model = model_factory()
-        model.fit(X_all[tr], y_all[tr])
-        y_hat = np.asarray(model.predict(X_all[te]), dtype=float).ravel()
+        X_train = pooled_feature_matrix(panel, feats, tr)
+        y_train = pooled_target_array(panel, cfg.target_col, tr)
+        X_test = pooled_feature_matrix(panel, feats, te)
+        model.fit(X_train, y_train)
+        y_hat = np.asarray(model.predict(X_test), dtype=float).ravel()
         pred_rows.append(pd.DataFrame({
             "symbol": sym_all[te],
             "fold": f.index,

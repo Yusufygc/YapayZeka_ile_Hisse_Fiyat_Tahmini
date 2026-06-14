@@ -33,6 +33,30 @@ def test_fit_predict_shape():
     assert np.isfinite(p).all()
 
 
+def test_predict_uses_configured_batch_size_and_returns_single_array():
+    X, y = _toy_data(n=37)
+    m = TorchMLPModel(_cfg(epochs=3, batch_size=16, predict_batch_size=7)).fit(X, y)
+    p = m.predict(X)
+    assert p.shape == (37,)
+    assert np.isfinite(p).all()
+
+
+def test_training_skips_singleton_batch_without_crashing():
+    X, y = _toy_data(n=65)
+    m = TorchMLPModel(_cfg(epochs=3, batch_size=32)).fit(X, y)
+    p = m.predict(X[:5])
+    assert p.shape == (5,)
+    assert np.isfinite(p).all()
+
+
+def test_fit_keeps_scaler_stats_float32():
+    X, y = _toy_data()
+    m = TorchMLPModel(_cfg(epochs=1)).fit(X, y)
+    assert m.mu.dtype == np.float32
+    assert m.sd.dtype == np.float32
+    assert m._as_float32_matrix(X).dtype == np.float32
+
+
 def test_deterministic_same_seed():
     X, y = _toy_data()
     p1 = TorchMLPModel(_cfg(seed=42)).fit(X, y).predict(X)

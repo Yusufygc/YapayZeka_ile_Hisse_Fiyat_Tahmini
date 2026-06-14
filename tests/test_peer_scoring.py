@@ -3,6 +3,7 @@
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from src.serving.peer_scoring import (
     PeerScoringConfig,
@@ -68,15 +69,56 @@ class _StubModel:
         return np.asarray(X)[:, 0]
 
 
-def test_score_latest_universe_picks_latest_date():
+class _DTypeModel:
+    dtype = None
+    contiguous = None
+
+    def predict(self, X):
+        self.dtype = X.dtype
+        self.contiguous = bool(X.flags["C_CONTIGUOUS"])
+        return np.asarray(X)[:, 0]
+
+
+def test_score_latest_universe_rejects_multi_date_by_default():
     dates = pd.to_datetime(["2026-06-01", "2026-06-02"])
     rows = []
     for d in dates:
         for i in range(20):
             rows.append({"symbol": f"S{i}", "Date": d, "f0": float(i if d == dates[1] else 0)})
     panel = pd.DataFrame(rows)
-    out = score_latest_universe(_StubModel(), panel, feature_cols=["f0"])
+
+    with pytest.raises(ValueError, match="tek skorlama tarihi"):
+        score_latest_universe(_StubModel(), panel, feature_cols=["f0"])
+
+
+def test_score_latest_universe_can_pick_latest_date_when_explicitly_allowed():
+    dates = pd.to_datetime(["2026-06-01", "2026-06-02"])
+    rows = []
+    for d in dates:
+        for i in range(20):
+            rows.append({"symbol": f"S{i}", "Date": d, "f0": float(i if d == dates[1] else 0)})
+    panel = pd.DataFrame(rows)
+    cfg = PeerScoringConfig(strict_single_date=False)
+
+    out = score_latest_universe(_StubModel(), panel, feature_cols=["f0"], cfg=cfg)
+
     assert out["as_of_date"].iloc[0].startswith("2026-06-02")
     assert out["universe_size"].iloc[0] == 20
     # f0=i en yuksek S19 -> outperform
     assert out.set_index("symbol").loc["S19", "peer_label"] == "outperform"
+
+
+def test_score_latest_universe_feeds_float32_matrix_to_model():
+    panel = pd.DataFrame({
+        "symbol": [f"S{i}" for i in range(20)],
+        "Date": pd.Timestamp("2026-06-02"),
+        "f0": np.arange(20, dtype=float),
+        "f1": np.linspace(0.0, 1.0, 20),
+    })
+    model = _DTypeModel()
+
+    out = score_latest_universe(model, panel, feature_cols=["f1", "f0"])
+
+    assert model.dtype == np.float32
+    assert model.contiguous is True
+    assert out["universe_size"].iloc[0] == 20

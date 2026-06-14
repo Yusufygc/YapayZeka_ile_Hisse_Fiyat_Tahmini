@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Owner-backed training workflows for ``ModelTrainer``."""
+"""Explicit dependency-injected training workflows for ``ModelTrainer``."""
 
 from __future__ import annotations
 
@@ -8,14 +8,133 @@ import os
 
 import numpy as np
 
-from src.pipeline.evaluation_services import _OwnerBackedService
 from src.pipeline import model_factory
 
 _TREE_MODELS = model_factory.TREE_MODELS
 _SEQ_MODELS = model_factory.SEQ_MODELS
 
 
-class FinalHoldoutTrainingWorkflow(_OwnerBackedService):
+class _TrainingWorkflowBase:
+    def __init__(self, ctx, state, helpers) -> None:
+        self.ctx = ctx
+        self.state = state
+        self.helpers = helpers
+
+    @property
+    def stock_symbol(self) -> str:
+        return self.ctx.stock_symbol
+
+    @property
+    def tracker(self):
+        return self.ctx.tracker
+
+    @property
+    def feature_names(self) -> list:
+        return self.ctx.feature_names
+
+    @property
+    def selected_models(self) -> list:
+        return self.ctx.selected_models
+
+    @property
+    def dataset_hash(self) -> str:
+        return self.ctx.dataset_hash
+
+    @property
+    def dataset_metadata(self) -> dict:
+        return self.ctx.dataset_metadata
+
+    @property
+    def trained_models(self) -> dict:
+        return self.state.trained_models
+
+    @property
+    def wf_results(self) -> dict:
+        return self.state.wf_results
+
+    @property
+    def wf_fold_metrics(self) -> dict:
+        return self.state.wf_fold_metrics
+
+    @property
+    def wf_predictions(self) -> dict:
+        return self.state.wf_predictions
+
+    @property
+    def wf_backtest_inputs(self) -> dict:
+        return self.state.wf_backtest_inputs
+
+    @property
+    def wf_y_true(self):
+        return self.state.wf_y_true
+
+    @wf_y_true.setter
+    def wf_y_true(self, value) -> None:
+        self.state.wf_y_true = value
+
+    @property
+    def final_holdout_model(self):
+        return self.state.final_holdout_model
+
+    @final_holdout_model.setter
+    def final_holdout_model(self, value) -> None:
+        self.state.final_holdout_model = value
+
+    @property
+    def final_holdout_model_name(self):
+        return self.state.final_holdout_model_name
+
+    @final_holdout_model_name.setter
+    def final_holdout_model_name(self, value) -> None:
+        self.state.final_holdout_model_name = value
+
+    def _model_class_for_name(self, model_name: str):
+        return self.helpers.model_class_for_name(model_name)
+
+    def _make_prophet(self):
+        return self.helpers.make_prophet()
+
+    def _make_arima(self):
+        return self.helpers.make_arima()
+
+    def _make_lstm(self, stage: str):
+        return self.helpers.make_lstm(stage)
+
+    def _make_lstm_lite(self, stage: str):
+        return self.helpers.make_lstm_lite(stage)
+
+    def _make_attention_lstm_v2(self, stage: str):
+        return self.helpers.make_attention_lstm_v2(stage)
+
+    def _has_min_sequences(self, count: int, model_name: str, context: str) -> bool:
+        return self.helpers.has_min_sequences(count, model_name, context)
+
+    def _wf_has_min_sequences(self, wf_splits: list, data_manager, model_name: str) -> bool:
+        return self.helpers.wf_has_min_sequences(wf_splits, data_manager, model_name)
+
+    def _skip(self, name: str) -> bool:
+        return self.helpers.skip(name)
+
+    def _wf_run(self, *args, **kwargs) -> None:
+        return self.helpers.wf_run(*args, **kwargs)
+
+    def _baseline_specs(self):
+        return self.helpers.baseline_specs()
+
+    def _linear_baseline_specs(self):
+        return self.helpers.linear_baseline_specs()
+
+    def _boosting_baseline_specs(self):
+        return self.helpers.boosting_baseline_specs()
+
+    def _sequence_baseline_specs(self):
+        return self.helpers.sequence_baseline_specs()
+
+    def _dump_feature_importances(self, validators: dict) -> None:
+        return self.helpers.dump_feature_importances(validators)
+
+
+class FinalHoldoutTrainingWorkflow(_TrainingWorkflowBase):
     def run(self, model_name: str, data_manager):
         if data_manager.selection_df is None or data_manager.final_holdout_df is None:
             raise ValueError("Final holdout egitimi icin selection_df ve final_holdout_df gerekir.")
@@ -53,7 +172,7 @@ class FinalHoldoutTrainingWorkflow(_OwnerBackedService):
 
 
 
-class SingleSplitTrainingWorkflow(_OwnerBackedService):
+class SingleSplitTrainingWorkflow(_TrainingWorkflowBase):
     def run(self, tensors: dict):
         optuna_dir = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -152,7 +271,7 @@ class SingleSplitTrainingWorkflow(_OwnerBackedService):
 
 
 
-class WalkForwardTrainingWorkflow(_OwnerBackedService):
+class WalkForwardTrainingWorkflow(_TrainingWorkflowBase):
     def run(self, wf_splits: list, data_manager):
         preprocessors = {
             "baseline": self._preprocessor(data_manager, "baseline"),

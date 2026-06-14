@@ -1,3 +1,97 @@
+## [2026-06-14] Refactor | P4-B pooled matrix downcast uygulandi
+
+- Pooled OOS ve serving scoring akislari `src/data/pooled_matrix.py` uzerinden
+  fold/latest-slice bazli contiguous `float32` feature/target matrix uretir.
+- `GlobalPooledModel` ve `EnsemblePooledModel` input'u tekrar `float64`'a
+  upcast etmeden tuketir; peer scoring schema'si, XAI no-op davranisi ve
+  rank-blend semantigi korunur.
+- Dogrulama: `dl_env` ortaminda P4-B hedef regresyon seti 66 passed.
+
+## [2026-06-14] Refactor | P4-A Torch MLP batching uygulandi
+
+- `TorchMLPModel.fit()` ve `predict()` full standardized matrix/full Torch tensor
+  yolundan contiguous `float32` NumPy + `TensorDataset/DataLoader` mini-batch
+  akisine tasindi.
+- Train-only numeric standardizasyon batch icinde uygulanir; categorical id
+  kolonlari embedding icin raw kalir. `EnsemblePooledModel` public kontrati ve
+  seed determinism korunur.
+- Dogrulama: `dl_env` ortaminda P4-A hedef regresyon seti 31 passed; `Fintech`
+  ortaminda hafif ensemble contract 3 passed. `Fintech` ortaminda `torch` ve
+  `lightgbm` kurulu olmadigi icin agir Torch/LightGBM testleri skip olur.
+
+## [2026-06-14] Refactor | P3 backtest engine data contracts uygulandi
+
+- `run_backtest()` public API'si korunarak backtest input hizalama,
+  realized/observed return, execution/cost ve bos sonuc sozlesmeleri
+  `src/backtesting/contracts.py` icindeki explicit data-contract helper'larina
+  tasindi.
+- Default `simple` long/flat semantigi, rapor kolonlari, fold aktarimi,
+  transaction-cost hesaplari ve leakage guard davranisi degismedi.
+- Dogrulama: Fintech ortaminda P3 hedef regresyon seti 69 passed.
+
+## [2026-06-14] Refactor | P2-C training/evaluation workflow DI dilimi uygulandi
+
+- `SingleSplit/WalkForward/FinalHoldout` training workflow'lari
+  `TrainingContext` + `TrainingState` + explicit helper baglantilariyla
+  owner-forward mirasindan cikarildi.
+- `SingleSplit/WalkForward/FinalHoldout` evaluation workflow'lari mevcut
+  `EvaluationContext` + `EvaluationState` ve explicit service paketiyle DI'a
+  tasindi.
+- `_OwnerBackedService` tamamen silindi; kalan owner-forward kapsam 0 siniftir.
+- Dogrulama: Fintech ortaminda P2-C hedef regresyon seti 52 passed; ek
+  import/smoke seti 19 passed.
+
+## [2026-06-14] Refactor | P2-B DataManager ingestion/data-quality DI dilimi uygulandi
+
+- `DataIngestionService` ve `DataQualityReportingService` owner-forward
+  mirasindan cikarildi; `DataManagerContext` + `DataManagerState` uzerinden
+  explicit DI sozlesmesine tasindi.
+- `DataManager` context alias'lari (`stock_symbol`, `project_root`,
+  `macro_cache_dir`, `universe_file`) ve dataset/report state alias'lari geriye
+  uyumlu tutuldu.
+- `src/pipeline/data_services.py` artik `_OwnerBackedService` import etmiyor;
+  kalan owner-forward kapsam yalniz 3 training workflow + 3 evaluation workflow.
+- Dogrulama: Fintech ortaminda P2-B hedef regresyon seti 62 passed, 1 skipped
+  (`ta` optional dependency stub'i nedeniyle).
+
+## [2026-06-13] Refactor | P2-A DataManager tensor/split DI dilimi uygulandi
+
+- `TensorPreparationService` ve `ValidationSplitService` owner-forward mirasindan
+  cikarildi; explicit `DataManagerContext` + `DataManagerState` sozlesmesine
+  tasindi.
+- `DataManager` public state attribute'lari (`df`, `feature_names`, `tensors`,
+  split ve scaling alanlari) property alias ile geriye uyumlu kalacak sekilde
+  tek `data_state` kaynagina baglandi.
+- `DataIngestionService`, `DataQualityReportingService`, training workflows ve
+  evaluation workflows owner-backed olarak P2-B/P2-C kapsaminda birakildi.
+- Dogrulama: Fintech ortaminda P2-A hedef regresyon seti 36 passed; ek
+  `test_phase7_acceptance.py` regresyonu 10 passed.
+
+## [2026-06-13] Refactor | P0+P1 horizon ve pooled serving guard dalgası uygulandı
+
+- Kol-A ana `ForecastingPipeline` akışına `target_horizon > 1` için fail-loud
+  production guard eklendi; `h=1` davranışı ve `src.cli.forecast --horizon-days`
+  kapsamı korunur.
+- `TensorPreparationService` tarih metadatası `h`-aware hale getirildi:
+  `dates_train=iloc[h:]`, `dates_prediction=iloc[:-h]`, `dates_test=iloc[h:]`.
+- Kol-B `score_latest_universe()` default olarak multi-date paneli reddedecek
+  şekilde sıkılaştırıldı; legacy latest-date seçimi
+  `PeerScoringConfig(strict_single_date=False)` ile explicit hale geldi.
+- `EnsemblePooledModel.predict()` 2D ve en az iki satırlı cross-section input
+  kontratını fail-loud doğrular.
+- Doğrulama: `Fintech` conda ortamında hedef regresyon seti 20 passed, 1 skipped.
+
+## [2026-06-13] Desktop GUI | PySide6 Masaüstü Uygulaması ve Süreç Yöneticisi Entegrasyonu
+
+- CLI araçlarının (`src/cli/`) masaüstü üzerinden kurumsal standartlarda yönetilebilmesini sağlayan PySide6 uygulaması geliştirildi.
+- Mimari tasarım olarak SOLID ve temiz kod prensipleri takip edildi, **God Object** oluşumunun önüne geçildi:
+  - `ProcessRunner` (`QProcess` sarmalayıcısı) ile eğitim ve tahmin süreçleri izole, non-blocking (GUI'yi dondurmayan) alt süreçler olarak arka planda çalıştırıldı.
+  - `DBHelper` ile SQLite `stock_models.db` veritabanı erişimi kapsüllendi.
+  - Arayüz stilleri modülerleştirilerek `base.qss`, `widgets.qss` ve `custom.qss` olarak ayrıldı ve `styles/manager.py` ile birleştirildi.
+  - Ana arayüz sekmeleri (`DashboardTab`, `TrainingTab`, `ForecastTab`) modüler bileşenler halinde yazıldı.
+- Yeni `tests/test_gui_smoke.py` smoke test dosyası oluşturuldu ve pytest ile tüm modüller (`dl_env` conda ortamında) başarıyla doğrulandı.
+- `docs/wiki/desktop-gui-application.md` mimari rehberi oluşturuldu ve `docs/wiki/index.md` dizinine eklendi.
+
 ## [2026-06-12] Audit | XAI kapsamı ve iyileştirme planı kaydedildi
 
 - Kol-A `XAIExplainer`, XAI stratejileri, ürün özeti, report writer, AttentionLSTM v2

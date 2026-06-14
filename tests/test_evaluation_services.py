@@ -34,6 +34,25 @@ def test_evaluation_manager_uses_service_composition_not_mixin_inheritance():
     assert isinstance(manager.single_split_workflow, SingleSplitEvaluationWorkflow)
     assert isinstance(manager.walk_forward_workflow, WalkForwardEvaluationWorkflow)
     assert isinstance(manager.final_holdout_workflow, FinalHoldoutEvaluationWorkflow)
+    assert manager.single_split_workflow.ctx is manager.context
+    assert manager.walk_forward_workflow.ctx is manager.context
+    assert manager.final_holdout_workflow.ctx is manager.context
+    assert manager.single_split_workflow.state is manager.state
+    assert manager.walk_forward_workflow.state is manager.state
+    assert manager.final_holdout_workflow.state is manager.state
+    assert manager.single_split_workflow.services.prediction is manager.prediction_service
+    assert manager.walk_forward_workflow.services.backtest is manager.backtest_service
+    assert manager.final_holdout_workflow.services.metrics is manager.metrics_reporting_service
+
+
+def test_owner_backed_service_removed_from_pipeline_modules():
+    import src.pipeline.evaluation_services as evaluation_services
+    import src.pipeline.evaluation_workflows as evaluation_workflows
+    import src.pipeline.training_workflows as training_workflows
+
+    assert "_OwnerBackedService" not in vars(evaluation_services)
+    assert "_OwnerBackedService" not in vars(evaluation_workflows)
+    assert "_OwnerBackedService" not in vars(training_workflows)
 
 
 def test_lazy_prediction_service_delegates_to_manager_state():

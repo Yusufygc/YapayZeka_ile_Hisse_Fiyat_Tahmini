@@ -33,6 +33,8 @@ class TorchMLPConfig:
     weight_decay: float = 1e-5
     epochs: int = 15
     batch_size: int = 8192
+    predict_batch_size: int | None = None
+    dataloader_num_workers: int = 0
     seed: int = 42
     max_embedding_dim: int = 50
     cat_indices: Sequence[int] = field(default_factory=tuple)
@@ -79,19 +81,34 @@ class TorchMLPModel:
         layers += [nn.Linear(prev, 1)]
         return _MLPNet(embs, layers, self.cat_idx, self.num_idx)
 
-    # --- standardize yardimcisi ---
-    def _standardize(self, X: np.ndarray) -> np.ndarray:
-        Xs = X.copy()
-        Xs[:, self.num_idx] = (X[:, self.num_idx] - self.mu) / self.sd
-        return np.nan_to_num(Xs, nan=0.0, posinf=0.0, neginf=0.0)
+    # --- batch yardimcilari ---
+    def _as_float32_matrix(self, X) -> np.ndarray:
+        X_arr = np.asarray(X, dtype=np.float32)
+        if X_arr.ndim != 2:
+            raise ValueError(f"X 2 boyutlu olmali, geldi: {X_arr.shape}")
+        return np.ascontiguousarray(np.nan_to_num(X_arr, nan=0.0, posinf=0.0, neginf=0.0))
+
+    def _as_float32_target(self, y) -> np.ndarray:
+        y_arr = np.asarray(y, dtype=np.float32).ravel()
+        return np.ascontiguousarray(np.nan_to_num(y_arr, nan=0.0, posinf=0.0, neginf=0.0))
+
+    def _standardize_batch(self, xb):
+        import torch
+
+        out = xb.clone()
+        if self.num_idx:
+            mu = torch.as_tensor(self.mu, dtype=out.dtype, device=out.device)
+            sd = torch.as_tensor(self.sd, dtype=out.dtype, device=out.device)
+            out[:, self.num_idx] = (out[:, self.num_idx] - mu) / sd
+        return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
     def fit(self, X, y):
         import torch
 
-        X = np.asarray(X, dtype=float)
-        y = np.asarray(y, dtype=float).ravel()
-        if X.ndim != 2:
-            raise ValueError(f"X 2 boyutlu olmali, geldi: {X.shape}")
+        from torch.utils.data import DataLoader, TensorDataset
+
+        X = self._as_float32_matrix(X)
+        y = self._as_float32_target(y)
         if len(X) != len(y):
             raise ValueError(f"X/y uzunluk uyumsuz: {len(X)} != {len(y)}")
         n_features = X.shape[1]
@@ -104,43 +121,58 @@ class TorchMLPModel:
         self.num_idx = [j for j in range(n_features) if j not in self.cat_idx]
 
         num = X[:, self.num_idx]
-        self.mu = num.mean(axis=0)
-        self.sd = num.std(axis=0)
+        self.mu = num.mean(axis=0, dtype=np.float64).astype(np.float32)
+        self.sd = num.std(axis=0, dtype=np.float64).astype(np.float32)
         self.sd[self.sd == 0] = 1.0
-        Xs = self._standardize(X)
 
         self.net = self._build(len(self.num_idx))
         opt = torch.optim.Adam(self.net.parameters(), lr=self.cfg.lr,
                                weight_decay=self.cfg.weight_decay)
         loss_fn = torch.nn.MSELoss()
-        Xt = torch.tensor(Xs, dtype=torch.float32)
-        yt = torch.tensor(y, dtype=torch.float32)
-        n = len(yt)
+        dataset = TensorDataset(torch.from_numpy(X), torch.from_numpy(y))
         bs = max(1, int(self.cfg.batch_size))
+        generator = torch.Generator()
+        generator.manual_seed(int(self.cfg.seed))
+        loader = DataLoader(
+            dataset,
+            batch_size=bs,
+            shuffle=True,
+            num_workers=max(0, int(self.cfg.dataloader_num_workers)),
+            generator=generator,
+        )
         self.net.train()
         for _ in range(int(self.cfg.epochs)):
-            perm = torch.randperm(n)
-            for i in range(0, n, bs):
-                bi = perm[i:i + bs]
-                if len(bi) < 2:  # BatchNorm tek-ornekte patlar
+            for xb, yb in loader:
+                if len(yb) < 2:  # BatchNorm tek-ornekte patlar
                     continue
                 opt.zero_grad()
-                loss = loss_fn(self.net(Xt[bi]), yt[bi])
+                loss = loss_fn(self.net(self._standardize_batch(xb)), yb)
                 loss.backward()
                 opt.step()
         return self
 
     def predict(self, X):
         import torch
+        from torch.utils.data import DataLoader, TensorDataset
 
         if self.net is None:
             raise RuntimeError("TorchMLPModel egitilmedi (once fit cagir).")
-        X = np.asarray(X, dtype=float)
-        Xs = self._standardize(X)
+        X = self._as_float32_matrix(X)
+        bs = self.cfg.predict_batch_size if self.cfg.predict_batch_size is not None else self.cfg.batch_size
+        loader = DataLoader(
+            TensorDataset(torch.from_numpy(X)),
+            batch_size=max(1, int(bs)),
+            shuffle=False,
+            num_workers=max(0, int(self.cfg.dataloader_num_workers)),
+        )
+        outputs = []
         self.net.eval()
         with torch.no_grad():
-            out = self.net(torch.tensor(Xs, dtype=torch.float32)).numpy()
-        return np.asarray(out, dtype=float).ravel()
+            for (xb,) in loader:
+                outputs.append(self.net(self._standardize_batch(xb)).numpy())
+        if not outputs:
+            return np.asarray([], dtype=float)
+        return np.asarray(np.concatenate(outputs), dtype=float).ravel()
 
 
 def _make_net_class():
