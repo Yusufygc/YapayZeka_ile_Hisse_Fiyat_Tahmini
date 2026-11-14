@@ -399,6 +399,16 @@ and target for the next move.
 - No random train/test split.
 - No scaler fit on test, fold-test, or final holdout.
 - Macro features must respect configured lags.
+- Aylık makro (faiz, CPI) damgası ayın 1'i olsa da değer ay sonu seviyesidir; yayın
+  tarihi `ay sonu + lag` (faiz 1, CPI 5 gün) olarak hesaplanır ve günlük takvime
+  `merge_asof(direction="backward")` ile taşınır (`macro_transforms.lag_monthly_features`,
+  `merge_ffill_monthly_features`; 2026-11-15 derin denetim P0-3/P0-4).
+- ABD seansında kapanan seriler (`US_SESSION_COLUMNS`: VIX, DXY, US10Y, GOLD_USD, OIL_USD)
+  1 satır geciktirilir; USDTRY ve BIST endeksleri gecikmesizdir (P0-5).
+- Makro kapsamı dışındaki hisse günlerinde `*_Return`/`*_Change` kolonları 0 ile
+  doldurulur (tekrar edilmez); makro bitişi hisseden >5 gün gerideyse uyarı loglanır.
+- Optuna ayarı walk-forward'da bellek içi ve çağrıya izoledir; kalıcı study yalnız açık
+  `study_storage` + benzersiz `study_name` ile (P0-1).
 - Signal calibration must not optimize on final holdout.
 - Final holdout is for confirmation, not model selection training feedback.
 

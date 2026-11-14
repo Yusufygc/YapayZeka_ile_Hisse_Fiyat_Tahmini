@@ -360,6 +360,22 @@ Production leader selection should consider only eligible production candidates,
 not benchmarks. This is explicitly covered by tests in
 `tests/test_model_scope_production.py`.
 
+Derin denetim (2026-11-15) sonrası ek sınırlar:
+
+- Walk-forward ensemble ağırlıkları fold f için yalnız f'den önceki satırlarda fit edilir
+  (`PredictionService._compute_walk_forward_blends`, scope `expanding_prior_folds`);
+  ilk fold eşit ağırlıktır. Servis için saklanan ağırlıklar tüm fold'lardandır ama
+  raporlanan metrikte kullanılmaz (P0-2).
+- Backtest kalite kapısı işlem yaptığı pencerenin metriğini kullanmaz: holdout → WF
+  metrikleri, WF değerlendirme fold'ları → kalibrasyon fold metrikleri
+  (`Gate_Metrics_Source`) (P0-6).
+- `select_benchmark_model` benchmark yoksa `None` döner; göreli metrikler NaN olur ve
+  model lider olamaz; `selection_guard` NaN oranı `benchmark_failed` sayar.
+- WF değerlendirme satırları `Reporting_Role=confirmation`, `Selection_Contaminated=True`;
+  tarafsız rapor yalnız final holdout (`Reporting_Role=final_holdout`). Deflated Sharpe
+  deneme sayısı = modeller × nihai kalibrasyon denemesi (P0-7).
+- `_compute_strategy_returns` fiyat modunda sinyali tahmin fiyatından türetir (P0-8).
+
 ## Pooled Cross-Sectional Validation (E2)
 
 The E2 pooled global model uses a different validation lens from the per-symbol

@@ -1,3 +1,15 @@
+## [2026-11-15] Bugfix | Derin denetim Faz 1: P0 sızıntı ve seçim yanlılıkları
+
+- Rapor: `../analizler/derin_denetim_2026-11-15.md` (AI_Core/analizler). Dal `fix/deep-audit-2026-11`.
+- P0-1 Optuna paylaşımı (`5453800`), P0-2 WF ensemble expanding ağırlık (`cf57b22`),
+  P0-3/4/5 makro yayın gecikmesi + merge_asof + ABD 1 gün gecikme, CPI lag 15→5 (ay sonundan),
+  feature cache v4 (`c6102f1`), P0-6/7 holdout/WF kapı metrikleri, self-benchmark, rapor rolü
+  etiketleri, deneme sayısı (`34ddc90`). P0-8 price modu (`5453800`).
+- Testler 799 → 848 passed. Mevcut `stock_models.db` lider tablosu ve skorlar eski
+  (sızıntılı) semantikle üretildi; yeniden koşu gerekir.
+- Güncellenen sayfalar: `data-pipeline.md` (Leakage Boundaries), `validation-and-backtesting.md`
+  (Selection Boundary).
+
 ## [2026-11-10] REVIEW | Kol-B sızıntı denetimi K1–K9 uygulandı
 
 - Denetim (`analizler/kolb_sizinti_denetimi_2026-11-09.md`) bulguları dal `audit/kolb-k1-k9`
