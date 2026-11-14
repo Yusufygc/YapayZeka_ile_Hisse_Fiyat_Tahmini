@@ -42,6 +42,15 @@ Metodolojik not:
 
   Doğru: raw_monthly → diff/pct_change (aylık) → ffill → daily
     → Tüm türetilmiş değerler gerçek aylık değişimleri yansıtır.
+
+Look-ahead notları:
+  * Aylık değerler ayın 1'i ile damgalıdır ama ay SONU / o ayın gerçekleşmesidir;
+    yayın tarihi = ay sonu + lag (bkz. macro_transforms.lag_monthly_features).
+  * Aylık→günlük birleşim merge_asof(backward) ile yapılır (yayın günü hafta
+    sonuna düşse bile ay kaybolmaz).
+  * ABD seansı serileri (VIX, DXY, US10Y, GOLD_USD, OIL_USD) BIST kapanışından
+    ~5 saat sonra kapanır; macro_feature_engineering.US_SESSION_COLUMNS ile
+    1 satır geciktirilir. USDTRY ve BIST endeksleri gecikmesizdir.
 """
 
 from __future__ import annotations
@@ -136,13 +145,21 @@ class MacroPipeline:
 
     Args:
         cache_dir : Ham veri CSV'lerinin saklanacağı dizin.
+        rate_release_lag_days : Politika faizi için AY SONUNDAN sonraki gecikme
+            (gün). INTEREST_RATE.csv değeri ayın 1'i ile damgalanır ama ay-sonu
+            seviyesidir (2023-06-01=15.00, artış 2023-06-22'de oldu); bu yüzden
+            damga önce ay sonuna taşınır, sonra +1 gün eklenir.
+        cpi_release_lag_days : TÜFE için AY SONUNDAN sonraki gecikme (gün).
+            TÜİK, M ayı TÜFE'sini M+1 ayının ~3'ünde yayımlar; ay sonu + 5 gün
+            (~3. iş günü) güvenli yaklaşımdır. Eski varsayılan (ayın 1'i + 15)
+            yayımdan ~2 hafta ÖNCE değeri görünür kılıyordu.
     """
 
     def __init__(
         self,
         cache_dir: str = "data/macro",
         rate_release_lag_days: int = 1,
-        cpi_release_lag_days: int = 15,
+        cpi_release_lag_days: int = 5,
     ):
         self.cache_dir = cache_dir
         self.rate_release_lag_days = max(0, int(rate_release_lag_days))

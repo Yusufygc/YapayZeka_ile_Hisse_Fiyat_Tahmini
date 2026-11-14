@@ -49,7 +49,7 @@ class FeatureCache:
             cache.put(key, df, meta)
     """
 
-    _VERSION = "3"  # Bump to invalidate all existing cache entries.
+    _VERSION = "4"  # Bump to invalidate all existing cache entries. v4: makro yayim gecikmesi ay sonuna gore, ABD seansi 1 gun gecikmeli.
 
     def __init__(self, cache_dir: str, ttl_hours: float = 24.0) -> None:
         self.cache_dir = cache_dir
@@ -87,7 +87,7 @@ class FeatureCache:
             "feature_mode": getattr(data_cfg, "feature_mode", "stationary_features"),
             "use_macro": bool(getattr(data_cfg, "use_macro", True)),
             "macro_rate_lag_days": int(getattr(data_cfg, "macro_rate_lag_days", 1)),
-            "macro_cpi_lag_days": int(getattr(data_cfg, "macro_cpi_lag_days", 15)),
+            "macro_cpi_lag_days": int(getattr(data_cfg, "macro_cpi_lag_days", 5)),
             "prune_correlated_features": bool(
                 getattr(data_cfg, "prune_correlated_features", False)
             ),

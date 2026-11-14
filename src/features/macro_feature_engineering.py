@@ -7,6 +7,14 @@ import pandas as pd
 import numpy as np
 
 
+# ABD seansında kapanan seriler. BIST 18:00 TRT'de kapanır, ABD kapanışı ~23:00
+# TRT; aynı tarihli ABD verisi BIST karar anında bilinemez -> 1 satır gecikme.
+# USDTRY, EURTRY ve BIST100/sektör endeksleri BIST seansı sırasında gözlenebilir
+# olduğu için BİLEREK gecikmesiz bırakılır.
+US_SESSION_COLUMNS: tuple[str, ...] = ("VIX", "DXY", "US10Y", "GOLD_USD", "OIL_USD")
+US_SESSION_LAG_ROWS = 1
+
+
 def engineer_monthly_rate(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy().sort_values("Date").reset_index(drop=True)
     rate_col = "INTEREST_RATE" if "INTEREST_RATE" in df.columns else "Rate"
@@ -26,6 +34,13 @@ def engineer_monthly_cpi(df: pd.DataFrame) -> pd.DataFrame:
 
 def engineer_daily(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
+
+    # P0-5: ABD seansı seviyelerini getiri/değişim hesaplanmadan ÖNCE geciktir ki
+    # türetilmiş özellikler (VIX_Change, DXY_Return, ...) tutarlı kalsın.
+    # Satırlar Date'e göre sıralı varsayılır (build_base_daily_macro sıralar).
+    for col in US_SESSION_COLUMNS:
+        if col in df.columns:
+            df[col] = df[col].shift(US_SESSION_LAG_ROWS)
 
     if "USDTRY" in df.columns:
         df["USDTRY_Return"] = df["USDTRY"].pct_change()
@@ -57,8 +72,12 @@ def engineer_daily(df: pd.DataFrame) -> pd.DataFrame:
     if "GOLD_USD" in df.columns:
         df["Gold_USD_Return"] = df["GOLD_USD"].pct_change()
         if "USDTRY_Return" in df.columns:
+            # Altın USD getirisi 1 gün gecikmeli olduğundan, TRY'ye çevirirken
+            # de aynı güne ait (gecikmeli) USDTRY getirisi kullanılır; aksi halde
+            # gerçek olmayan hibrit bir getiri oluşur.
+            usdtry_ret = df["USDTRY_Return"].shift(US_SESSION_LAG_ROWS)
             df["Gold_TRY_Return"] = (
-                (1 + df["Gold_USD_Return"]) * (1 + df["USDTRY_Return"]) - 1
+                (1 + df["Gold_USD_Return"]) * (1 + usdtry_ret) - 1
             )
         df.drop(columns=["GOLD_USD"], inplace=True)
 

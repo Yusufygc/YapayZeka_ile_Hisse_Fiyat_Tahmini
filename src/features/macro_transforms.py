@@ -39,10 +39,26 @@ def lag_monthly_features(
     *,
     lag_days: int,
     raw_date_column: str,
+    anchor_to_month_end: bool = True,
 ) -> pd.DataFrame:
+    """Aylik feature'lari yayim tarihine tasir (look-ahead onleme).
+
+    Aylik kaynak dosyalar (INTEREST_RATE.csv, CPI.csv) degeri ayin 1'i ile
+    damgalar, ancak deger ayin SONUNDAKI seviyeyi / o aya ait gerceklesmeyi
+    temsil eder (ornek: 2023-06-01=15.00, TCMB artisi 2023-06-22'de oldu).
+    Damgayi dogrudan 1'inden gecikmeli saymak ayin son ~3 haftasini sizdirir.
+    Bu yuzden once damga ay sonuna (``MonthEnd(0)``) tasinir, sonra
+    ``lag_days`` eklenir. ``features["Date"]`` ay basi damgasi varsayilir;
+    ``anchor_to_month_end=False`` eski (1'inden say) davranisi geri getirir.
+
+    Ham damga ``raw_date_column`` icinde korunur.
+    """
     lagged = features.copy()
     lagged[raw_date_column] = lagged["Date"]
-    lagged["Date"] = lagged["Date"] + pd.to_timedelta(lag_days, unit="D")
+    release = pd.to_datetime(lagged["Date"]).dt.normalize()
+    if anchor_to_month_end:
+        release = release + pd.offsets.MonthEnd(0)
+    lagged["Date"] = release + pd.to_timedelta(lag_days, unit="D")
     return lagged
 
 
@@ -102,10 +118,21 @@ def merge_ffill_monthly_features(
     *,
     columns: list[str],
 ) -> pd.DataFrame:
-    if monthly_feats is None:
+    """Aylik feature'lari gunluk takvime ``merge_asof(backward)`` ile tasir.
+
+    Eski ``merge(on="Date", how="left")`` + ffill, yayim tarihi (ay sonu + lag)
+    gunluk takvimde is gunu degilse (hafta sonu/tatil) o ayi sessizce
+    dusuruyordu. merge_asof, yayim tarihinden SONRAKI ilk gunluk satira
+    degeri tasir; yayim tarihinden onceki satirlar NaN kalir.
+    """
+    if monthly_feats is None or monthly_feats.empty:
         return macro
-    macro = pd.merge(macro, monthly_feats, on="Date", how="left")
-    for col in columns:
-        if col in macro.columns:
-            macro[col] = macro[col].ffill()
-    return macro
+    left = macro.copy()
+    right = monthly_feats.copy()
+    left["Date"] = pd.to_datetime(left["Date"]).astype("datetime64[ns]")
+    right["Date"] = pd.to_datetime(right["Date"]).astype("datetime64[ns]")
+    # Ayni yayim tarihine dusen birden fazla kayitta sonuncu gecerli.
+    right = right.drop_duplicates("Date", keep="last")
+    left = left.sort_values("Date", kind="stable")
+    right = right.sort_values("Date", kind="stable")
+    return pd.merge_asof(left, right, on="Date", direction="backward")

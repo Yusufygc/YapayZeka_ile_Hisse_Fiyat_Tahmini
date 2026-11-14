@@ -20,6 +20,7 @@ v2 (H2 düzeltmesi):
   [0,1] aralığı dışına ekstrapole ediyor → model eğitim ortalamasına çöküyordu.
 """
 
+import logging
 import os
 import pandas as pd
 import numpy as np
@@ -40,6 +41,9 @@ _FOMC_LARGE_GAP_DAYS = 365  # sonraki FOMC bulunamazsa kullanilacak yer tutucu
 
 # Sprint 7 A7.2: cross-sectional momentum lookback (is gunu).
 _MOMENTUM_LOOKBACK_DAYS = 60
+
+
+logger = logging.getLogger(__name__)
 
 
 class FeaturePipeline:
@@ -444,9 +448,40 @@ class FeaturePipeline:
         # Sol birleşim: hisse veri setinin tarih kümesini koru
         merged = pd.merge(df, macro_cp, on="Date", how="left")
 
-        # Makro verinin tatil farklılıklarını forward-fill ile kapat
+        # Makro kapsam kontrolu: makro son tarihi hisse son tarihinden >5 gun
+        # geride ise getiri kolonlari 0'a, seviye kolonlari ffill'e gider.
+        if len(macro_cp) and len(df):
+            macro_max = macro_cp["Date"].max()
+            stock_max = df["Date"].max()
+            if pd.notna(macro_max) and pd.notna(stock_max) and (
+                stock_max - macro_max
+            ) > pd.Timedelta(days=5):
+                logger.warning(
+                    "Macro verisi hisse verisinin gerisinde: macro_max=%s stock_max=%s "
+                    "(>5 gun). Getiri/degisim kolonlari 0, seviyeler ffill.",
+                    macro_max.date(),
+                    stock_max.date(),
+                )
+
+        # Makro verinin tatil farklılıklarını forward-fill ile kapat.
+        # P1-15: getiri/degisim kolonlari ffill edilirse son getiri aylarca
+        # tekrarlanir; bunlar icin eksik deger 0 (degisim yok) olur.
         macro_cols = [c for c in macro_cp.columns if c != "Date"]
-        merged[macro_cols] = merged[macro_cols].ffill()
+        flow_cols = [
+            c for c in macro_cols
+            if c.endswith("_Return") or c.endswith("_Change") or "Return" in c
+        ]
+        level_cols = [c for c in macro_cols if c not in flow_cols]
+        if level_cols:
+            merged[level_cols] = merged[level_cols].ffill()
+        if flow_cols and len(macro_cp):
+            # Sadece makro takviminde OLMAYAN (kapsam disi / tatil) hisse gunleri
+            # 0 olur; makro baslangicindan onceki satirlar NaN kalir (eski davranis:
+            # ffill lider NaN'i doldurmaz) ve sonraki dropna ile elenir.
+            gap_mask = ~merged["Date"].isin(macro_cp["Date"]) & (
+                merged["Date"] >= macro_cp["Date"].min()
+            )
+            merged.loc[gap_mask, flow_cols] = merged.loc[gap_mask, flow_cols].fillna(0.0)
 
         # Göreli güç: hissenin piyasayla ayrışması
         if "Return" in merged.columns and "BIST100_Return" in merged.columns:

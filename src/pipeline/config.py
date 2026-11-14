@@ -23,7 +23,7 @@ class DataConfig:
     scaling_mode: str = "robust_x_standard_y_clip"
     use_macro: bool = True
     macro_rate_lag_days: int = 1
-    macro_cpi_lag_days: int = 15
+    macro_cpi_lag_days: int = 5  # ay sonu + 5 gün (TÜİK ~M+1 ayının 3. günü yayımlar)
     prune_correlated_features: bool = False
     correlation_threshold: float = 0.98
     lag_feature_count: int = 5
