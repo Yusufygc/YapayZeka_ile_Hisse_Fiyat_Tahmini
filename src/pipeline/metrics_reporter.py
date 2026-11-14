@@ -49,7 +49,17 @@ class _MetricsReporterMixin:
     ) -> Dict[str, Dict[str, float]]:
         enriched = enrich_with_benchmark_metrics(metrics_dict)
         for _, model_metrics in enriched.items():
-            model_metrics["Composite_Score"] = compute_composite_score(model_metrics)
+            composite = compute_composite_score(model_metrics)
+            # Benchmark yoksa (goreli metrikler NaN) model lider kapisini gecemez:
+            # skor 49'da kapatilir ve Eligible_For_Leader=False zorlanir.
+            try:
+                rmse_ratio = float(model_metrics.get("RMSE_vs_benchmark", float("nan")))
+            except (TypeError, ValueError):
+                rmse_ratio = float("nan")
+            if not np.isfinite(rmse_ratio):
+                model_metrics["Eligible_For_Leader"] = False
+                composite = min(composite, 49.0)
+            model_metrics["Composite_Score"] = composite
         return enriched
 
     # ------------------------------------------------------------------ #

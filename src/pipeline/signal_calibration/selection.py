@@ -41,6 +41,14 @@ def calibration_constraint_passed(row: Dict[str, Any]) -> bool:
 
 
 def select_confirmed_row(rows: list[Dict[str, Any]]) -> Dict[str, Any] | None:
+    """OOS-onayli en iyi satiri secer.
+
+    DIKKAT: ``OOS_Constraint_Passed`` walk-forward EVALUATION fold'lari uzerinde
+    hesaplanir; bu secim bu fold'lari kullandigi icin ayni fold'larin sonradan
+    ``suffix="wf"`` altinda raporlanan backtest'i secim-kirlenmis (confirmation)
+    sayilir (``Selection_Contaminated=True`` / ``Reporting_Role="confirmation"``).
+    Gercek tarafsiz rapor yalnizca final holdout'tur.
+    """
     candidates = [
         row
         for row in rows

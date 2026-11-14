@@ -49,6 +49,7 @@ SIGNAL_CALIBRATION_REPORT_COLUMNS = [
     "Seed",
     "Grid_Size",
     "Executed_Trials",
+    "Trial_Count_For_Metrics",
     "Adaptive_Expanded",
     "Coverage_Status",
     "Model_Count",
@@ -307,6 +308,13 @@ class _SignalCalibratorMixin:
             trial_count_for_metrics=trial_count_for_metrics,
             min_trade_count=min_trade_count,
         )
+        # Adaptif genisleme sonrasi GERCEK deneme sayisi: deflated-Sharpe ve OOS
+        # dogrulamasi genisleme oncesi (kucuk) sayiyi kullanmamali.
+        trial_count_for_metrics = self._final_trial_count_for_metrics(
+            n_models=len(candidates),
+            executed_trials=int(grid_metadata["executed_trials"]),
+        )
+        grid_metadata["trial_count_for_metrics"] = trial_count_for_metrics
 
         require_oos = bool(self.ctx.signal_calibration_require_oos_confirmation)
         oos_status = self._apply_oos_confirmation_to_signal_rows(
@@ -362,7 +370,14 @@ class _SignalCalibratorMixin:
             "decision_md": decision_md,
             "best_row": active_row,
             "rejected": rejection_active,
+            "trial_count_for_metrics": int(trial_count_for_metrics),
+            "oos_confirmation_status": oos_status,
         }
+
+    @staticmethod
+    def _final_trial_count_for_metrics(*, n_models: int, executed_trials: int) -> int:
+        """Deflated-Sharpe icin nihai deneme sayisi = modeller x degerlendirilen trial."""
+        return max(1, int(n_models) * int(executed_trials))
 
     def _append_signal_calibration_trials(
         self,
@@ -526,6 +541,8 @@ class _SignalCalibratorMixin:
         calibration_df["Seed"] = grid_metadata["seed"]
         calibration_df["Grid_Size"] = int(grid_metadata["grid_size"])
         calibration_df["Executed_Trials"] = int(grid_metadata["executed_trials"])
+        if "trial_count_for_metrics" in grid_metadata:
+            calibration_df["Trial_Count_For_Metrics"] = int(grid_metadata["trial_count_for_metrics"])
         calibration_df["Adaptive_Expanded"] = bool(grid_metadata["adaptive_expanded"])
         calibration_df["Coverage_Status"] = grid_metadata["coverage_status"]
 
@@ -572,6 +589,8 @@ class _SignalCalibratorMixin:
         ranked_row["Seed"] = grid_metadata["seed"]
         ranked_row["Grid_Size"] = int(grid_metadata["grid_size"])
         ranked_row["Executed_Trials"] = int(grid_metadata["executed_trials"])
+        if "trial_count_for_metrics" in grid_metadata:
+            ranked_row["Trial_Count_For_Metrics"] = int(grid_metadata["trial_count_for_metrics"])
         ranked_row["Adaptive_Expanded"] = bool(grid_metadata["adaptive_expanded"])
         ranked_row["Coverage_Status"] = grid_metadata["coverage_status"]
         ranked_row["Active_For_Execution"] = not rejection_active
@@ -597,6 +616,13 @@ class _SignalCalibratorMixin:
             "execution_calibration_trials": int(len(rows)),
             "grid_size": int(grid_metadata["grid_size"]),
             "executed_trials": int(grid_metadata["executed_trials"]),
+            "trial_count_for_metrics": int(
+                grid_metadata.get("trial_count_for_metrics")
+                or self._final_trial_count_for_metrics(
+                    n_models=len(candidates),
+                    executed_trials=int(grid_metadata["executed_trials"]),
+                )
+            ),
             "trial_cap": grid_metadata["trial_cap"],
             "calibration_profile": grid_metadata["calibration_profile"],
             "sampler": grid_metadata["sampler"],

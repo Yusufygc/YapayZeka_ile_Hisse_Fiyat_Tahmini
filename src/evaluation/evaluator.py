@@ -92,6 +92,10 @@ METRICS_REPORT_COLUMNS = [
     "Beats_Benchmark_RMSE",
     "Beats_Zero_Return_RMSE",
     "Eligible_For_Leader",
+    # === RAPOR ROLU / SEZGI KAPISI ETIKETLERI (look-ahead + secim kirliligi) ===
+    "Reporting_Role",
+    "Selection_Contaminated",
+    "Gate_Metrics_Source",
     "Neutral_Rate",
     "MAPE",
     # === RAW RETURNS (dipnot — advisory icin yan referans) ===
@@ -161,9 +165,14 @@ def compute_metrics(
     }
 
 
-def select_benchmark_model(metrics_dict: Dict[str, Dict[str, float]]) -> str:
+def select_benchmark_model(metrics_dict: Dict[str, Dict[str, float]]) -> str | None:
     """
     Pick the strongest baseline benchmark model for relative metrics.
+
+    Returns ``None`` when no baseline/benchmark model is present in
+    ``metrics_dict``. A non-benchmark model is NEVER returned as its own
+    benchmark (that would force RMSE_vs_benchmark=1.0 / DirAcc_vs_benchmark=0
+    and silently mark the model as leader-eligible).
     """
     if not metrics_dict:
         raise ValueError("Benchmark secimi icin metrics_dict bos olamaz.")
@@ -184,7 +193,7 @@ def select_benchmark_model(metrics_dict: Dict[str, Dict[str, float]]) -> str:
             ),
         )
 
-    return next(iter(metrics_dict))
+    return None
 
 
 def enrich_with_benchmark_metrics(
@@ -197,9 +206,14 @@ def enrich_with_benchmark_metrics(
         return metrics_dict
 
     benchmark_name = select_benchmark_model(metrics_dict)
-    benchmark_metrics = metrics_dict[benchmark_name]
-    benchmark_rmse = max(float(benchmark_metrics.get("RMSE", 0.0)), 1e-8)
-    benchmark_dir_acc = float(benchmark_metrics.get("Dir_Acc", 0.0))
+    if benchmark_name is None:
+        benchmark_rmse = float("nan")
+        benchmark_dir_acc = float("nan")
+    else:
+        benchmark_metrics = metrics_dict[benchmark_name]
+        benchmark_rmse = max(float(benchmark_metrics.get("RMSE", 0.0)), 1e-8)
+        benchmark_dir_acc = float(benchmark_metrics.get("Dir_Acc", 0.0))
+    benchmark_available = benchmark_name is not None
     zero_return_metrics = metrics_dict.get("Naive Zero Return", {})
     zero_return_rmse = float(zero_return_metrics.get("RMSE", np.nan))
 
@@ -212,13 +226,17 @@ def enrich_with_benchmark_metrics(
         buy_hold_sharpe = float(row.get("BuyHold_Sharpe", 0.0))
 
         row["Benchmark_Model"] = benchmark_name
-        row["Benchmark_Source"] = "best_baseline_by_rmse"
-        row["RMSE_vs_benchmark"] = round(rmse / benchmark_rmse, 4)
+        row["Benchmark_Source"] = (
+            "best_baseline_by_rmse" if benchmark_available else "no_benchmark_available"
+        )
+        # Benchmark yoksa goreli metrikler NaN: model kendi kendisinin benchmark'i
+        # olamaz ve lider kapisini gecemez (Eligible_For_Leader=False).
+        row["RMSE_vs_benchmark"] = round(rmse / benchmark_rmse, 4) if benchmark_available else np.nan
         row["Mandatory_Zero_Return_RMSE"] = round(zero_return_rmse, 4) if np.isfinite(zero_return_rmse) else np.nan
         row["RMSE_vs_zero_return"] = round(rmse / max(zero_return_rmse, 1e-8), 4) if np.isfinite(zero_return_rmse) else np.nan
-        row["DirAcc_vs_benchmark"] = round(dir_acc - benchmark_dir_acc, 2)
+        row["DirAcc_vs_benchmark"] = round(dir_acc - benchmark_dir_acc, 2) if benchmark_available else np.nan
         row["Sharpe_excess_vs_buy_hold"] = round(sharpe - buy_hold_sharpe, 4)
-        row["Beats_Benchmark_RMSE"] = rmse <= benchmark_rmse
+        row["Beats_Benchmark_RMSE"] = bool(benchmark_available and rmse <= benchmark_rmse)
         row["Beats_Zero_Return_RMSE"] = bool(np.isfinite(zero_return_rmse) and rmse <= zero_return_rmse)
         row["Beats_BuyHold_Sharpe"] = sharpe >= buy_hold_sharpe
         row["Eligible_For_Leader"] = bool(row["Beats_Benchmark_RMSE"])

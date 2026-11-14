@@ -2,6 +2,7 @@
 """Production best-model eligibility guards."""
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, Literal
 
 EligibilityStatus = Literal[
@@ -27,6 +28,11 @@ def compute_eligibility(
 ) -> tuple[EligibilityStatus, str]:
     if not is_production_candidate:
         return ("no_candidate", "Model production candidate degil.")
+    if rmse_vs_benchmark is not None and not math.isfinite(rmse_vs_benchmark):
+        return (
+            "benchmark_failed",
+            "Benchmark karsilastirmasi yok (RMSE_vs_benchmark tanimsiz).",
+        )
     if rmse_vs_benchmark is not None and rmse_vs_benchmark > 1.0:
         return (
             "benchmark_failed",

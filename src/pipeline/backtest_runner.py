@@ -387,6 +387,7 @@ class _BacktestRunnerMixin:
         suffix: str,
         target_mode: str,
         model_metrics_by_model: Dict[str, Dict[str, Any]],
+        trial_count: Optional[int] = None,
     ) -> tuple[
         Dict[str, Dict[str, Any]],
         Dict[str, Dict[str, Any]],
@@ -423,7 +424,10 @@ class _BacktestRunnerMixin:
                 continue
 
             results[model_name] = result
-            metrics_by_model[model_name] = self._summarize_backtest_result(result, len(backtest_inputs))
+            metrics_by_model[model_name] = self._summarize_backtest_result(
+                result,
+                len(backtest_inputs) if trial_count is None else max(len(backtest_inputs), int(trial_count)),
+            )
             trades_by_model[model_name] = result["trades"]
             equity_curves[model_name] = result["equity_curve"]
 
@@ -529,7 +533,20 @@ class _BacktestRunnerMixin:
         backtest_inputs: Dict[str, Dict[str, Any]],
         suffix: str,
         model_metrics_by_model: Optional[Dict[str, Dict[str, Any]]] = None,
+        *,
+        gate_metrics_source: Optional[str] = None,
+        reporting_role: Optional[str] = None,
+        selection_contaminated: Optional[bool] = None,
+        trial_count: Optional[int] = None,
     ) -> Dict[str, Any]:
+        """Backtest yurutur.
+
+        ``model_metrics_by_model`` kalite kapisi (Dir_Acc / RMSE_vs_benchmark /
+        Composite_Score) girdisidir ve islem yapilan pencereden ONCE hesaplanmis
+        olmalidir (``gate_metrics_source``: "walk_forward" | "calibration_folds" |
+        "none"). ``None``/bos verilirse kapi uygulanmaz. ``trial_count`` deflated
+        Sharpe icin deneme sayisidir (model sayisindan kucukse model sayisi alinir).
+        """
         if not self.ctx.backtest_enabled or not backtest_inputs:
             return {}
 
@@ -539,10 +556,19 @@ class _BacktestRunnerMixin:
             suffix=suffix,
             target_mode=target_mode,
             model_metrics_by_model=model_metrics_by_model or {},
+            trial_count=trial_count,
         )
 
         if not metrics_by_model:
             return {}
+
+        effective_gate_source = gate_metrics_source or ("none" if not model_metrics_by_model else "unspecified")
+        for bt_metrics in metrics_by_model.values():
+            bt_metrics["Gate_Metrics_Source"] = effective_gate_source
+            if reporting_role is not None:
+                bt_metrics["Reporting_Role"] = reporting_role
+            if selection_contaminated is not None:
+                bt_metrics["Selection_Contaminated"] = bool(selection_contaminated)
 
         self.state.latest_backtest_results[suffix] = results
         self.state.latest_backtest_metrics[suffix] = metrics_by_model
@@ -588,4 +614,6 @@ class _BacktestRunnerMixin:
             "shadow_results": shadow_results,
             "suffix": suffix,
             "results": results,
+            "gate_metrics_source": effective_gate_source,
+            "trial_count": None if trial_count is None else int(trial_count),
         }

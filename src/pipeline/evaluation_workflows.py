@@ -28,6 +28,21 @@ _BACKTEST_REGISTRY_FIELDS = (
 )
 
 
+# Fold satirlarindaki turetilmis alanlar: kapi metrikleri yeniden hesaplanirken
+# ortalamaya girmez (benchmark-goreli alanlar yeniden turetilir).
+_GATE_DERIVED_FIELDS = frozenset({
+    "Fold",
+    "RMSE_vs_benchmark",
+    "DirAcc_vs_benchmark",
+    "Composite_Score",
+    "Mandatory_Zero_Return_RMSE",
+    "RMSE_vs_zero_return",
+    "Sharpe_excess_vs_buy_hold",
+    "Stability_Score",
+})
+_BENCHMARK_MODEL_NAMES = ("Naive Last Value", "Naive Zero Return", "Naive Drift")
+
+
 def _merge_backtest_metrics(model_metrics_by_model: dict, backtest_results: dict) -> None:
     backtest_metrics = (backtest_results or {}).get("metrics") or {}
     for model_name, model_metrics in model_metrics_by_model.items():
@@ -252,8 +267,37 @@ class _EvaluationWorkflowBase:
     def _predict_single_model(self, model_name: str, model, tensors: dict):
         return self.services.prediction._predict_single_model(model_name, model, tensors)
 
-    def _run_backtests(self, backtest_inputs: dict, suffix: str, model_metrics_by_model=None):
-        return self.services.backtest._run_backtests(backtest_inputs, suffix, model_metrics_by_model)
+    def _run_backtests(self, backtest_inputs: dict, suffix: str, model_metrics_by_model=None, **kwargs):
+        return self.services.backtest._run_backtests(
+            backtest_inputs, suffix, model_metrics_by_model, **kwargs
+        )
+
+    def _gate_metrics_from_fold_rows(self, fold_metrics: dict, model_names=None) -> dict:
+        """Fold satirlarindan (islem penceresinden ONCE hesaplanmis) kapi metrikleri uretir.
+
+        Model basina fold ortalamasi alinir (yalniz sayisal, turetilmemis alanlar),
+        sonra benchmark-goreli alanlar + Composite_Score ayni yolla yeniden
+        hesaplanir (WF ortalama metrikleriyle ayni semantik). Bos giris -> {}.
+        """
+        averaged: dict = {}
+        for model_name, rows in (fold_metrics or {}).items():
+            if model_names is not None and model_name not in model_names and model_name not in _BENCHMARK_MODEL_NAMES:
+                continue
+            values: dict = {}
+            for row in rows or []:
+                for key, value in row.items():
+                    if key in _GATE_DERIVED_FIELDS or isinstance(value, (bool, np.bool_)):
+                        continue
+                    if isinstance(value, (int, float, np.integer, np.floating)) and np.isfinite(value):
+                        values.setdefault(key, []).append(float(value))
+            if values and "RMSE" in values and "Dir_Acc" in values:
+                averaged[model_name] = {key: float(np.mean(vals)) for key, vals in values.items()}
+        if not averaged:
+            return {}
+        scored = _attach_score_metadata(self, averaged)
+        if model_names is None:
+            return scored
+        return {name: scored[name] for name in scored if name in model_names}
 
     def _calibrate_signal_quality_thresholds(self, wf_fold_metrics: dict) -> None:
         return self.services.signal_calibration._calibrate_signal_quality_thresholds(wf_fold_metrics)
@@ -520,12 +564,19 @@ class WalkForwardEvaluationWorkflow(_EvaluationWorkflowBase):
         self.dataset_metadata["signal_calibration_split"] = signal_split_metadata
 
         wf_fold_reports = self._get_wf_fold_metric_report(enriched_fold_metrics)
+        # Kalite kapisi girdisi: YALNIZ kalibrasyon fold'larindan hesaplanir. Degerlendirme
+        # fold'larinin kendi sonuclari (Dir_Acc / RMSE_vs_benchmark / Composite) o fold'larda
+        # islem acip acmamayi belirleyemez (look-ahead).
+        calibration_gate_metrics = self._gate_metrics_from_fold_rows(
+            signal_calibration_fold_metrics,
+            model_names=set(wf_results),
+        )
         calibration_results = self._run_signal_calibration_steps(
             signal_calibration_fold_metrics,
             signal_calibration_backtest_inputs,
             signal_evaluation_backtest_inputs,
             signal_split_metadata,
-            wf_results,
+            calibration_gate_metrics,
         )
         wf_results = _attach_guard_metadata(self, wf_results)
         best_model_name = self._select_best_model(wf_results)
@@ -539,12 +590,31 @@ class WalkForwardEvaluationWorkflow(_EvaluationWorkflowBase):
         print(df_wf)
 
         self._attach_stability_scores(wf_results, enriched_fold_metrics)
+        eval_inputs = signal_evaluation_backtest_inputs or {}
+        eval_gate_metrics = {
+            name: calibration_gate_metrics[name]
+            for name in eval_inputs
+            if name in calibration_gate_metrics
+        }
+        gate_metrics_source = "calibration_folds" if eval_gate_metrics else "none"
+        # Deflated-Sharpe deneme sayisi: kalibrasyon kostuysa modeller x nihai trial sayisi.
+        calibration_trials = int((calibration_results or {}).get("trial_count_for_metrics") or 0)
         backtest_results = self._run_backtests(
-            signal_evaluation_backtest_inputs or {},
+            eval_inputs,
             suffix="wf",
-            model_metrics_by_model=wf_results,
+            model_metrics_by_model=eval_gate_metrics or None,
+            gate_metrics_source=gate_metrics_source,
+            reporting_role="confirmation",
+            selection_contaminated=True,
+            trial_count=max(len(eval_inputs), calibration_trials) or None,
         )
         _merge_backtest_metrics(wf_results, backtest_results)
+        for model_metrics in wf_results.values():
+            # WF degerlendirme fold'lari hem model secimi (WF composite) hem sinyal
+            # kalibrasyonu OOS onayi icin kullanildi -> bu rapor tarafsiz degil.
+            model_metrics["Reporting_Role"] = "confirmation"
+            model_metrics["Selection_Contaminated"] = True
+            model_metrics["Gate_Metrics_Source"] = gate_metrics_source
         self.latest_model_metrics["wf"] = wf_results
         self._log_walk_forward_experiments(wf_results)
         export_walk_forward_results(
@@ -576,7 +646,7 @@ class WalkForwardEvaluationWorkflow(_EvaluationWorkflowBase):
         signal_calibration_backtest_inputs,
         signal_evaluation_backtest_inputs,
         signal_split_metadata,
-        wf_results,
+        calibration_gate_metrics,
     ):
         if signal_calibration_fold_metrics:
             self._calibrate_signal_quality_thresholds(signal_calibration_fold_metrics)
@@ -592,7 +662,7 @@ class WalkForwardEvaluationWorkflow(_EvaluationWorkflowBase):
             return self._calibrate_walk_forward_signal_parameters(
                 wf_backtest_inputs=signal_calibration_backtest_inputs,
                 wf_evaluation_backtest_inputs=signal_evaluation_backtest_inputs,
-                model_metrics_by_model=wf_results,
+                model_metrics_by_model=calibration_gate_metrics,
                 suffix="wf_calibration",
             )
 
@@ -674,6 +744,74 @@ class WalkForwardEvaluationWorkflow(_EvaluationWorkflowBase):
 
 
 class FinalHoldoutEvaluationWorkflow(_EvaluationWorkflowBase):
+    def _walk_forward_gate_metrics_for(self, model_name: str) -> dict:
+        """Holdout kalite kapisi icin walk-forward metriklerini dondurur.
+
+        Kaynak ``state.latest_model_metrics["wf"]`` (WF workflow'u holdout'tan once
+        yazar). Yoksa {} -> kapi uygulanmaz (holdout sonuclarindan turetilmez).
+        """
+        wf_metrics = (self.latest_model_metrics or {}).get("wf") or {}
+        entry = wf_metrics.get(model_name)
+        if not entry:
+            return {}
+        return {model_name: dict(entry)}
+
+    def _holdout_trial_count(self) -> int | None:
+        """Deflated-Sharpe deneme sayisi: kalibrasyon kostuysa modeller x nihai trial sayisi."""
+        summary = self.signal_threshold_calibration_summary or {}
+        try:
+            count = int(summary.get("trial_count_for_metrics") or 0)
+        except (TypeError, ValueError):
+            return None
+        return count if count > 1 else None
+
+    def _compute_holdout_benchmark_metrics(
+        self,
+        model_name: str,
+        tensors: dict,
+        *,
+        y_true_price,
+        y_true_target,
+        prev_close,
+    ) -> dict:
+        """Naive benchmark'lari holdout tensorlerinde tahmin edip metriklerini hesaplar.
+
+        Benchmark'lar yalniz holdout oncesi egitim verisiyle (tensors["y_train"])
+        egitilir. Uretilemezse {} doner (goreli metrikler NaN kalir).
+        """
+        from src.pipeline.model_registry import get_spec, has_spec
+
+        target_mode = self.dataset_metadata.get("target_mode", "log_return")
+        n_rows = len(y_true_price)
+        results: dict = {}
+        for bench_name in _BENCHMARK_MODEL_NAMES:
+            if bench_name == model_name:
+                continue
+            try:
+                if not has_spec(bench_name):
+                    continue
+                spec = get_spec(bench_name)
+                if target_mode not in spec.target_modes:
+                    continue
+                bench_model = spec.factory()
+                bench_model.train(tensors["X_train"], tensors["y_train"])
+                bench_pred_price, bench_pred_target, *_ = self._predict_single_model(
+                    bench_name, bench_model, tensors
+                )
+                if len(bench_pred_price) < n_rows:
+                    continue
+                results[bench_name] = compute_metrics(
+                    y_true_price,
+                    bench_pred_price[-n_rows:],
+                    y_true_target=y_true_target,
+                    y_pred_target=bench_pred_target[-n_rows:],
+                    prev_close=prev_close,
+                    target_mode=target_mode,
+                )
+            except (KeyError, ValueError, TypeError, AttributeError, IndexError) as exc:
+                print(f"  [WARN] Holdout benchmark ({bench_name}) hesaplanamadi: {exc}")
+        return results
+
     def run(self, model_name: str, model, tensors: dict):
         print("\n" + "=" * 60)
         print("  ADIM 8 | Final Untouched Holdout Degerlendirmesi")
@@ -704,10 +842,28 @@ class FinalHoldoutEvaluationWorkflow(_EvaluationWorkflowBase):
         if quantile_price is not None:
             q_metrics = compute_quantile_metrics(y_true_price, quantile_price)
             metrics[model_name].update({key: round(value, 6) for key, value in q_metrics.items()})
-        metrics = _attach_score_metadata(self, metrics)
+        # Benchmark-goreli metrikler (RMSE_vs_benchmark, DirAcc_vs_benchmark, Composite)
+        # tek model sozlugunden hesaplanirsa model kendi kendine benchmark olur. Naive
+        # baseline'lari holdout uzerinde de tahmin edip karsilastirmaya dahil ediyoruz;
+        # yoksa goreli metrikler NaN kalir (lider kapisi gecilmez).
+        benchmark_metrics = self._compute_holdout_benchmark_metrics(
+            model_name,
+            tensors,
+            y_true_price=y_true_price,
+            y_true_target=y_true_target,
+            prev_close=prev_close,
+        )
+        scored = _attach_score_metadata(self, {**benchmark_metrics, model_name: metrics[model_name]})
+        metrics = {model_name: scored[model_name]}
         metrics = _attach_guard_metadata(self, metrics)
         metrics[model_name]["Selection_Source"] = "walk_forward_composite_score"
         metrics[model_name]["Evaluation_Set_Name"] = "untouched_final_holdout"
+        metrics[model_name]["Reporting_Role"] = "final_holdout"
+        metrics[model_name]["Selection_Contaminated"] = False
+        # Kalite kapisi: holdout oncesi walk-forward metrikleri (holdout sonuclari DEGIL).
+        wf_gate_metrics = self._walk_forward_gate_metrics_for(model_name)
+        gate_metrics_source = "walk_forward" if wf_gate_metrics else "none"
+        metrics[model_name]["Gate_Metrics_Source"] = gate_metrics_source
 
         final_metadata = dict(self.dataset_metadata)
         final_metadata["validation_mode"] = "final_holdout"
@@ -770,7 +926,11 @@ class FinalHoldoutEvaluationWorkflow(_EvaluationWorkflowBase):
                 }
             },
             suffix="final_holdout",
-            model_metrics_by_model=metrics,
+            model_metrics_by_model=wf_gate_metrics or None,
+            gate_metrics_source=gate_metrics_source,
+            reporting_role="final_holdout",
+            selection_contaminated=False,
+            trial_count=self._holdout_trial_count(),
         )
 
         # ── Final holdout grafikleri ─────────────────────────────────
