@@ -22,7 +22,6 @@ from src.evaluation.financial_metrics import (
     _target_to_simple_returns,
     compute_financial_metrics,
 )
-from src.utils.risk_free_rate import get_current_risk_free_rate
 
 # Sprint 3 (2026-05-25): preprocessor lazy-import. `joblib` agir bagimliligini
 # minimum test ortaminda yuklemekten kacinmak icin ic kullanim yerine
@@ -33,6 +32,29 @@ _BOOTSTRAP_RESAMPLES = 1000
 _BOOTSTRAP_SEED = 20260525
 
 
+_BOOTSTRAP_MEAN_BLOCK = 5
+
+
+def _stationary_bootstrap_indices(
+    n: int,
+    rng: np.random.Generator,
+    mean_block: float = _BOOTSTRAP_MEAN_BLOCK,
+) -> np.ndarray:
+    """Politis-Romano stationary bootstrap indeksleri (uzunluk n).
+
+    Her adimda p = 1/mean_block olasiligiyla yeni rastgele baslangic, aksi
+    halde bir onceki indeks + 1 (dairesel). Blok uzunluklari geometrik dagilir.
+    """
+    p = 1.0 / max(float(mean_block), 1.0)
+    restart = rng.random(n) < p
+    restart[0] = True
+    starts = rng.integers(0, n, size=n)
+    positions = np.arange(n)
+    # Her pozisyon icin icinde bulundugu blogun baslangic pozisyonu.
+    block_begin = np.maximum.accumulate(np.where(restart, positions, 0))
+    return (starts[block_begin] + (positions - block_begin)) % n
+
+
 def _bootstrap_sharpe_ci(
     returns: np.ndarray,
     risk_free_annual: float | None,
@@ -40,7 +62,12 @@ def _bootstrap_sharpe_ci(
     ci: float = 0.95,
     seed: int = _BOOTSTRAP_SEED,
 ) -> tuple[float, float]:
-    """Bootstrap (low, high) Sharpe CI on concatenated returns."""
+    """Stationary (Politis-Romano) block-bootstrap (low, high) Sharpe CI.
+
+    Getiriler seri korelasyonlu/volatilite-kumelenmeli olabilir; iid yeniden
+    ornekleme CI'yi olduğundan dar verir. Ortalama blok uzunlugu 5, sabit seed
+    (tekrarlanabilir).
+    """
     returns = np.asarray(returns, dtype=float).ravel()
     if returns.size < 2 or risk_free_annual is None:
         return float("nan"), float("nan")
@@ -48,7 +75,7 @@ def _bootstrap_sharpe_ci(
     n = returns.size
     sharpe_samples = np.empty(n_resamples, dtype=float)
     for i in range(n_resamples):
-        idx = rng.integers(0, n, size=n)
+        idx = _stationary_bootstrap_indices(n, rng)
         sharpe_samples[i] = _annualized_sharpe(returns[idx], risk_free_annual)
     alpha = (1.0 - ci) / 2.0
     low = float(np.nanquantile(sharpe_samples, alpha))
@@ -391,12 +418,10 @@ class WalkForwardValidator:
         # Sprint 3 A3.3: concat-Sharpe + bootstrap %95 CI.
         if all_strategy_returns:
             concat_returns = np.concatenate(all_strategy_returns)
-            # Risk-free rate fetched once for concat (Sprint 1 A1.1 fail-loud uyumlu).
-            try:
-                rf = get_current_risk_free_rate()
-            except Exception:
-                rf = None
-            if rf is not None and concat_returns.size > 0:
+            # sign(pred) * getiri long/short, kendi kendini finanse eden bir seridir;
+            # risksiz faiz fazlasi kazanmaz -> rf=0 (financial_metrics ile tutarli).
+            rf = 0.0
+            if concat_returns.size > 0:
                 sharpe_concat = _annualized_sharpe(concat_returns, rf)
                 ci_low, ci_high = _bootstrap_sharpe_ci(concat_returns, rf)
             else:

@@ -15,6 +15,7 @@ except ImportError:
     _get_rf = None
 
 import numpy as np
+from scipy.stats import binomtest
 try:
     from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error, mean_squared_error
 except ImportError:  # pragma: no cover - fallback for minimal validation runtimes
@@ -44,12 +45,12 @@ def _annualized_sharpe(returns: np.ndarray, risk_free_annual: float | None = 0.0
     if risk_free_annual is None:
         return float("nan")
     returns = np.asarray(returns, dtype=float).ravel()
-    if returns.size == 0:
+    if returns.size < 2:
         return 0.0
 
     excess = returns - _daily_risk_free_rate(risk_free_annual)
-    std_excess = np.std(excess)
-    if std_excess <= 0:
+    std_excess = np.std(excess, ddof=1)
+    if not std_excess > 1e-14:
         return 0.0
 
     return float((np.mean(excess) / std_excess) * np.sqrt(252))
@@ -172,8 +173,21 @@ def compute_financial_metrics(
     true_target = true_target[-k_target:] if k_target else np.asarray([], dtype=float)
     pred_target = pred_target[-k_target:] if k_target else np.asarray([], dtype=float)
 
+    dir_acc_n = 0
+    dir_acc_pvalue = float("nan")
     if k_target:
-        dir_acc = float(np.mean(np.sign(true_target) == np.sign(pred_target)) * 100)
+        # Gercek getirisi tam 0 olan satirlar yon bilgisi tasimaz: paydadan
+        # cikarilir (eskiden 0==0 "isabet", gercek 0 + pred != 0 "kacirma"
+        # sayiliyordu). Kullanilan gozlem sayisi ve tek-tarafli binom testi
+        # (H0: p=0.5, H1: p>0.5) raporlanir.
+        nonzero_true = true_target != 0
+        dir_acc_n = int(np.sum(nonzero_true))
+        if dir_acc_n:
+            hits = int(np.sum(np.sign(true_target[nonzero_true]) == np.sign(pred_target[nonzero_true])))
+            dir_acc = float(hits / dir_acc_n * 100)
+            dir_acc_pvalue = float(binomtest(hits, dir_acc_n, 0.5, alternative="greater").pvalue)
+        else:
+            dir_acc = 0.0
         return_mae = float(mean_absolute_error(true_target, pred_target))
         return_rmse = float(np.sqrt(mean_squared_error(true_target, pred_target)))
     else:
@@ -197,11 +211,18 @@ def compute_financial_metrics(
     k_strategy = min(len(realized_simple_returns), len(predicted_signal_source))
     if k_strategy:
         signals = np.sign(predicted_signal_source[-k_strategy:])
-        strategy_returns = signals * realized_simple_returns[-k_strategy:]
-        sharpe = _annualized_sharpe(strategy_returns, risk_free_annual)
+        realized_k = realized_simple_returns[-k_strategy:]
+        strategy_returns = signals * realized_k
+        # sign(pred) * ret self-financing long/short serisidir (nakit bacagi
+        # yok): rf kesintisi yapilmaz -> Sharpe ham getiri uzerinden (rf=0).
+        # (rf yalnizca long-only/nakit-bacakli buy-hold Sharpe'ta anlamlidir.)
+        sharpe = _annualized_sharpe(strategy_returns, 0.0)
 
         active_mask = signals != 0
-        hit_rate = float(np.mean(strategy_returns[active_mask] > 0) * 100) if np.any(active_mask) else 0.0
+        # Hit_Rate: long/short isaret stratejisi; getirisi tam 0 olan barlar
+        # (kazanc/kayip degil) paydadan cikarilir.
+        scored_mask = active_mask & (realized_k != 0)
+        hit_rate = float(np.mean(strategy_returns[scored_mask] > 0) * 100) if np.any(scored_mask) else 0.0
         neutral_rate = float(np.mean(~active_mask) * 100)
     else:
         sharpe = 0.0
@@ -215,6 +236,8 @@ def compute_financial_metrics(
         "Return_MAE": return_mae,
         "Return_RMSE": return_rmse,
         "Dir_Acc": dir_acc,
+        "Dir_Acc_N": dir_acc_n,
+        "Dir_Acc_PValue": dir_acc_pvalue,
         "Sharpe": sharpe,
         "Hit_Rate": hit_rate,
         "Neutral_Rate": neutral_rate,

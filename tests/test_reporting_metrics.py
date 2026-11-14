@@ -148,10 +148,11 @@ class ReportingMetricsTests(unittest.TestCase):
             risk_free_annual=0.40,
         )
 
-        self.assertLess(high_rf["Sharpe"], zero_rf["Sharpe"])
+        # sign(pred)*ret self-financing long/short seri: rf cikarilmaz (P1 #7).
+        self.assertEqual(high_rf["Sharpe"], zero_rf["Sharpe"])
         self.assertLess(high_rf["BuyHold_Sharpe"], zero_rf["BuyHold_Sharpe"])
 
-    def test_zero_drawdown_calmar_is_infinite(self):
+    def test_zero_drawdown_calmar_is_nan(self):
         equity_curve = pd.DataFrame({
             "Equity": [1.01, 1.02, 1.03],
             "BuyHold_Equity": [1.01, 1.02, 1.03],
@@ -166,7 +167,8 @@ class ReportingMetricsTests(unittest.TestCase):
             "trades": pd.DataFrame(),
         })
 
-        self.assertTrue(np.isinf(summary["Calmar"]))
+        # P1 #5: drawdown == 0 (ve <126 bar) -> Calmar tanimsiz (NaN), inf degil.
+        self.assertTrue(np.isnan(summary["Calmar"]))
 
     def test_composite_score_ignores_mape(self):
         metrics = {

@@ -100,7 +100,9 @@ def test_compute_financial_metrics_marks_unavailable(monkeypatch):
 
         assert result["Risk_Free_Unavailable"] is True
         assert result["Sharpe_Warning"] == "risk_free_unavailable"
-        assert math.isnan(result["Sharpe"])
+        # P1 #7: strateji Sharpe'i (sign(pred)*ret long/short) rf'siz hesaplanir,
+        # rf yokken NaN olmaz; rf'ye bagli BuyHold_Sharpe NaN kalir.
+        assert math.isfinite(result["Sharpe"])
         assert math.isnan(result["BuyHold_Sharpe"])
 
 
