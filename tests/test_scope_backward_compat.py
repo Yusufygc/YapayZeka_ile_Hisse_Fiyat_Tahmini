@@ -40,7 +40,7 @@ def test_candidate_models_content():
 
 def test_default_candidate_models_content():
     assert set(DEFAULT_CANDIDATE_MODELS) == {
-        "XGBoost", "LSTM", "DLinear", "NLinear",
+        "XGBoost", "Ridge Return", "LightGBM Return",
     }
 
 

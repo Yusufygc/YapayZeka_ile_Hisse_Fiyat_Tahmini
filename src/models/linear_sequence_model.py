@@ -161,7 +161,7 @@ register_model(ModelSpec(
     category="linear_decomp",
     role="candidate",
     ensemble_eligible=True,
-    default_candidate=True,
+    default_candidate=False,  # tek-hisse sequence lineer: arastirma modeli
     description="Trend + seasonal decomposition; lineer aile içinde tek pozitif WF.",
 ))
 
@@ -171,6 +171,6 @@ register_model(ModelSpec(
     category="linear_decomp",
     role="candidate",
     ensemble_eligible=False,
-    default_candidate=True,
+    default_candidate=False,  # tek-hisse sequence lineer: arastirma modeli
     description="Last-value normalization; DLinear varken bilgi içermeyen kuzen.",
 ))

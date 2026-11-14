@@ -243,6 +243,6 @@ register_model(ModelSpec(
     ensemble_eligible=True,
     requires=("tensorflow",),
     needs_config_keys=("lstm",),
-    default_candidate=True,
+    default_candidate=False,  # derin tek-hisse model: yuksek asiri-uyum, arastirma modeli
     description="Attention LSTM; sequence target için derin model.",
 ))

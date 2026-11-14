@@ -61,6 +61,10 @@ class ValidationConfig:
     wf_test_size: int = 21
     wf_max_train_size: Optional[int] = 756
     wf_window_type: str = "sliding"
+    # None/0 -> auto `target_horizon + 5` (etiket ortusmesi tamponu; pooled CV'deki
+    # E=h+5 ile ayni). Explicit deger < target_horizon ValueError verir. Eski
+    # `max(200, time_steps)` "SMA200 sizintisi" varsayimi yanlisti: ozellikler nedensel,
+    # test penceresi etiketsiz baglam satirlari alir.
     wf_embargo_size: Optional[int] = None
     final_holdout_size: int = 60
     # Sprint 3 (2026-05-25) A3.4: PurgedKFold + CPCV opt-in flag'ler.
@@ -147,8 +151,11 @@ class ExecutionConfig:
 
     backtest_enabled: bool = True
     initial_capital: float = 100000.0
-    commission_bps: float = 0.0
-    slippage_bps: float = 0.0
+    # BIST gercekci maliyet varsayilanlari (bist_rules.trend_threshold: komisyon 10 bps,
+    # slipaj 5 bps). BSMV (%5, komisyon uzerinden) backtest execution'da ayri parametre
+    # olarak desteklenmedigi icin komisyona katlanir: 10 * 1.05 = 10.5 bps.
+    commission_bps: float = 10.5
+    slippage_bps: float = 5.0
     signal_mode: str = "simple"  # "simple", "legacy" veya "professional"
     signal_config: SignalConfig = field(default_factory=SignalConfig)
     # Leakage korumasi (Faz 2.5):

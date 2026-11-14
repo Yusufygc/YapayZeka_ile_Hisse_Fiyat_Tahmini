@@ -8,26 +8,49 @@ import pandas as pd
 from typing import Tuple, List, Dict
 
 
-# Sprint 0 (2026-05-25): WF embargo auto-default. None veya 0 verilirse
-# `max(200, time_steps)` kullanilir. Sebep: Market_Regime_SMA200 ve diger
-# rolling-200 feature'lar train/test arasinda sizinti yaratir; tampon en az
-# 200 olmalidir. Bu helper data_manager.py'dan buraya tasindi ki agir
-# import zincirleri (joblib, tensorflow vb.) olmayan test ortamlarinda da
-# import edilebilsin.
-_MIN_AUTO_EMBARGO_SIZE = 200
+# P1 derin denetim (2026-11): WF embargo varsayilani `target_horizon + 5`.
+# Eski varsayilan `max(200, time_steps)` "SMA200 sizintisi" gerekcesiyle konmustu;
+# bu yanlis: ozellikler nedensel (causal) ve test penceresi etiketsiz baglam satirlari
+# (`embargo_context` + train kuyrugu) alir. Yalnizca ETIKET ortusmesi (ufuk h) sizdirir:
+# train son satirinin hedefi t+h kapanisini kullanir -> en az h satir tampon gerekir.
+# +5 guvenlik payi pooled CV'deki E=h+5 ile ayni.
+# Bu helper data_manager.py'dan buraya tasindi ki agir import zincirleri
+# (joblib, tensorflow vb.) olmayan test ortamlarinda da import edilebilsin.
+_AUTO_EMBARGO_BUFFER = 5
+# Kullanimdan kalkti (eski 200 tamponu). data_manager.py hala import ettigi icin
+# uyumluluk adina tutuluyor; embargo tabani artik target_horizon'dur.
+_MIN_AUTO_EMBARGO_SIZE = 1
 
 
-def _resolve_wf_embargo_size(raw_value, time_steps: int) -> int:
-    """Plan v1.0 Sprint 0 A0.2: None/0/negative → auto max(200, time_steps)."""
+def _validate_wf_embargo(embargo_size: int, target_horizon: int) -> int:
+    """Explicit embargo < target_horizon etiket ortusmesi (sizinti) yaratir -> ValueError."""
+    h = max(1, int(target_horizon or 1))
+    if int(embargo_size) < h:
+        raise ValueError(
+            f"wf_embargo_size={int(embargo_size)} < target_horizon={h}: train son "
+            f"satirlarinin t+{h} hedefi test doneminin fiyatlarini kullanir (etiket "
+            f"ortusmesi). En az {h} (onerilen {h + _AUTO_EMBARGO_BUFFER}) olmali."
+        )
+    return int(embargo_size)
+
+
+def _resolve_wf_embargo_size(raw_value, time_steps: int, target_horizon: int = 1) -> int:
+    """None/0/negatif/gecersiz -> auto `target_horizon + 5`; explicit deger < h -> ValueError.
+
+    ``time_steps`` artik embargoyu etkilemez (sequence baglami embargodan degil,
+    train kuyruğu + embargo satirlarindan gelir); imza geriye uyum icin korunur.
+    """
+    h = max(1, int(target_horizon or 1))
+    auto = h + _AUTO_EMBARGO_BUFFER
     if raw_value is None:
-        return max(_MIN_AUTO_EMBARGO_SIZE, int(time_steps))
+        return auto
     try:
         value = int(raw_value)
     except (TypeError, ValueError):
-        return max(_MIN_AUTO_EMBARGO_SIZE, int(time_steps))
+        return auto
     if value <= 0:
-        return max(_MIN_AUTO_EMBARGO_SIZE, int(time_steps))
-    return value
+        return auto
+    return _validate_wf_embargo(value, h)
 
 
 def _resolve_split_count(
@@ -116,6 +139,7 @@ class TimeSeriesSplitter:
         test_size:      int           = 30,
         max_train_size: int | None    = None,
         embargo_size:   int           = 0,
+        target_horizon: int | None    = None,
     ) -> List[Dict]:
         """
         Creates multiple chronological train/test splits for walk-forward validation.
@@ -130,12 +154,19 @@ class TimeSeriesSplitter:
                                     son ``max_train_size`` satır eğitim için
                                     kullanılır.  Durağan olmayan fiyat serilerinde
                                     (örn. BIST hisseleri) systematic bias'ı önler.
+            embargo_size   : train ile test arasindaki tampon (satir).
+            target_horizon : verilirse ``embargo_size < target_horizon`` ValueError
+                             (etiket ortusmesi sizintisi).  Test penceresinin sequence
+                             baglami ``embargo_context`` (+ train kuyrugu) ile saglanir;
+                             context satirlari yalniz ozellik olarak kullanilir.
         """
         if "Date" in df.columns:
             df = df.sort_values(by="Date").reset_index(drop=True)
 
         n = len(df)
         embargo_size = max(0, int(embargo_size))
+        if target_horizon is not None:
+            _validate_wf_embargo(embargo_size, target_horizon)
         n_splits = _resolve_split_count(n, n_splits, min_train_size, test_size, embargo_size)
         if n_splits < 1:
             return []

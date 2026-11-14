@@ -66,6 +66,7 @@ register_model(ModelSpec(
     category="linear_shrinkage",
     role="candidate",
     ensemble_eligible=True,
+    default_candidate=True,
     target_modes=("return", "log_return"),
     description="L2 shrinkage; düşük sinyal kalitesi fakat Holdout'ta sermaye koruma rolü.",
 ))

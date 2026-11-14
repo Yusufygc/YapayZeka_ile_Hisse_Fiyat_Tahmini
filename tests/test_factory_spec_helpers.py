@@ -74,7 +74,7 @@ def test_all_models_dynamic():
     all_models = model_factory.ALL_MODELS
     assert isinstance(all_models, list)
     # Default candidate kümesi (Faz 2 sözleşmesi).
-    assert set(all_models) == {"XGBoost", "LSTM", "DLinear", "NLinear"}
+    assert set(all_models) == {"XGBoost", "Ridge Return", "LightGBM Return"}
     assert "LSTM Lite" not in all_models
 
 

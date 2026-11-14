@@ -63,15 +63,15 @@ def test_resolve_candidates_filters_disabled():
 def test_resolve_candidates_default_when_no_selected():
     """selected boşsa default candidate kümesi döner."""
     result = resolve_candidates(selected=None, disabled=[])
-    assert result == {"XGBoost", "LSTM", "DLinear", "NLinear"}
+    assert result == {"XGBoost", "Ridge Return", "LightGBM Return"}
 
 
 def test_resolve_candidates_disabled_overrides_default():
     """Default candidate olsa bile disabled listesindekiler düşer."""
-    result = resolve_candidates(selected=None, disabled=["NLinear", "XGBoost"])
-    assert "NLinear" not in result
+    result = resolve_candidates(selected=None, disabled=["Ridge Return", "XGBoost"])
+    assert "Ridge Return" not in result
     assert "XGBoost" not in result
-    assert "DLinear" in result
+    assert "LightGBM Return" in result
 
 
 def test_resolve_candidates_require_available_drops_missing_deps():

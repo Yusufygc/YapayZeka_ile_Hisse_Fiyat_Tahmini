@@ -182,7 +182,14 @@ class LSTMLiteModel(BaseModel):
             tf.keras.backend.clear_session()
             return float(best_val_loss + 0.1 * best_val_mae)
 
-        study = optuna.create_study(direction="minimize")
+        # Tekrarlanabilir HPO: seed'siz TPE her kosuda farkli en iyi parametre verir.
+        seed = int(getattr(self, "random_state", None) or getattr(self, "seed", None) or 42)
+        if hasattr(self, "random_state") or hasattr(self, "seed"):
+            tf.random.set_seed(seed)
+        study = optuna.create_study(
+            direction="minimize",
+            sampler=optuna.samplers.TPESampler(seed=seed),
+        )
         study.optimize(objective, n_trials=max(1, self.tune_n_trials), show_progress_bar=False)
         params = study.best_params
         self.units = int(params.get("units", self.units))

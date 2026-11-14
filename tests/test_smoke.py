@@ -253,6 +253,9 @@ class TestDataManagerSmoke(unittest.TestCase):
                 models_dir=os.path.join(tmpdir, "models"),
             )
             df = _make_ohlcv(600)
+            # Ham OHLCV artik model girdisi degil; prepare_tensors icin en az bir
+            # duragan ozellik kolonu gerekir.
+            df["Return"] = df["Close"].pct_change().fillna(0.0)
             dm.df = df
             dm.feature_names = [c for c in df.columns if c != "Date"]
 

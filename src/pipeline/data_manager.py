@@ -18,7 +18,6 @@ from src.data.data_loader import load_data
 from src.data.preprocessor import scale_data, create_sequences
 from src.utils.data_splitter import (
     TimeSeriesSplitter,
-    _MIN_AUTO_EMBARGO_SIZE,
     _resolve_wf_embargo_size,
 )
 from src.features.feature_pipeline import FeaturePipeline
@@ -100,6 +99,7 @@ class DataManager:
         effective_wf_embargo_size = _resolve_wf_embargo_size(
             self.val_cfg.wf_embargo_size,
             self.data_cfg.time_steps,
+            target_horizon=int(getattr(self.data_cfg, "target_horizon", 1) or 1),
         )
 
         wf_max_train_size = self.val_cfg.wf_max_train_size
@@ -481,6 +481,7 @@ class DataManager:
             effective_wf_embargo_size = _resolve_wf_embargo_size(
                 self.val_cfg.wf_embargo_size,
                 self.data_cfg.time_steps,
+                target_horizon=int(getattr(self.data_cfg, "target_horizon", 1) or 1),
             )
             wf_max_train_size = (
                 None

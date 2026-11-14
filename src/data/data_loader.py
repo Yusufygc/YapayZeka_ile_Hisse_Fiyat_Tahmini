@@ -119,6 +119,14 @@ def load_and_clean(csv_path: str, drop_zero_volume: bool = True) -> pd.DataFrame
                         "  [DATA] Adj_Close bulundu; hedef ve teknik feature hesaplari "
                         f"duzeltilmis kapanis uzerinden yapilacak (max fark={max_abs_diff:.4%})."
                     )
+                # Close = Adj_Close iken Open/High/Low ham kalirsa OHLC tutarsiz olur
+                # (Low > Close vb.). Ayni faktorle (Adj/Close) olceklenir; faktor
+                # yalniz her ikisi de sonlu ve > 0 ise uygulanir, aksi halde 1. Hacim olceklenmez.
+                factor = (adj_close / raw_close).where(valid & (adj_close > 0), 1.0)
+                factor = factor.replace([np.inf, -np.inf], np.nan).fillna(1.0)
+                for ohl_col in ("Open", "High", "Low"):
+                    if ohl_col in df.columns:
+                        df[ohl_col] = pd.to_numeric(df[ohl_col], errors="coerce") * factor
                 df["Close"] = adj_close.combine_first(raw_close)
         else:
             corporate_action_report.update({

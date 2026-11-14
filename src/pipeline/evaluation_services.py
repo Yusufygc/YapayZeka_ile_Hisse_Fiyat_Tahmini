@@ -49,8 +49,8 @@ class EvaluationContext:
     ensemble_enabled: bool = False
     selected_models: Optional[set] = None
     backtest_enabled: bool = False
-    commission_bps: float = 0.0
-    slippage_bps: float = 0.0
+    commission_bps: float = 10.5  # ExecutionConfig ile ayni (10 bps + %5 BSMV)
+    slippage_bps: float = 5.0
     initial_capital: float = 0.0
     signal_mode: str = "legacy"
     default_signal_config: Any = None

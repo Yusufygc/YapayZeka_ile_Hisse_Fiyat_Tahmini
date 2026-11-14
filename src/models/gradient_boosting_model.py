@@ -46,6 +46,8 @@ class LightGBMReturnModel(BaseModel):
             "learning_rate": learning_rate,
             "num_leaves": num_leaves,
             "subsample": subsample,
+            # LightGBM'de subsample yalniz subsample_freq>0 ile etkin (aksi halde no-op).
+            "subsample_freq": 1,
             "colsample_bytree": colsample_bytree,
             "random_state": random_state,
             "objective": "regression",
@@ -95,6 +97,7 @@ register_model(ModelSpec(
     category="tree",
     role="candidate",
     ensemble_eligible=True,
+    default_candidate=True,
     requires=("lightgbm",),
     target_modes=("return", "log_return"),
     description="LightGBM regressor; RF ile birlikte SASA WF'sinin üst düzey üreticisi.",

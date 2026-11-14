@@ -13,13 +13,38 @@ import pandas as pd
 
 from src.data.data_loader import load_data
 from src.data.data_updater import DataUpdater
+from src.data.panel_columns import PIPELINE_RAW_COLS
 from src.data.preprocessor import create_sequences, scale_data
 from src.features.feature_cache import FeatureCache
 from src.features.feature_pipeline import FeaturePipeline
 from src.features.macro_pipeline import MacroPipeline
 from src.features.sector_mapping import resolve_sector_mapping
 from src.pipeline.config import DataConfig, ValidationConfig
-from src.utils.data_splitter import TimeSeriesSplitter
+from src.utils.data_splitter import (
+    TimeSeriesSplitter,
+    _resolve_wf_embargo_size,
+    _validate_wf_embargo,
+)
+
+# Model girdisi OLMAYAN kolonlar: ham OHLCV seviyeleri (durağan degil; fiyat/hacim
+# seviyesi ezberi) + tarih/hedef kolonlari. Panel yolunun ortak sabiti + `Adj_Close`.
+_NON_MODEL_FEATURE_COLS: frozenset[str] = frozenset(PIPELINE_RAW_COLS | {"Adj_Close"})
+
+
+def _is_auto_embargo(val_cfg) -> bool:
+    """val_cfg.wf_embargo_size None/<=0/gecersiz mi (auto)?  Mock/eksik cfg -> False."""
+    raw = getattr(val_cfg, "wf_embargo_size", "missing")
+    if raw is None:
+        return True
+    try:
+        return int(raw) <= 0
+    except (TypeError, ValueError):
+        return False
+
+
+def model_feature_names(columns) -> list[str]:
+    """Kolon listesinden model girdisi olacak (durağan) ozellikleri doner; sira korunur."""
+    return [c for c in columns if c not in _NON_MODEL_FEATURE_COLS]
 
 
 @dataclass
@@ -135,8 +160,11 @@ class DataIngestionService:
                 _cache._evict(_cache_key)
             else:
                 self.state.df = cached_df
-                self.state.feature_names = _meta["feature_names"]
-                self.state.feature_groups = _meta.get("feature_groups", {})
+                self.state.feature_names = model_feature_names(_meta["feature_names"])
+                self.state.feature_groups = {
+                    k: v for k, v in (_meta.get("feature_groups", {}) or {}).items()
+                    if k in set(self.state.feature_names)
+                }
                 self.state.feature_pruning_report = _meta.get("feature_pruning_report", {})
                 self.state.sector_mapping_report = _meta.get(
                     "sector_mapping_report",
@@ -164,8 +192,11 @@ class DataIngestionService:
             sector_mapping=sector_mapping,
             prune_fit_tail=prune_fit_tail,
         )
-        self.state.feature_names = feature_pipeline.feature_names
-        self.state.feature_groups = feature_pipeline.feature_groups
+        self.state.feature_names = model_feature_names(feature_pipeline.feature_names)
+        self.state.feature_groups = {
+            k: v for k, v in feature_pipeline.feature_groups.items()
+            if k in set(self.state.feature_names)
+        }
         self.state.feature_pruning_report = feature_pipeline.pruning_report
         self.state.sector_mapping_report = feature_pipeline.sector_mapping_report
         if macro_expected and not macro_available:
@@ -467,8 +498,14 @@ class TensorPreparationService:
         Böylece aynı gün bilgisinden aynı gün hedef üretilmez. Tree ve sequence
         modeller aynı tahmin problemi üzerinde çalışır.
         """
-        exclude = {"Date", "Close"}
-        features = [c for c in train_df.columns if c not in exclude]
+        # Ham Open/High/Low/Volume (+Adj_Close) seviyeleri X'e GIRMEZ: durağan degil.
+        # state.feature_names ayni filtreyle uretilir (XAI/artifact tutarliligi).
+        features = model_feature_names(train_df.columns)
+        if not features:
+            raise ValueError(
+                "Model icin ozellik kolonu kalmadi (ham OHLCV/Date/Close disinda "
+                "duragan ozellik gerekir)."
+            )
 
         train_close = train_df["Close"].values.astype(float)
         test_close = test_df["Close"].values.astype(float)
@@ -548,6 +585,7 @@ class TensorPreparationService:
             "scaler_X": scaler_X,
             "scaler_y": scaler_y,
             "clip_report": getattr(scaler_X, "clip_report_", {}),
+            "features": list(features),
             "context_rows": 0 if context_df is None else len(context_df),
             "original_y_test_aligned": test_close[h:],
             "prev_close_test": test_prev_close,
@@ -648,6 +686,16 @@ class ValidationSplitService:
 
         elif validation_mode == "walk_forward":
             self.state._wf_mode = True  # WF fold'larında scaler diske yazılmaz
+            h = max(1, int(getattr(self.ctx.data_cfg, "target_horizon", 1) or 1))
+            # Embargo ufuk-bilincli cozulur: auto -> h+5; explicit < h -> ValueError.
+            # (DataManager.__init__ bu degeri h=1 varsayimiyla on-hesaplar; burada duzeltilir.)
+            self.ctx.validation_config["wf_embargo_size"] = _resolve_wf_embargo_size(
+                getattr(self.ctx.val_cfg, "wf_embargo_size", None)
+                if _is_auto_embargo(self.ctx.val_cfg)
+                else self.ctx.validation_config["wf_embargo_size"],
+                self.ctx.data_cfg.time_steps,
+                h,
+            )
             wf_source_df = self.state.df
             holdout_size = int(self.ctx.validation_config.get("final_holdout_size", 0) or 0)
             min_required = (
@@ -684,6 +732,7 @@ class ValidationSplitService:
                 # neden olduğu sistematik küçük tahmini engeller.
                 max_train_size=self.ctx.validation_config["wf_max_train_size"],
                 embargo_size=self.ctx.validation_config["wf_embargo_size"],
+                target_horizon=h,
             )
             if not self.state.wf_splits:
                 required_for_one = (
