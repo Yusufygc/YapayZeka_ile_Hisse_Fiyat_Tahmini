@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "development", "fix/*", "feat/*"]
+  pull_request:
+    branches: ["main", "development"]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.13"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # torch CPU wheel'i icin PyTorch indeksi ek kaynak olarak verilir.
+          pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
+          pip install flake8
+
+      - name: Lint with flake8
+        run: |
+          # Kritik hatalar (syntax error, undefined name) CI'i durdurur.
+          flake8 src/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          # Stil uyarilari yalniz rapor edilir.
+          flake8 src/ tests/ --count --exit-zero --max-line-length=100 --statistics
+
+      - name: Run test suite
+        run: |
+          python -m pytest tests/ -q --tb=short
+
+      - name: Test FastAPI startup
+        run: |
+          python -c "
+          import sys; sys.path.insert(0, '.')
+          from src.api.main import app
+          print('FastAPI app import OK:', app.title)
+          "

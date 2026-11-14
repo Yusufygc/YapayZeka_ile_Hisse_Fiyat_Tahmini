@@ -1,28 +1,28 @@
 pandas==2.3.3
-numpy==2.0.1
+numpy==2.2.6
 scikit-learn==1.7.2
 xgboost==3.2.0
 # Optional modern boosting baseline. Pipeline skips LightGBM Return if absent.
-lightgbm==4.6.0
-prophet==1.3.0
+lightgbm==4.7.0
+prophet==1.5.0
 tensorflow==2.21.0
 ta==0.11.0
-matplotlib==3.10.8
-joblib==1.5.3
+matplotlib==3.10.9
+joblib==1.6.0
 optuna==4.8.0
 protobuf==6.33.6
-yfinance==1.3.0
-requests==2.31.0
+yfinance==1.8.0
+requests==2.34.2
 pandas-datareader==0.10.0   # FRED API -> CPI verisi; faiz TCMB EVDS'den alinir
 pandas-market-calendars==4.4.0
-statsmodels==0.14.6
+statsmodels==0.15.0
 shap==0.49.1
-PySide6==6.7.1
+PySide6==6.12.0
 
 # --- Kodda import edilen ama onceden listede olmayan paketler (2026-11-10 denetim, bulgu 4) ---
 # torch: CPU wheel icin `pip install torch --index-url https://download.pytorch.org/whl/cpu`
 torch==2.14.1
-fastapi==0.162.2
+fastapi==0.162.5
 uvicorn==0.54.0
 pydantic==2.14.3
 httpx==0.28.1

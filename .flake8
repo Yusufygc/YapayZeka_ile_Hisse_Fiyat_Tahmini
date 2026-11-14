@@ -1,0 +1,27 @@
+[flake8]
+max-line-length = 100
+extend-ignore =
+    # E203: whitespace before ':' (black uyumlu)
+    E203,
+    # W503: line break before binary operator (black uyumlu)
+    W503,
+    # E501: satır uzunluğu (black ile zaten kontrol ediliyor)
+    E501,
+    # F401: imported but unused (opsiyonel import'lar için)
+    F401
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    env,
+    outputs,
+    data,
+    models,
+    .mypy_cache,
+    .pytest_cache
+per-file-ignores =
+    # __init__.py dosyalarında F401 (re-export) normaldir
+    __init__.py:F401
+    # test dosyalarında assert expression normal
+    tests/*:S101

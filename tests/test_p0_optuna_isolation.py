@@ -95,18 +95,18 @@ def test_default_path_does_not_touch_persistent_db(create_study_spy):
     assert _persistent_db_mtime() == before
 
 
-def test_storage_without_study_name_raises():
+def test_storage_without_study_name_raises(tmp_path):
     from src.models.random_forest_model import RandomForestModel
     from src.models.xgboost_model import XGBoostModel
 
     X, y = _synthetic(6)
     with pytest.raises(ValueError):
         XGBoostModel().tune_and_train(
-            X, y, n_trials=1, n_splits=2, study_storage="sqlite:///x.db"
+            X, y, n_trials=1, n_splits=2, study_storage=f"sqlite:///{(tmp_path / 'x.db').as_posix()}"
         )
     with pytest.raises(ValueError):
         RandomForestModel().tune_and_train(
-            X, y, n_trials=1, n_splits=2, study_storage="sqlite:///x.db"
+            X, y, n_trials=1, n_splits=2, study_storage=f"sqlite:///{(tmp_path / 'x.db').as_posix()}"
         )
 
 

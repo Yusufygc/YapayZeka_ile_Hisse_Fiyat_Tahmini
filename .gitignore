@@ -38,7 +38,6 @@ kalinanYer1.md
 # SQLite WAL/SHM journal dosyaları (tüm .db türleri)
 *.db-wal
 *.db-shm
-*.github
 
 logs
 # Optuna warm-start SQLite dosyaları (makineye özgü, otomatik yeniden oluşturulur)
@@ -143,9 +142,6 @@ cover/
 # Büyük boyutlu CSV'leri takip etmemek için:
 # /data/*.csv
 
-.pre-commit-config.yaml
-.flake8
-pyproject.toml
 .codex_tmp/
 yeniTasarim/
 .graphifyignore
@@ -162,3 +158,5 @@ pytest_temp/
 .aider.*
 *plan.md
 new_plan.md
+# Eski sanal ortam yedekleri
+.venv_old_*/

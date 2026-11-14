@@ -1,0 +1,46 @@
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311"]
+skip-string-normalization = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [
+    ".git",
+    ".pytest_cache",
+    ".codex_tmp",
+    "__pycache__",
+    "data",
+    "graphify-out",
+    "outputs",
+]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["src"]
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_return_any = false
+no_implicit_optional = true
+strict_optional = true
+
+[[tool.mypy.overrides]]
+module = [
+    "optuna.*",
+    "xgboost.*",
+    "lightgbm.*",
+    "tensorflow.*",
+    "keras.*",
+    "torch.*",
+    "sklearn.*",
+    "yfinance.*",
+    "pandas_datareader.*",
+    "pmdarima.*",
+    "prophet.*",
+    "statsmodels.*",
+]
+ignore_missing_imports = true
