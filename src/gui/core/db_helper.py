@@ -6,6 +6,8 @@ stock_models.db verilerini okur ve GUI tablo modelleri için hazırlar.
 
 import os
 import sqlite3
+
+from src.database.connection import ClosingConnection
 import glob
 from typing import Any, Dict, List, Optional
 
@@ -23,7 +25,7 @@ class DBHelper:
         """
         SQLite bağlantısı oluşturur ve satırları dict benzeri döndürecek row_factory kurar.
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, factory=ClosingConnection)
         conn.row_factory = sqlite3.Row
         return conn
 
