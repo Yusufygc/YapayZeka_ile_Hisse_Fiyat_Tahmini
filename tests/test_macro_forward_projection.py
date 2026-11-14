@@ -2,8 +2,8 @@
 """
 Sprint 5 (2026-05-25) — MacroForwardProjector testleri.
 
-Plan A5.2: Recursive forecast son satirinda macro feature'leri ARIMA
-projection ile guncellenmeli; ARIMA yoksa fallback trend kullanilmali;
+Plan A5.2: Recursive forecast son satirinda macro feature'leri projekte edilmeli
+(*_Return/*_Change -> 0, seviye -> son deger; ARIMA kaldirildi);
 macro olmayan sutunlar dokunulmamali.
 """
 
@@ -82,21 +82,20 @@ def test_project_last_row_no_macro_columns():
     assert out.equals(df)
 
 
-def test_fallback_trend_handles_short_series():
-    p = MacroForwardProjector()
-    series = pd.Series([10.0, 11.0])
-    val = p._fallback_trend(series)
-    # Avg delta = 1.0 -> last + 1.0 = 12.0
-    assert val == pytest.approx(12.0)
+def test_level_projection_is_last_value_short_series():
+    # P1 deep-audit: ARIMA/drift yok; seviye kolonlari son gozlenen degeri tasir.
+    df = pd.DataFrame({"Date": pd.date_range("2024-01-01", periods=3), "USDTRY": [10.0, 11.0, 11.0]})
+    out = MacroForwardProjector().project_last_row(df)
+    assert out["USDTRY"].iloc[-1] == pytest.approx(11.0)  # hist son degeri (10, 11 -> 11)
 
 
-def test_fallback_trend_single_value():
-    p = MacroForwardProjector()
-    val = p._fallback_trend(pd.Series([42.0]))
-    assert val == pytest.approx(42.0)
+def test_level_projection_single_history_value():
+    df = pd.DataFrame({"Date": pd.date_range("2024-01-01", periods=2), "USDTRY": [42.0, 99.0]})
+    out = MacroForwardProjector().project_last_row(df)
+    assert out["USDTRY"].iloc[-1] == pytest.approx(42.0)
 
 
-def test_fallback_trend_empty():
-    p = MacroForwardProjector()
-    val = p._fallback_trend(pd.Series(dtype=float))
-    assert val == 0.0
+def test_level_projection_all_nan_history_is_untouched():
+    df = pd.DataFrame({"Date": pd.date_range("2024-01-01", periods=2), "USDTRY": [np.nan, 5.0]})
+    out = MacroForwardProjector().project_last_row(df)
+    assert out["USDTRY"].iloc[-1] == pytest.approx(5.0)

@@ -8,8 +8,12 @@
   normallik varsayımı). Hızlı baseline.
 * **C — conformal**: dağılımdan bağımsız, kapsama-garantili. Split-conformal
   nonconformity skorlarından (``|y_true − y_pred|``) ampirik quantile ``q̂``;
-  band ``p50 ± q̂``. ACI katmanı zaman-serisi exchangeability kırılımı için
-  ``q̂``'i kayan kapsama sapmasına göre online ayarlar.
+  band ``p50 ± q̂``. Garanti yalnızca h=1 ve exchangeability varsayımıyla
+  geçerlidir; zaman serilerinde bu varsayım kırılabilir. (Online ACI/CQR
+  uygulanmamıştır.)
+
+NOT: B2 bandı normal z kullanır (parametrik, normallik varsayımı; sonlu-örneklem
+garantisi yok). h>1 için √h ölçeği sezgiseldir (``COVERAGE_GUARANTEE``).
 
 Tüm fonksiyonlar saf (model bağımsız) ve hedef (target) uzayında çalışır; fiyat
 uzayına çeviri çağıran tarafın sorumluluğudur (``target_to_price`` + BIST clip).
@@ -24,6 +28,12 @@ import numpy as np
 
 # Standart iki-taraflı normal z değerleri (level -> z). Ara değerler NormalDist
 # ile hesaplanır; bu tablo yalnızca hız/okunabilirlik içindir.
+#: Payload'lara yazılan kapsama garantisi açıklaması (dürüst etiket).
+COVERAGE_GUARANTEE = (
+    "split-conformal, h=1, exchangeability assumed; "
+    "h>1 widened by sqrt(h) heuristic, no guarantee"
+)
+
 _COMMON_Z: Dict[float, float] = {
     0.80: 1.2815515594965686,
     0.90: 1.6448536269514722,
@@ -121,6 +131,7 @@ def compute_residual_calibration(
         "z_map": {f"{lv:.2f}": z_for_level(lv) for lv in levels},
         "n_samples": int(residuals.size),
         "mean_residual": float(np.mean(residuals)),
+        "coverage_guarantee": COVERAGE_GUARANTEE,
     }
 
 
@@ -131,6 +142,9 @@ def residual_band(
     level: float = 0.8,
 ) -> tuple[float, float]:
     """B2 bandı: ``p50 ± z·σ·√h`` (target uzayında).
+
+    Normal z (parametrik; normallik varsayımı) kullanılır, sonlu-örneklem kapsama
+    garantisi yoktur; √h ölçeği sezgiseldir.
 
     Args:
         p50_target: merkez (medyan) hedef tahmin.
@@ -196,12 +210,17 @@ def compute_conformal_calibration(
     Args:
         fold_records: walk-forward fold record listesi.
         level: nominal kapsama (örn 0.9).
-        mode: "absolute" (|hata|) varsayılan; "cqr" çağıranın quantile model
-            artıklarını verdiği durumda da aynı skor mantığı kullanılır.
+        mode: yalnızca "absolute" (|hata|) desteklenir. "cqr" gibi diğer
+            değerler ``NotImplementedError`` fırlatır (önceden etiket-only no-op idi).
 
     Returns:
         Kalibrasyon sözlüğü ya da skor yoksa None.
     """
+    if mode != "absolute":
+        raise NotImplementedError(
+            f"conformal mode={mode!r} desteklenmiyor (yalnızca 'absolute'); "
+            "CQR uygulanmadı."
+        )
     level = _validate_level(level)
     residuals, _ = _collect_residuals(fold_records)
     if residuals.size == 0:
@@ -213,10 +232,11 @@ def compute_conformal_calibration(
     q_hat = float(np.quantile(scores, rank, method="higher"))
     return {
         "method": "conformal",
-        "mode": str(mode),
+        "mode": "absolute",
         "level": level,
         "q_hat": q_hat,
         "n_calib": n,
+        "coverage_guarantee": COVERAGE_GUARANTEE,
     }
 
 
@@ -244,33 +264,3 @@ def conformal_band(
     if horizon_scale:
         half = q_hat * math.sqrt(max(int(horizon_index), 1))
     return (float(p50_target) - half, float(p50_target) + half)
-
-
-def adaptive_conformal_update(
-    q_hat: float,
-    recent_coverage: float,
-    *,
-    target_level: float = 0.9,
-    gamma: float = 0.05,
-) -> float:
-    """ACI-lite: kayan kapsama sapmasına göre ``q̂``'i online ayarlar.
-
-    Kapsama hedefin altındaysa band genişler (q̂ artar), üstündeyse daralır.
-    ``q_new = q̂ · (1 + γ·(target − recent))``, negatif olmayacak şekilde clip.
-
-    Args:
-        q_hat: mevcut conformal quantile.
-        recent_coverage: son penceredeki ampirik kapsama [0,1].
-        target_level: hedef nominal kapsama.
-        gamma: öğrenme hızı.
-
-    Returns:
-        Güncellenmiş q̂ (≥0).
-    """
-    q_hat = float(q_hat)
-    if q_hat < 0.0:
-        raise ValueError(f"q_hat negatif olamaz: {q_hat}")
-    target_level = _validate_level(target_level)
-    recent_coverage = float(min(max(recent_coverage, 0.0), 1.0))
-    adjusted = q_hat * (1.0 + float(gamma) * (target_level - recent_coverage))
-    return max(adjusted, 0.0)

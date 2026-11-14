@@ -2,11 +2,14 @@
 """
 macro_forward_projection.py - Recursive forecast icin macro seriler ileri projection.
 
-Sprint 5 (2026-05-25) Plan A5.2:
-  Recursive future forecast'in 5+ gun horizon'da macro feature'lerin
-  dondurulmus (frozen) olmasi sorununu kapatir. Her macro seri icin basit
-  ARIMA(1,1,1) fit + horizon_days kadar forward forecast uretilir. ARIMA
-  fail olursa son N gunluk dogrusal trend extrapolation (fallback).
+Sprint 5 (2026-05-25) Plan A5.2 -> P1 deep-audit (2026-11) revizyonu:
+  Eski surum her macro seriye ARIMA(1,1,1) fit ediyordu; ancak *_Return/*_Change
+  serileri zaten durgun (stationary) oldugu icin bu asiri farklama (over-differencing)
+  anlamsiz projeksiyon uretiyordu. Ayrica adim basina ARIMA refit yavasti.
+
+  Simdi (martingale baseline, tahmin iddiasi yok):
+    * ``*_Return`` / ``*_Change`` kolonlari (getiri/degisim) -> 0.0 (degisim yok)
+    * diger (seviye) kolonlar -> son gozlenen deger (random walk / ffill)
 
 Kullanim:
     projector = MacroForwardProjector()
@@ -21,11 +24,11 @@ from __future__ import annotations
 
 from typing import Iterable, Optional
 
-import numpy as np
 import pandas as pd
 
 
-# Macro feature whitelist (data/wiki uyumu). Bilinen sutun isimleri.
+# Bilinen macro seviye/getiri kolonlari (data/wiki uyumu). Sonek kurali
+# (_Return/_Change) bu listeye ek olarak genel olarak da uygulanir.
 _KNOWN_MACRO_COLUMNS = {
     "USDTRY", "USDTRY_Return",
     "BIST100", "BIST100_Return",
@@ -41,65 +44,37 @@ _KNOWN_MACRO_COLUMNS = {
     "BIST_TURIZM_Return", "BIST_BILMEMURENGEL_Return",
 }
 
+# Getiri/degisim sonekleri -> projeksiyon 0.0.
+_FLOW_SUFFIXES = ("_Return", "_Change")
 
-_ARIMA_HISTORY_WINDOW = 252  # son ~1 yil veriyle fit
-_ARIMA_ORDER = (1, 1, 1)
+# Hissenin KENDI getiri kolonlari (sonek eslesse de macro degildir; dokunulmaz).
+_OWN_RETURN_COLUMNS = {"Return", "Log_Return", "Relative_Strength", "Sector_Relative_Strength"}
+
+
+def _is_flow_column(col: str) -> bool:
+    """Getiri/degisim kolonu mu (``*_Return`` / ``*_Change``)?"""
+    return col.endswith(_FLOW_SUFFIXES) and col not in _OWN_RETURN_COLUMNS
 
 
 class MacroForwardProjector:
     """Recursive forecast row'una macro projection uygular.
 
-    `auto_columns=True` ise frame icindeki bilinen macro sutunlari otomatik
-    secer; `columns` override ile manuel liste verilebilir.
+    Kolon secimi: ``columns`` verilirse o liste; aksi halde frame icinde
+    ``_KNOWN_MACRO_COLUMNS`` uyelari + sonek ile eslesen (``*_Return``/``*_Change``,
+    hissenin kendi getirileri haric) kolonlar.
     """
 
-    def __init__(
-        self,
-        columns: Optional[Iterable[str]] = None,
-        history_window: int = _ARIMA_HISTORY_WINDOW,
-        arima_order: tuple[int, int, int] = _ARIMA_ORDER,
-    ) -> None:
+    def __init__(self, columns: Optional[Iterable[str]] = None) -> None:
         self.columns = set(columns) if columns is not None else None
-        self.history_window = int(history_window)
-        self.arima_order = tuple(int(x) for x in arima_order)
 
     def _resolve_columns(self, frame: pd.DataFrame) -> list[str]:
         if self.columns is not None:
             return [c for c in self.columns if c in frame.columns]
-        # auto: known macro columns intersected with frame.
-        return [c for c in frame.columns if c in _KNOWN_MACRO_COLUMNS]
-
-    @staticmethod
-    def _fallback_trend(series: pd.Series) -> float:
-        """ARIMA fail olursa: son 20 gunun ortalama degisim + son deger."""
-        clean = series.dropna()
-        if len(clean) < 2:
-            return float(clean.iloc[-1]) if len(clean) else 0.0
-        last = float(clean.iloc[-1])
-        tail = clean.iloc[-min(20, len(clean)):]
-        # Ortalama gunluk degisim
-        avg_delta = float(tail.diff().dropna().mean()) if len(tail) >= 2 else 0.0
-        return last + avg_delta
-
-    def _arima_forecast_one(self, series: pd.Series) -> Optional[float]:
-        """Tek macro seri icin 1 step forward forecast. ARIMA fail -> None."""
-        clean = series.dropna()
-        if len(clean) < 30:
-            return None
-        sample = clean.iloc[-self.history_window:]
-        try:
-            from statsmodels.tsa.arima.model import ARIMA
-        except Exception:
-            return None
-        try:
-            fitted = ARIMA(sample.values, order=self.arima_order).fit()
-            forecast = fitted.forecast(steps=1)
-            value = float(np.asarray(forecast).ravel()[-1])
-            if not np.isfinite(value):
-                return None
-            return value
-        except Exception:
-            return None
+        return [
+            c
+            for c in frame.columns
+            if c in _KNOWN_MACRO_COLUMNS or _is_flow_column(str(c))
+        ]
 
     def project_last_row(
         self,
@@ -118,11 +93,11 @@ class MacroForwardProjector:
         # Historic series: son satir HARIC (projection input).
         hist = out.iloc[:-1]
         for col in cols:
-            series = hist[col] if col in hist.columns else None
-            if series is None or series.dropna().empty:
+            if _is_flow_column(str(col)):
+                out.at[last_idx, col] = 0.0
                 continue
-            projected = self._arima_forecast_one(series)
-            if projected is None:
-                projected = self._fallback_trend(series)
-            out.at[last_idx, col] = float(projected)
+            series = hist[col].dropna() if col in hist.columns else None
+            if series is None or series.empty:
+                continue
+            out.at[last_idx, col] = float(series.iloc[-1])
         return out

@@ -8,7 +8,6 @@ import numpy as np
 import pytest
 
 from src.forecasting.interval_calibration import (
-    adaptive_conformal_update,
     compute_conformal_calibration,
     compute_residual_calibration,
     conformal_band,
@@ -144,14 +143,3 @@ def test_resolve_active_calibration_switch():
     assert resolve_active_calibration(only_b2, "conformal")["method"] == "residual_b2"
     # None -> None
     assert resolve_active_calibration(None, "conformal") is None
-
-
-def test_adaptive_conformal_widens_when_undercovered():
-    # kapsama hedefin altında -> band genişler (q̂ artar)
-    q_new = adaptive_conformal_update(2.0, recent_coverage=0.80, target_level=0.9, gamma=0.5)
-    assert q_new > 2.0
-    # kapsama hedefin üstünde -> daralır
-    q_new2 = adaptive_conformal_update(2.0, recent_coverage=0.98, target_level=0.9, gamma=0.5)
-    assert q_new2 < 2.0
-    # asla negatif
-    assert adaptive_conformal_update(0.1, recent_coverage=0.0, target_level=0.9, gamma=10.0) >= 0.0

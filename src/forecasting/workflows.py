@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import json
 from dataclasses import dataclass
@@ -20,11 +21,42 @@ from src.forecasting.bist_rules import RULES_VERSION
 from src.pipeline.config import DataConfig, ValidationConfig
 from src.pipeline.data_manager import DataManager
 
+logger = logging.getLogger(__name__)
+
 _TREE_MODELS = {"XGBoost", "Random Forest", "Ridge Return", "ElasticNet Return", "LightGBM Return"}
 _SEQ_MODELS = {"LSTM", "LSTM Lite", "AttentionLSTM v2", "DLinear", "NLinear"}
 _BASELINE_MODELS = {"Naive Last Value", "Naive Zero Return", "Naive Drift"}
 _DATE_AWARE_MODELS = {"Prophet", "Prophet-ML/DL Hybrid"}
 _MACRO_FEATURES = {"Rate_Level", "Rate_Change", "CPI_MoM", "CPI_YoY", "Real_Rate"}
+
+# h>1 recursive forecast, 1-adim modelin kendi ciktisiyla besleyerek uretilir ve
+# hicbir walk-forward/backtest ile dogrulanmamistir (yalnizca h=1 dogrulanir).
+RECURSIVE_UNVALIDATED_WARNING = "recursive_horizon_unvalidated"
+RECURSIVE_UNVALIDATED_NOTE = (
+    "Unvalidated: h>1 forecast is a recursion of a 1-step model; "
+    "only h=1 is walk-forward validated, and interval coverage/trend labels "
+    "for h>1 have not been backtested."
+)
+
+
+def _horizon_validation_fields(horizon_days: int) -> Dict[str, Any]:
+    """h>1 icin recursive_forecast_validated=False + not; h=1 icin dogrulanmis."""
+    if int(horizon_days) > 1:
+        return {
+            "recursive_forecast_validated": False,
+            "horizon_validation_note": RECURSIVE_UNVALIDATED_NOTE,
+        }
+    return {"recursive_forecast_validated": True, "horizon_validation_note": None}
+
+
+def _merge_warnings(*groups: Any) -> list[str]:
+    """Uyari listelerini sirayi koruyarak tekillestirir."""
+    merged: list[str] = []
+    for group in groups:
+        for item in group or []:
+            if item not in merged:
+                merged.append(item)
+    return merged
 
 
 @dataclass
@@ -127,6 +159,10 @@ class ForecastSymbolWorkflow:
             horizon_days=horizon_days,
         )
         trend_label = self.ctx.rules.trend_label(weekly_expected_return, trend_threshold)
+        horizon_fields = _horizon_validation_fields(horizon_days)
+        extra_warnings = [] if horizon_fields["recursive_forecast_validated"] else [
+            RECURSIVE_UNVALIDATED_WARNING
+        ]
         run_id = self.ctx.persistence.save_run(
             stock_symbol=symbol,
             model_name=selection["model_name"],
@@ -141,7 +177,9 @@ class ForecastSymbolWorkflow:
             points=points,
             forecast_strategy=forecast_context.get("forecast_strategy"),
             artifact_mode=forecast_context.get("artifact_mode"),
-            forecast_warnings=forecast_context.get("forecast_warnings"),
+            forecast_warnings=_merge_warnings(
+                forecast_context.get("forecast_warnings"), extra_warnings
+            ),
             ensemble_metadata=selection.get("ensemble_metadata"),
         )
         return self._result_cls(
@@ -152,6 +190,7 @@ class ForecastSymbolWorkflow:
             weekly_expected_return=weekly_expected_return,
             trend_threshold=trend_threshold,
             points=points,
+            **horizon_fields,
         )
 
     def _selection_requires_macro(self, symbol: str, selection: Dict[str, Any]) -> bool:
@@ -210,6 +249,7 @@ class ForecastSymbolWorkflow:
                 f"{selection['model_name']} icin ensemble member metadata eksik."
             )
         member_points: Dict[str, list[dict[str, Any]]] = {}
+        member_warnings: list[list[str]] = []
         source_ids: list[int] = []
         for member in members:
             member_exp = self.ctx.model_resolver.latest_member_experiment(symbol, member)
@@ -239,6 +279,7 @@ class ForecastSymbolWorkflow:
                 predictor=self.ctx.latest_target_prediction_workflow,
                 horizon_days=horizon_days,
             )
+            member_warnings.append(list(context.get("forecast_warnings") or []))
 
         points = self.ctx.forecast_point_generator.combine_member_points(
             member_points=member_points,
@@ -257,6 +298,10 @@ class ForecastSymbolWorkflow:
         agreement = self.ctx.forecast_point_generator.member_direction_agreement(member_points)
         metadata = dict(metadata)
         metadata["source_experiment_ids"] = source_ids
+        horizon_fields = _horizon_validation_fields(horizon_days)
+        extra_warnings = [] if horizon_fields["recursive_forecast_validated"] else [
+            RECURSIVE_UNVALIDATED_WARNING
+        ]
         run_id = self.ctx.persistence.save_run(
             stock_symbol=symbol,
             model_name=selection["model_name"],
@@ -274,7 +319,9 @@ class ForecastSymbolWorkflow:
             ensemble_direction_agreement=agreement,
             forecast_strategy="ensemble_recursive_direct_target",
             artifact_mode="artifact_loaded",
-            forecast_warnings=["projected_exogenous_features"],
+            forecast_warnings=_merge_warnings(
+                ["projected_exogenous_features"], *member_warnings, extra_warnings
+            ),
             ensemble_metadata=metadata,
         )
         return self._result_cls(
@@ -285,6 +332,7 @@ class ForecastSymbolWorkflow:
             weekly_expected_return=weekly_expected_return,
             trend_threshold=trend_threshold,
             points=points,
+            **horizon_fields,
         )
 
 
@@ -859,6 +907,9 @@ class ForecastPointGenerator:
         """
         dates = self.ctx.rules.next_trading_days(context["last_observed_date"], horizon_days)
         frame = context["feature_frame"].copy()
+        # Adim bazli uyarilar (recompute_failed_step_k ...) context'e yazilir; liste
+        # kopyalanir ki paylasilan/yeniden kullanilan liste mutasyona ugramasin.
+        context["forecast_warnings"] = list(context.get("forecast_warnings") or [])
         points: list[dict[str, Any]] = []
         previous_close = float(context["last_close"])
         target_mode = context["target_mode"]
@@ -882,8 +933,11 @@ class ForecastPointGenerator:
                 "upper_band": band.upper_band,
                 "price_tick": band.price_tick,
             }
-            # Sprint 4 A4.4: model quantile destekliyorsa p10/p50/p90 close +
-            # returns yayinla. Yoksa point sozluguna ek alan eklenmez.
+            # Quantile-destekli modeller (Quantile-LGB, LSTM-Lite MC-dropout): modelin
+            # kendi bandi KALIBRASYONSUZdur (MC-dropout yalnizca epistemik belirsizlik;
+            # horizon ile genislemez). Yayinlanan band HER ZAMAN model-agnostik
+            # B2/C kalibrasyonundan gecer; merkez = modelin medyani (predict() bu
+            # modellerde p50 doner). Ham model quantile'lari yalniz teshis metadatasi.
             quantile_targets = predictor.predict_quantiles_target(model_name, model, context)
             if quantile_targets:
                 quantile_close: dict[str, float] = {}
@@ -896,32 +950,24 @@ class ForecastPointGenerator:
                     quantile_returns[label] = (
                         (float(bounded_qc) / previous_close) - 1.0 if previous_close else 0.0
                     )
-                point["quantile_close"] = quantile_close
-                point["quantile_returns"] = quantile_returns
-                # Convenience top-level alanlari (advisory API icin shortcut):
-                if "p10" in quantile_close:
-                    point["p10_close"] = quantile_close["p10"]
-                    point["predicted_return_p10"] = quantile_returns["p10"]
-                if "p50" in quantile_close:
-                    point["p50_close"] = quantile_close["p50"]
-                    point["predicted_return_p50"] = quantile_returns["p50"]
-                if "p90" in quantile_close:
-                    point["p90_close"] = quantile_close["p90"]
-                    point["predicted_return_p90"] = quantile_returns["p90"]
-                point["interval_method"] = "quantile_model"
-            else:
-                # Model-agnostik olasiliksal interval (B2 residual / C conformal).
-                # Quantile model yoksa ve artifact'ta kalibrasyon varsa uygulanir.
-                self._apply_model_agnostic_interval(
-                    point=point,
-                    predicted_target=predicted_target,
-                    previous_close=previous_close,
-                    target_mode=target_mode,
-                    calibration=context.get("interval_calibration"),
-                    horizon_index=idx,
-                    frame=frame,
-                    prefer=context.get("interval_method_pref", "residual_b2"),
-                )
+                point["raw_model_quantiles"] = {
+                    "quantile_close": quantile_close,
+                    "quantile_returns": quantile_returns,
+                    "calibrated": False,
+                    "note": "diagnostic only; published p10/p90 come from calibrated band",
+                }
+            # Model-agnostik olasiliksal interval (B2 residual / C conformal).
+            # Kalibrasyon yoksa band yayinlanmaz (kalibrasyonsuz band yayinlamaktan iyi).
+            self._apply_model_agnostic_interval(
+                point=point,
+                predicted_target=predicted_target,
+                previous_close=previous_close,
+                target_mode=target_mode,
+                calibration=context.get("interval_calibration"),
+                horizon_index=idx,
+                frame=frame,
+                prefer=context.get("interval_method_pref", "residual_b2"),
+            )
             points.append(point)
             frame = self._append_recursive_row(
                 frame=frame,
@@ -931,10 +977,14 @@ class ForecastPointGenerator:
             )
             # Sprint 5 A5.1: close-bagimli teknik gostergeleri yeniden hesapla.
             # Macro + sector + lag dokunulmaz (lag _append_recursive_row icinde
-            # ele alindi; macro Sprint 5 A5.2'de MacroForwardProjector).
-            frame = self._recompute_close_dependent_safe(frame, context)
-            # Sprint 5 A5.2: macro feature'leri ARIMA projection ile ileri tasi.
-            frame = self._apply_macro_forward_projection_safe(frame, context, target_date)
+            # ele alindi). Hata olursa loglanir + forecast_warnings'e yazilir.
+            frame = self._recompute_close_dependent_safe(frame, context, step=idx)
+            # Sprint 5 A5.2: macro getiri/degisim -> 0, seviye -> son deger.
+            frame = self._apply_macro_forward_projection_safe(
+                frame, context, target_date, step=idx
+            )
+            # Relative_Strength = Return - BIST100_Return (yeni satir icin tazele).
+            frame = self._recompute_relative_strength(frame)
             previous_close = bounded_close
         return points
 
@@ -958,6 +1008,7 @@ class ForecastPointGenerator:
         tahmin (point), p10/p90 = band sınırları.
         """
         from src.forecasting.interval_calibration import (
+            COVERAGE_GUARANTEE,
             conformal_band,
             residual_band,
             resolve_active_calibration,
@@ -1007,6 +1058,7 @@ class ForecastPointGenerator:
         )
         point["interval_method"] = method
         point["interval_level"] = level
+        point["coverage_guarantee"] = COVERAGE_GUARANTEE
 
     def _target_to_bounded_price(
         self, target: float, previous_close: float, target_mode: str
@@ -1040,27 +1092,41 @@ class ForecastPointGenerator:
             X_all_s = ProductionTrainingWorkflow._transform_features(context["scaler_X"], X_all)
             context["latest_seq"] = X_all_s[-time_steps:].reshape(1, time_steps, X_all_s.shape[1])
 
+    @staticmethod
+    def _record_warning(context: Dict[str, Any], warning: str) -> None:
+        warnings_list = context.setdefault("forecast_warnings", [])
+        if warning not in warnings_list:
+            warnings_list.append(warning)
+
     def _recompute_close_dependent_safe(
-        self, frame: pd.DataFrame, context: Dict[str, Any]
+        self,
+        frame: pd.DataFrame,
+        context: Dict[str, Any],
+        step: Optional[int] = None,
     ) -> pd.DataFrame:
         """
         Sprint 5 A5.1: FeaturePipeline.recompute_close_dependent() cagrisi.
-        FeaturePipeline yuklenemezse veya hata olursa frame degismez —
-        forecast yine de uretilir; warning'ler context['warnings'] icine
-        eklenir (varsa).
+        Basarisiz olursa frame degismez (forecast yine uretilir) AMA sessiz degil:
+        WARNING loglanir ve ``recompute_failed_step_{k}`` forecast_warnings'e eklenir.
         """
-        try:
-            from src.features.feature_pipeline import FeaturePipeline
-        except Exception:
-            return frame
+        tag = f"recompute_failed_step_{step}" if step is not None else "recompute_failed"
         feature_mode = context.get("feature_mode", "stationary_features")
         try:
+            from src.features.feature_pipeline import FeaturePipeline
+
             fp = FeaturePipeline(feature_mode=feature_mode)
             updated = fp.recompute_close_dependent(frame)
             # NaN guard: yeni satirda NaN olursa eski deger ile doldur (ffill).
-            updated = updated.ffill().bfill()
-            return updated
-        except Exception:
+            return updated.ffill().bfill()
+        except Exception as exc:  # noqa: BLE001 - forecast uretimi bozulmamali; kayit altinda
+            logger.warning(
+                "recompute_close_dependent basarisiz (step=%s): %s: %s -- teknik gostergeler "
+                "bu adimda bayat kaliyor.",
+                step,
+                type(exc).__name__,
+                exc,
+            )
+            self._record_warning(context, tag)
             return frame
 
     def _apply_macro_forward_projection_safe(
@@ -1068,21 +1134,50 @@ class ForecastPointGenerator:
         frame: pd.DataFrame,
         context: Dict[str, Any],
         target_date: pd.Timestamp,
+        step: Optional[int] = None,
     ) -> pd.DataFrame:
         """
-        Sprint 5 A5.2: Son satir macro feature'lerini ARIMA projection ile
-        gunceller. MacroForwardProjector yuklenemezse veya hata olursa
-        frame degismez.
+        Sprint 5 A5.2: Son satir macro feature'lerini projekte eder (getiri/degisim
+        -> 0, seviye -> son deger). Hata olursa frame degismez; loglanir + uyari.
         """
         try:
             from src.features.macro_forward_projection import MacroForwardProjector
-        except Exception:
-            return frame
-        try:
+
             projector = MacroForwardProjector()
             return projector.project_last_row(frame, target_date=pd.to_datetime(target_date))
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "macro forward projection basarisiz (step=%s): %s: %s",
+                step,
+                type(exc).__name__,
+                exc,
+            )
+            self._record_warning(
+                context,
+                f"macro_projection_failed_step_{step}"
+                if step is not None
+                else "macro_projection_failed",
+            )
             return frame
+
+    @staticmethod
+    def _recompute_relative_strength(frame: pd.DataFrame) -> pd.DataFrame:
+        """Son satirin Relative_Strength'ini Return - BIST100_Return ile tazeler.
+
+        feature_pipeline._merge_macro ile ayni formul; yeni (sentetik) satirda
+        onceki satirdan kopya kalan degeri duzeltir. Sutunlar yoksa dokunmaz.
+        """
+        needed = {"Relative_Strength", "Return", "BIST100_Return"}
+        if frame.empty or not needed.issubset(frame.columns):
+            return frame
+        out = frame.copy()
+        last = out.index[-1]
+        ret = out.at[last, "Return"]
+        mkt = out.at[last, "BIST100_Return"]
+        out.at[last, "Relative_Strength"] = float(0.0 if pd.isna(ret) else ret) - float(
+            0.0 if pd.isna(mkt) else mkt
+        )
+        return out
 
     @staticmethod
     def _append_recursive_row(
@@ -1095,6 +1190,19 @@ class ForecastPointGenerator:
         new_row = frame.iloc[-1].copy()
         new_row["Date"] = pd.to_datetime(target_date).normalize()
         new_row["Close"] = float(bounded_close)
+        # Sentetik bar: gun-ici bilgi yok -> durust sifir-aralikli bar.
+        # Open = onceki kapanis; High/Low = Open ve Close'un max/min'i (Low<=Close<=High);
+        # Volume = son 20 bar medyani. (Son gercek barin OHLV'si KOPYALANMAZ.)
+        if "Open" in frame.columns:
+            new_row["Open"] = float(previous_close)
+        if "High" in frame.columns:
+            new_row["High"] = max(float(previous_close), float(bounded_close))
+        if "Low" in frame.columns:
+            new_row["Low"] = min(float(previous_close), float(bounded_close))
+        if "Volume" in frame.columns:
+            trailing = pd.to_numeric(frame["Volume"].iloc[-20:], errors="coerce").dropna()
+            if len(trailing):
+                new_row["Volume"] = float(trailing.median())
         simple_return = (bounded_close / previous_close) - 1.0 if previous_close else 0.0
         log_return = float(np.log(bounded_close / previous_close)) if previous_close else 0.0
         if "Return" in frame.columns:

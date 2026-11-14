@@ -40,6 +40,9 @@ class ForecastResult:
     weekly_expected_return: float
     trend_threshold: float
     points: list[dict[str, Any]]
+    # h>1 tahmini 1-adim modelin recursion'idir ve dogrulanmamistir (bkz. workflows).
+    recursive_forecast_validated: bool = False
+    horizon_validation_note: Optional[str] = None
 
 
 class ForecastRunner:
