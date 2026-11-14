@@ -270,3 +270,30 @@ def test_best_model_eligibility_uses_dm_pvalue(db_path, dm_p, status):
     best = db.get_best_model("TEST")
     assert best is not None
     assert best["eligibility_status"] == status
+
+
+def test_dm_pvalue_persisted_and_used_on_rebuild(tmp_path):
+    """DM p-degeri experiments tablosuna yazilir; DB yeniden init edildiginde
+    best_models rebuild'i bu degerle uygunlugu yeniden hesaplar."""
+    from src.database.repositories.best_model import BestModelRepository
+    from src.database.stock_model_db import StockModelDB
+
+    db_path = str(tmp_path / "stock_models.db")
+    db = StockModelDB(db_path)
+    exp_id = db.log_experiment(
+        stock_symbol="TEST",
+        model_name="XGBoost",
+        metrics={
+            "RMSE": 1.0, "Dir_Acc": 55.0, "RMSE_vs_benchmark": 0.98,
+            "Trade_Count": 40, "DM_PValue_vs_benchmark": 0.45,
+        },
+        validation_mode="final_holdout",
+        dataset_metadata={},
+        is_production_candidate=True,
+        run_id="r1",
+    )
+    with db._connect() as conn:
+        row = conn.execute("SELECT * FROM experiments WHERE id = ?", (exp_id,)).fetchone()
+    assert row["dm_pvalue_vs_benchmark"] == pytest.approx(0.45)
+    status, _ = BestModelRepository.eligibility_from_experiment_row(row)
+    assert status == "benchmark_failed"

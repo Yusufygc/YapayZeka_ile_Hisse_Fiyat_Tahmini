@@ -63,6 +63,7 @@ class SchemaRepository:
         self.ensure_column(conn, "experiments", "selection_source", "TEXT")
         self.ensure_column(conn, "experiments", "run_id", "TEXT")
         self.ensure_column(conn, "experiments", "stability_score", "REAL")
+        self.ensure_column(conn, "experiments", "dm_pvalue_vs_benchmark", "REAL")
         self.ensure_column(conn, "experiments", "ensemble_metadata_json", "TEXT")
         self.ensure_column(conn, "experiments", "rmse_vs_benchmark", "REAL")
         self.ensure_column(conn, "experiments", "net_return", "REAL")

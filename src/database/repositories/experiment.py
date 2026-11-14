@@ -113,9 +113,9 @@ class ExperimentRepository:
                      rmse_vs_benchmark, net_return, buyhold_return, max_drawdown, trade_count, signal_diagnosis,
                      composite_score, model_path, features, dataset_hash,
                      is_production_candidate, selection_source, run_id, trained_at,
-                     stability_score, ensemble_metadata_json)
+                     stability_score, ensemble_metadata_json, dm_pvalue_vs_benchmark)
                 VALUES
-                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     stock_symbol, model_name, validation_mode,
@@ -136,6 +136,7 @@ class ExperimentRepository:
                     selection_source, run_id, trained_at,
                     stability,
                     json.dumps(ensemble_metadata, ensure_ascii=False) if ensemble_metadata else None,
+                    _optional_float(metrics.get("DM_PValue_vs_benchmark")),
                 ),
             )
             return int(cursor.lastrowid)
