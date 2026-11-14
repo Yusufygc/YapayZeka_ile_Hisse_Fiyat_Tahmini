@@ -86,14 +86,42 @@ class GlobalPooledConfig:
     max_cat_threshold: int = 64
     seed: int = 42
     cat_indices: Sequence[int] = field(default_factory=tuple)
+    # X icindeki `symbol_id` kolon pozisyonu (build_pooled_features'in feature_cols
+    # sirasindan). `use_symbol_id=False` iken bu kolon fit/predict'te dusurulur.
+    symbol_id_index: int | None = None
 
 
 class GlobalPooledModel:
-    """sklearn-vari pooled LightGBM (fit/predict). pooled_oos harness uyumlu."""
+    """sklearn-vari pooled LightGBM (fit/predict). pooled_oos harness uyumlu.
 
-    def __init__(self, cfg: GlobalPooledConfig | None = None) -> None:
+    use_symbol_id (varsayilan True = uretim davranisi DEGISMEZ): `symbol_id`
+    yuksek-kardinalite kategorik oldugundan model sembol-basina ortalamayi
+    ezberleyebilir (cross-sectional siralamayi sisirebilir). False ise
+    `cfg.symbol_id_index` kolonu fit/predict'ten dusurulur (ablasyon icin).
+    Not: False iken booster'in ozellik sayisi X'ten 1 eksiktir; XAI'ya X verirken
+    ayni kolonu dusurun. Oneri: uretimi degistirmeden once use_symbol_id=False ile
+    ortusmeyen ICIR karsilastirmasi yapin (tools/ ablasyonu).
+    """
+
+    def __init__(self, cfg: GlobalPooledConfig | None = None,
+                 use_symbol_id: bool = True) -> None:
         self.cfg = cfg or GlobalPooledConfig()
+        self.use_symbol_id = bool(use_symbol_id)
+        if not self.use_symbol_id and self.cfg.symbol_id_index is None:
+            raise ValueError(
+                "use_symbol_id=False icin cfg.symbol_id_index (kolon pozisyonu) gerekli.")
         self.booster = None
+
+    def _prepare(self, X) -> tuple[np.ndarray, list[int]]:
+        """Float32 matris + (gerekirse symbol_id dusurulmus) kategorik indeksler."""
+        X = as_float32_matrix(X)
+        cat = list(self.cfg.cat_indices)
+        if self.use_symbol_id:
+            return X, cat
+        drop = int(self.cfg.symbol_id_index)
+        X = np.delete(X, drop, axis=1)
+        cat = [c - 1 if c > drop else c for c in cat if c != drop]
+        return X, cat
 
     def _params(self) -> dict:
         c = self.cfg
@@ -120,9 +148,8 @@ class GlobalPooledModel:
     def fit(self, X, y):
         import lightgbm as lgb
 
-        X = as_float32_matrix(X)
+        X, cat = self._prepare(X)
         y = as_float32_vector(y)
-        cat = list(self.cfg.cat_indices)
         dset = lgb.Dataset(
             X, label=y,
             categorical_feature=cat if cat else "auto",
@@ -137,18 +164,26 @@ class GlobalPooledModel:
     def predict(self, X):
         if self.booster is None:
             raise RuntimeError("GlobalPooledModel egitilmedi.")
-        return np.asarray(self.booster.predict(as_float32_matrix(X)), dtype=float)
+        return np.asarray(self.booster.predict(self._prepare(X)[0]), dtype=float)
 
 
 def make_global_model_factory(
     cat_indices: Sequence[int],
     cfg: GlobalPooledConfig | None = None,
+    use_symbol_id: bool = True,
+    symbol_id_index: int | None = None,
 ) -> Callable[[], GlobalPooledModel]:
-    """pooled_oos.evaluate_per_symbol icin taze-model fabrikasi dondurur."""
+    """pooled_oos.evaluate_per_symbol icin taze-model fabrikasi dondurur.
+
+    use_symbol_id=False icin `symbol_id_index` (veya cfg.symbol_id_index) gerekir.
+    """
     base = cfg or GlobalPooledConfig()
 
     def _factory() -> GlobalPooledModel:
-        c = GlobalPooledConfig(**{**base.__dict__, "cat_indices": tuple(cat_indices)})
-        return GlobalPooledModel(c)
+        extra = {"cat_indices": tuple(cat_indices)}
+        if symbol_id_index is not None:
+            extra["symbol_id_index"] = int(symbol_id_index)
+        c = GlobalPooledConfig(**{**base.__dict__, **extra})
+        return GlobalPooledModel(c, use_symbol_id=use_symbol_id)
 
     return _factory

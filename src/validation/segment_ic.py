@@ -11,15 +11,20 @@ Notlar:
 - IC cross-sectional'dir (tarih ici, semboller-arasi). Segment IC = tarih ici,
   O SEGMENTIN sembolleri arasi corr(pred,true) -> mean/std/ICIR.
 - Segment etiketleri (`symbol_segments`) per-symbol medyan liq_log/vol ile
-  STATIK kova; tam-gecmis medyan kullanir -> betimsel ANALIZ icin uygun (model
-  girdisi DEGIL). Serving'de kova ataması trailing (causal) yapilmali.
+  STATIK kova; tam-gecmis medyan kullanir (look-ahead) -> YALNIZ betimsel analiz
+  (model girdisi ve serving guveni DEGIL). Serving/guven icin nedensel
+  `attach_date_segments` / `latest_date_segments` kullanilmali.
+- Segment IC'de ICIR/t HEADLINE'i ortusmeyen (her h'inci tarih) orneklemdir
+  (`icir_nonoverlap`, `n_nonoverlap`, `ic_t_nw`); `icir` ortusmeli gunluk seridir
+  ve SE'yi dusuk gosterir. En iyi segmenti secmek winner's curse yaratir: secilen
+  segmentin ICIR'i yukari yanlidir (n_nonoverlap kucukse guvenmeyin).
 """
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
-from src.validation.pooled_oos import _spearman
+from src.validation.pooled_oos import _spearman, newey_west_t
 
 
 def symbol_segments(
@@ -30,6 +35,10 @@ def symbol_segments(
 
     Returns DataFrame[symbol, liq_bucket, vol_bucket, sector].
     Kova: per-symbol medyan -> evren-capinda quantile (Q1=en dusuk).
+
+    YALNIZ BETIMSEL: tam-orneklem medyanlari kullanir (look-ahead; OOS donemini de
+    gorur). Serving guven/segment IC'si icin `attach_date_segments` /
+    `latest_date_segments` (nedensel) kullanin.
     """
     agg = panel.groupby("symbol").agg(
         liq=(liq_col, "median"), vol=(vol_col, "median"),
@@ -68,40 +77,58 @@ def segment_cross_sectional_ic(
     predictions: pd.DataFrame,
     group_col: str,
     date_col: str = "Date",
-    min_names: int = 10,
+    min_names: int = 20,
+    horizon: int = 5,
 ) -> pd.DataFrame:
     """Her segment icin gunluk cross-sectional IC ozeti.
 
     predictions: symbol, Date, y_true, y_pred + `group_col` (segment etiketi).
-    Bir segment-tarihte >= min_names sembol varsa o gunun IC'si hesaplanir.
-    Returns DataFrame[segment, ic_mean, ic_std, icir, pct_positive, n_days, n_symbols].
+    Bir segment-tarihte >= min_names sembol varsa o gunun IC'si hesaplanir
+    (varsayilan 20: 10 isimli Spearman'in tarih-ici gurultusu cok yuksek).
+    Returns DataFrame[segment, ic_mean, ic_std, icir, pct_positive, n_days,
+    n_symbols, ic_nonoverlap, icir_nonoverlap, n_nonoverlap, ic_t_nw].
+    `icir`/`ic_std` ortusmeli gunluk seri (ddof=1, donem-basina); guven icin
+    `icir_nonoverlap` (her `horizon`'inci gecerli tarih) ve `n_nonoverlap` (=n_eff)
+    kullanilmali; `ic_t_nw` Newey-West (lag=horizon-1) t-stati.
     """
+    nan = float("nan")
+    h = max(int(horizon), 1)
     recs = []
     for seg, gseg in predictions.groupby(group_col, sort=True):
-        ics = []
-        for _, g in gseg.groupby(date_col):
+        pairs = []
+        for d, g in gseg.groupby(date_col):
             if g["symbol"].nunique() < min_names:
                 continue
             ic = _spearman(g["y_pred"].to_numpy(), g["y_true"].to_numpy())
             if np.isfinite(ic):
-                ics.append(ic)
-        if ics:
-            arr = np.array(ics, dtype=float)
-            mean, std = float(arr.mean()), float(arr.std())
+                pairs.append((pd.Timestamp(d), float(ic)))
+        pairs.sort(key=lambda p: p[0])
+        if pairs:
+            arr = np.array([ic for _, ic in pairs], dtype=float)
+            non = arr[::h]
+            mean = float(arr.mean())
+            std = float(arr.std(ddof=1)) if len(arr) > 1 else nan
+            nstd = float(non.std(ddof=1)) if len(non) > 1 else nan
             recs.append({
                 "segment": str(seg),
                 "ic_mean": mean,
                 "ic_std": std,
-                "icir": (mean / std) if std > 0 else float("nan"),
+                "icir": (mean / std) if (np.isfinite(std) and std > 0) else nan,
                 "pct_positive": float((arr > 0).mean()),
                 "n_days": len(arr),
                 "n_symbols": int(gseg["symbol"].nunique()),
+                "ic_nonoverlap": float(non.mean()),
+                "icir_nonoverlap": (float(non.mean()) / nstd) if (np.isfinite(nstd) and nstd > 0) else nan,
+                "n_nonoverlap": int(len(non)),
+                "ic_t_nw": newey_west_t(arr, lag=h - 1),
             })
         else:
             recs.append({
-                "segment": str(seg), "ic_mean": float("nan"), "ic_std": float("nan"),
-                "icir": float("nan"), "pct_positive": float("nan"),
+                "segment": str(seg), "ic_mean": nan, "ic_std": nan,
+                "icir": nan, "pct_positive": nan,
                 "n_days": 0, "n_symbols": int(gseg["symbol"].nunique()),
+                "ic_nonoverlap": nan, "icir_nonoverlap": nan,
+                "n_nonoverlap": 0, "ic_t_nw": nan,
             })
     return pd.DataFrame(recs).sort_values("segment").reset_index(drop=True)
 

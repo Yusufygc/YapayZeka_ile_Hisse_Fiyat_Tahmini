@@ -20,6 +20,7 @@ Tasarim kararlari:
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Callable, Sequence
 
@@ -91,20 +92,66 @@ def _spearman(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.corrcoef(ra, rb)[0, 1])
 
 
+def newey_west_t(x, lag: int) -> float:
+    """Ortalamanin Newey-West (Bartlett cekirdekli) HAC t-istatistigi.
+
+    t = mean / sqrt(LRV / n); LRV = g0 + 2 * sum_{l=1..L} (1 - l/(L+1)) * g_l,
+    g_l = (1/n) * sum (x_t - m)(x_{t-l} - m). `lag` L, n-1 ile sinirlanir.
+    h-gun ileri hedefler ardisik gunlerde ortustugu icin gunluk IC serisi
+    MA(h-1) otokorelasyonu tasir -> L = h-1. n<2 veya LRV<=0 -> NaN.
+    """
+    arr = np.asarray(x, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    n = len(arr)
+    if n < 2:
+        return float("nan")
+    L = int(max(0, min(int(lag), n - 1)))
+    d = arr - arr.mean()
+    lrv = float(np.dot(d, d)) / n
+    for l in range(1, L + 1):
+        g = float(np.dot(d[l:], d[:-l])) / n
+        lrv += 2.0 * (1.0 - l / (L + 1.0)) * g
+    if not np.isfinite(lrv) or lrv <= 0:
+        return float("nan")
+    return float(arr.mean() / math.sqrt(lrv / n))
+
+
+def _mean_std_icir(arr: np.ndarray) -> tuple[float, float, float]:
+    """(mean, std[ddof=1], icir=mean/std). ICIR = DONEM-basina (bir ornek = bir
+    tarih/donem) ortalama / std; yillik DEGIL. n<2 veya std=0 -> NaN."""
+    if len(arr) == 0:
+        return float("nan"), float("nan"), float("nan")
+    mean = float(arr.mean())
+    std = float(arr.std(ddof=1)) if len(arr) > 1 else float("nan")
+    icir = (mean / std) if (np.isfinite(std) and std > 0) else float("nan")
+    return mean, std, icir
+
+
 def daily_cross_sectional_ic(
     predictions: pd.DataFrame, min_names: int = 8, date_col: str = "Date",
-    sample_gap_days: int = 0,
+    sample_gap_days: int = 0, horizon: int = 5, sample_every_n: int = 0,
 ) -> dict:
     """Gunluk cross-sectional IC (semboller-arasi rank korelasyonu) ozeti.
 
-    Pooled/cross-sectional modelin DOGRU degerlendirmesi: her tarih icin
-    semboller-arasi corr(y_pred, y_true). Per-symbol dir_acc goreli siralama
-    becerisini olcemez; bu olcer. ICIR = mean/std (bilgi orani).
+    Pooled/cross-sectional modelin degerlendirmesi: her tarih icin
+    semboller-arasi Spearman(y_pred, y_true). Per-symbol dir_acc goreli siralama
+    becerisini olcemez; bu olcer.
 
-    sample_gap_days>0 : IC serisini >= bu kadar TAKVIM gunu arali tarihlerle
-    alt-ornekle (greedy). h-gunluk hedef pencereleri ortustugu icin ardisik
-    gunlerin IC'si autocorrelation tasir -> ICIR'i SISIRIR (std kucuk). Ortusmeyen
-    ornekleme (gap≈h) durust ICIR verir.
+    ISTATISTIKSEL DURUSTLUK (h=`horizon` is gunu ileri hedef):
+      - Ardisik gunlerin IC'si ortusen hedef pencereleri paylasir -> otokorelasyon;
+        naif std/ICIR/t SISIK. HEADLINE alanlar ORTUSMEYEN orneklemdir:
+          ic_nonoverlap, icir_nonoverlap (sirali tekil is gunlerinin her
+          `horizon`'inci'si, POZISYONEL -> tatil/takvim bosluklarindan bagimsiz),
+          icir_annualized = icir_nonoverlap * sqrt(252/horizon), n_nonoverlap.
+      - ic_t_nw : TUM gunluk serinin Newey-West (Bartlett, lag=horizon-1) t-stati.
+      - ic_overlap / icir_overlap : tum gunluk (ortusmeli) seri; eski anahtarlar
+        ic_mean / ic_std / icir ile ayni (geriye uyum), HEADLINE OLARAK KULLANMAYIN.
+      - ICIR = mean/std (ddof=1), DONEM-basina (gunluk), yillik degil.
+
+    sample_every_n > 0 (veya eski adla sample_gap_days > 0): eski anahtarlar
+    (ic_mean/ic_std/icir/n_days) bu seyreltilmis seriyi ozetler. `sample_gap_days`
+    ESKIDEN takvim gunuydu; artik sirali tekil is gunlerinin her n'incisi
+    (pozisyonel) anlamina gelir (is gunu h'ye karsilik gelir, takvim degil).
     """
     pairs = []  # (date, ic)
     for d, g in predictions.groupby(date_col):
@@ -114,24 +161,39 @@ def daily_cross_sectional_ic(
         if np.isfinite(ic):
             pairs.append((pd.Timestamp(d), float(ic)))
     pairs.sort(key=lambda p: p[0])
-    if sample_gap_days and sample_gap_days > 0 and pairs:
-        kept = []
-        last = None
-        for d, ic in pairs:
-            if last is None or (d - last).days >= sample_gap_days:
-                kept.append((d, ic))
-                last = d
-        pairs = kept
-    ics = [ic for _, ic in pairs]
-    if not ics:
-        return {"ic_mean": float("nan"), "ic_std": float("nan"),
-                "icir": float("nan"), "pct_positive": float("nan"), "n_days": 0}
-    arr = np.array(ics, dtype=float)
-    mean, std = float(arr.mean()), float(arr.std())
+    full_arr = np.array([ic for _, ic in pairs], dtype=float)
+
+    step = int(sample_every_n or sample_gap_days or 0)
+    kept = pairs[::step] if (step > 1 and pairs) else pairs
+    arr = np.array([ic for _, ic in kept], dtype=float)
+    if len(arr) == 0:
+        nan = float("nan")
+        return {"ic_mean": nan, "ic_std": nan, "icir": nan, "pct_positive": nan,
+                "n_days": 0, "ic_overlap": nan, "icir_overlap": nan,
+                "ic_nonoverlap": nan, "icir_nonoverlap": nan,
+                "icir_annualized": nan, "ic_t_nw": nan, "ic_nw_lag": max(int(horizon) - 1, 0),
+                "n_nonoverlap": 0, "horizon": int(horizon)}
+
+    h = max(int(horizon), 1)
+    mean, std, icir = _mean_std_icir(arr)
+    ov_mean, _, ov_icir = _mean_std_icir(full_arr)
+    non = full_arr[::h]
+    non_mean, _, non_icir = _mean_std_icir(non)
     return {
+        # --- HEADLINE (ortusmeyen, h-adimli pozisyonel ornekleme) ---
+        "ic_nonoverlap": non_mean,
+        "icir_nonoverlap": non_icir,
+        "icir_annualized": (non_icir * math.sqrt(252.0 / h)) if np.isfinite(non_icir) else float("nan"),
+        "n_nonoverlap": int(len(non)),
+        "ic_t_nw": newey_west_t(full_arr, lag=h - 1),
+        "ic_nw_lag": h - 1,
+        "horizon": h,
+        # --- ortusmeli gunluk seri (eski anahtarlar korunur; headline DEGIL) ---
+        "ic_overlap": ov_mean,
+        "icir_overlap": ov_icir,
         "ic_mean": mean,
         "ic_std": std,
-        "icir": (mean / std) if std > 0 else float("nan"),
+        "icir": icir,
         "pct_positive": float((arr > 0).mean()),
         "n_days": len(arr),
     }
@@ -143,7 +205,7 @@ def split_ic_summary(predictions: pd.DataFrame, gap_days: int = 5, min_names: in
     `predictions`: `evaluate_per_symbol(..., include_holdout=True)` ciktisi
     (`is_holdout` kolonu gerekir). Her bolum icin `daily_cross_sectional_ic` ozeti:
       selection / holdout           : gunluk (h-gun hedefleri ortusur)
-      *_nonoverlap                  : `gap_days` takvim gunu arali orneklem
+      *_nonoverlap                  : her `gap_days`'inci tekil is gunu (pozisyonel; gap_days=h)
     Holdout satiri yoksa ilgili anahtarlar `None`.
     """
     out: dict = {}
@@ -159,9 +221,9 @@ def split_ic_summary(predictions: pd.DataFrame, gap_days: int = 5, min_names: in
             out[name] = None
             out[name + "_nonoverlap"] = None
             continue
-        out[name] = daily_cross_sectional_ic(part, min_names=min_names)
+        out[name] = daily_cross_sectional_ic(part, min_names=min_names, horizon=gap_days)
         out[name + "_nonoverlap"] = daily_cross_sectional_ic(
-            part, min_names=min_names, sample_gap_days=gap_days)
+            part, min_names=min_names, sample_gap_days=gap_days, horizon=gap_days)
     return out
 
 
