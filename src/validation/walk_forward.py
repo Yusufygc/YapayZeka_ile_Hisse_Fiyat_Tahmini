@@ -62,8 +62,15 @@ def _compute_strategy_returns(
     y_true_price: np.ndarray,
     prev_close: np.ndarray,
     target_mode: str,
+    *,
+    y_pred_price: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Sign-of-pred * realized simple return — match financial_metrics path."""
+    """Sign-of-pred * realized simple return — match financial_metrics path.
+
+    Fiyat modunda sinyal tahmin edilen fiyattan türetilir
+    (`y_pred_price` / `prev_close` - 1); gerçekleşen getiriden TÜRETİLMEZ
+    (aksi halde |realized| = mükemmel öngörü).
+    """
     if target_mode in ("log_return", "return"):
         realized = _target_to_simple_returns(
             np.asarray(y_true_target, dtype=float).ravel(), target_mode
@@ -73,7 +80,14 @@ def _compute_strategy_returns(
         realized = _price_to_simple_returns(
             np.asarray(y_true_price), np.asarray(prev_close)
         )
-        signal_source = realized.copy()
+        if y_pred_price is None:
+            raise ValueError(
+                "target_mode='price' için y_pred_price zorunludur "
+                "(sinyal tahmin edilen fiyattan türetilir)."
+            )
+        signal_source = _price_to_simple_returns(
+            np.asarray(y_pred_price), np.asarray(prev_close)
+        )
     k = min(len(realized), len(signal_source))
     if k == 0:
         return np.asarray([], dtype=float)
@@ -250,6 +264,7 @@ class WalkForwardValidator:
             y_true_final,
             prev_close_aligned,
             self.target_mode,
+            y_pred_price=preds_final,
         )
 
         record = {

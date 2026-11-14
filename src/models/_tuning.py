@@ -3,27 +3,14 @@
 
 XGBoost / Random Forest (ve diğer tree modeller) `tune_and_train` metotları aynı
 iskeleti paylaşır: TimeSeriesSplit üzerinde sign-of-pred Sharpe ile skorlama ve
-SQLite warm-start'lı Optuna study. Bu modül o ortak çekirdeği tek kaynakta toplar;
+Optuna study (varsayılan: bellek-içi, çağrıya izole). Bu modül o ortak çekirdeği tek kaynakta toplar;
 modele özgü olan yalnızca arama uzayı (params) ve fit yoludur.
 """
 from __future__ import annotations
 
-import os
 from typing import Any, Callable, Dict, Tuple
 
 import numpy as np
-
-
-def _optuna_storage_uri() -> str:
-    """`data/optuna/optuna_studies.db` için SQLite storage URI'si (dizini oluşturur)."""
-    optuna_dir = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "data",
-        "optuna",
-    )
-    os.makedirs(optuna_dir, exist_ok=True)
-    optuna_path = os.path.join(optuna_dir, "optuna_studies.db")
-    return f"sqlite:///{optuna_path.replace(os.sep, '/')}"
 
 
 def stability_adjusted_cv_objective(
@@ -60,32 +47,42 @@ def run_optuna_study(
     n_trials: int,
     n_splits: int,
     random_state: int,
-    study_name: str,
     log_prefix: str,
+    study_name: str | None = None,
     study_storage: str | None = None,
 ) -> Tuple[Dict[str, Any], float]:
-    """Ortak Optuna study: SQLite warm-start, hata durumunda bellek-içi fallback.
+    """Ortak Optuna study.
+
+    Varsayılan (study_storage=None) bellek-içi, çağrıya izole bir study'dir:
+    her çağrı sıfırdan başlar. Walk-forward fold'ları aynı study'yi paylaşırsa
+    `best_params` başka (gelecek dahil) pencerelerde skorlanmış trial'lardan
+    seçilir -> look-ahead sızıntısı. Kalıcı storage yalnızca çağıran hem
+    `study_storage` hem `study_name` verirse kullanılır (kayıt amaçlı).
 
     Returns:
         (best_params, best_value).
     """
+    if study_storage is not None and not study_name:
+        raise ValueError("study_storage verildiğinde study_name zorunludur.")
     import optuna
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     print(f"  [{log_prefix}] {n_trials} deneme başlatılıyor ({n_splits}-fold TSCV)...")
-    if study_storage is None:
-        study_storage = _optuna_storage_uri()
     sampler = optuna.samplers.TPESampler(seed=random_state)
-    try:
-        study = optuna.create_study(
-            direction="minimize",
-            sampler=sampler,
-            storage=study_storage,
-            study_name=study_name,
-            load_if_exists=True,
-        )
-    except Exception:
-        # Storage hatasi durumunda hafiza ici fallback
+    if study_storage is None:
         study = optuna.create_study(direction="minimize", sampler=sampler)
+    else:
+        try:
+            study = optuna.create_study(
+                direction="minimize",
+                sampler=sampler,
+                storage=study_storage,
+                study_name=study_name,
+                load_if_exists=True,
+            )
+        except Exception as exc:
+            # Storage hatasi durumunda hafiza ici fallback
+            print(f"  [{log_prefix}] [WARN] Optuna storage açılamadı, bellek-içi study: {exc}")
+            study = optuna.create_study(direction="minimize", sampler=sampler)
     study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
     return study.best_params, study.best_value

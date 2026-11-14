@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import uuid
 
 import numpy as np
 
@@ -242,9 +243,12 @@ class SingleSplitTrainingWorkflow(_TrainingWorkflowBase):
             print(f"  [WARN] Prophet egitimi basarisiz, atlaniyor: {exc}")
 
     def _train_tuned_tree_models(self, tensors: dict, optuna_storage: str) -> None:
+        # Study adı çalıştırma başına benzersiz: kalıcı per-symbol DB'de önceki
+        # koşuların trial'ları yeniden kullanılmasın (kayıt amaçlı storage).
+        run_token = (self.dataset_metadata or {}).get("run_id") or uuid.uuid4().hex[:12]
         specs = (
-            ("XGBoost", "XGBoostModel", f"xgb_{self.stock_symbol}"),
-            ("Random Forest", "RandomForestModel", f"rf_{self.stock_symbol}"),
+            ("XGBoost", "XGBoostModel", f"xgb_{self.stock_symbol}_{run_token}"),
+            ("Random Forest", "RandomForestModel", f"rf_{self.stock_symbol}_{run_token}"),
         )
         trainer_module = importlib.import_module("src.pipeline.model_trainer")
         for model_name, attr, study_name in specs:

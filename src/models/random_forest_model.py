@@ -94,12 +94,17 @@ class RandomForestModel(BaseModel):
         n_trials : int        Optuna deneme sayısı (varsayılan: 40).
         n_splits : int        TimeSeriesSplit katman sayısı.
         random_state : int    Tekrarlanabilirlik için rastgele tohum.
+        study_storage, study_name : Opsiyonel kalıcı Optuna storage; ikisi birlikte
+            verilmelidir. Varsayılan bellek-içi study (fold'lar arası sızıntı yok).
 
         Returns
         -------
         dict  En iyi hiperparametreler.
         """
         from ._tuning import run_optuna_study, stability_adjusted_cv_objective
+
+        if study_storage is not None and not study_name:
+            raise ValueError("study_storage verildiğinde study_name zorunludur.")
 
         y_flat = y_train.ravel()
         tscv = TimeSeriesSplit(n_splits=n_splits)
@@ -125,7 +130,7 @@ class RandomForestModel(BaseModel):
             n_trials=n_trials,
             n_splits=n_splits,
             random_state=random_state,
-            study_name=study_name or f"rf_{self.__class__.__name__}",
+            study_name=study_name,
             log_prefix="Optuna RF",
             study_storage=study_storage,
         )
