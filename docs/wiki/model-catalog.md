@@ -34,12 +34,14 @@ If no selected models are passed, the default candidate set is:
 
 | Model | File | Notes |
 |---|---|---|
-| `DLinear` | `src/models/linear_sequence_model.py` | Lightweight sequence baseline |
-| `NLinear` | `src/models/linear_sequence_model.py` | Normalized lightweight sequence baseline |
-| `XGBoost` | `src/models/xgboost_model.py` | Tree boosting with Optuna HPO |
-| `LSTM` | `src/models/lstm_model.py` | Attention LSTM, Keras/TensorFlow |
+| `XGBoost` | `src/models/xgboost_model.py` | Tree boosting with Optuna HPO (WF'de bellek içi study) |
+| `Ridge Return` | `src/models/linear_model.py` | Regularized linear return model |
+| `LightGBM Return` | `src/models/gradient_boosting_model.py` | Gradient boosting, `subsample_freq=1` (bagging gerçekten açık) |
 
-`AttentionLSTM v2` is intentionally not in the default candidate set.
+2026-11-15 derin denetim (Faz 2) ile `LSTM`, `DLinear`, `NLinear` varsayılan
+kümeden çıkarıldı: tek hisse (~500-750 satır/fold, 50+ özellik) için yüksek
+overfit riskli araştırma modelleri olarak `--models` ile seçilebilirler.
+`AttentionLSTM v2` de varsayılan kümede değildir.
 
 `TFT` is not an active source-code model. `src/models/tft_v2/` is absent and
 the registry has no `TFT` `ModelSpec`; any remaining TFT names in old

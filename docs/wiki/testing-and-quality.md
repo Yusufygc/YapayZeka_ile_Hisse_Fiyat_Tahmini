@@ -258,9 +258,16 @@ This writes `graphify-out/graph.json`, `graphify-out/graph.html`, and
 - statsmodels
 - shap
 
-FastAPI and uvicorn are required for the API service but are not listed in the
-visible `requirements.txt` snapshot; install them separately if running
-`src/api/main.py`.
+FastAPI, uvicorn, torch, pydantic, httpx, lime, filelock and pytest are listed
+in `requirements.txt` (2026-11-10). Install with
+`pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt`.
+
+**Python 3.13 (2026-11-15):** Proje venv'i Python 3.13.17 ile yeniden kuruldu
+(eski 3.10 ortamı yerelde `.venv_old_py310`, git dışı). CI yalnız 3.13 matrisini
+koşar, `requirements.txt`'ten kurar ve test hatasında durur (eski `|| true`
+kaldırıldı; `.github/`, `pyproject.toml`, `.flake8`, `.pre-commit-config.yaml`
+artık git'te). Tam suite: 954 passed. SQLite bağlantıları `ClosingConnection`
+fabrikasıyla `with` sonunda kapanır (3.13'te Windows dosya kilidi hatası).
 
 ## Yerel Ortam ve Kol-B Denetim Testleri (2026-11-10)
 

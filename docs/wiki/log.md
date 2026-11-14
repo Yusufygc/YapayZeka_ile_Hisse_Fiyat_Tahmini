@@ -1,3 +1,23 @@
+## [2026-11-15] Bugfix | Derin denetim Faz 2: ölçüm/mantık hataları + Python 3.13
+
+- Metrik formülleri (`2e5a1bd`): Sortino, PSR/DSR, rf nakit barı + point-in-time
+  rf, MaxDD/Calmar/CAGR, Dir_Acc sıfırlar + binom p, blok bootstrap.
+- Puanlama ve seçim (`d31061c`, `364c7f1`, `7787e83`): Composite `src/evaluation/scoring.py`,
+  Diebold–Mariano kapılı seçim, DM p-değeri WF/holdout'a bağlı ve DB'de kalıcı.
+- Veri/model (`7058d22`): ham OHLCV özellik dışı, embargo h+5, maliyet 10.5+5 bps,
+  DataUpdater örtüşme/yeniden yazma, O/H/L ölçekleme, LightGBM bagging, LSTM-Lite seed,
+  varsayılan adaylar XGBoost + Ridge Return + LightGBM Return.
+- Tahmin (`4145e8b`): quantile bantları kalibrasyondan geçiyor, cqr/ACI kaldırıldı,
+  recursive sentetik bar tutarlı, h>1 `recursive_forecast_validated=False`, makro
+  projeksiyon ARIMA yerine 0/son değer.
+- Kol-B (`feadb4d`): Newey–West IC t-stat, örtüşmesiz başlık IC/ICIR, trend etiketi
+  quintile ile tutarlı, güven için n_eff>=50.
+- SQLite bağlantı kapatma (`fe74a02`); Python 3.13 + CI + paket güncellemeleri (`80a83f1`).
+- Testler 848 -> 954 passed (Python 3.13). Açık: `nightly_scoring.py` yeni Kol-B
+  alanlarını (`symbol_vol_ratio`, `n_eff`, `icir_nonoverlap`) henüz geçirmiyor.
+- Güncellenen sayfalar: `validation-and-backtesting.md`, `model-catalog.md`,
+  `data-pipeline.md`, `testing-and-quality.md`.
+
 ## [2026-11-15] Bugfix | Derin denetim Faz 1: P0 sızıntı ve seçim yanlılıkları
 
 - Rapor: `../analizler/derin_denetim_2026-11-15.md` (AI_Core/analizler). Dal `fix/deep-audit-2026-11`.

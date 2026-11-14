@@ -228,7 +228,23 @@ the analysis API response.
 
 ## Composite Score
 
-`compute_composite_score` (in `src/database/stock_model_db.py`) computes a
+> **Güncel (2026-11-15, derin denetim Faz 2):** Hesap `src/evaluation/scoring.py`'ye
+> taşındı (`stock_model_db.compute_composite_score` yalnız re-export). Yeni formül
+> yalnız gösterim ve eşitlik bozma içindir:
+> `0.5 * rmse_skill + 0.3 * direction_skill + 0.2 * sharpe_skill - neutral_penalty`;
+> `rmse_skill = 50 + clip((1 - RMSE_vs_benchmark) * 1000, -50, 50)` (sürekli),
+> `direction_skill = 50 + clip((Dir_Acc - 50) * 5, -50, 50)` (%50'ye karşı),
+> `Hit_Rate` ve `DirAcc_vs_benchmark` formülden çıkarıldı (kolineer / Naive Zero
+> yüzünden doygun). Oran > 1, NaN veya `Eligible_For_Leader=False` -> en fazla 49.
+> **Model seçimi** artık Diebold–Mariano testine (HLN, Newey–West) bağlı:
+> `DM_PValue_vs_benchmark < 0.10` ve sonlu `RMSE_vs_benchmark <= 1` olmayan model
+> seçilmez / `benchmark_failed`; hiçbiri geçmezse `no_significant_candidate`.
+> DM p-değeri WF birleşik ve final holdout yollarında hesaplanır ve
+> `experiments.dm_pvalue_vs_benchmark` kolonuna yazılır.
+>
+> Aşağıdaki tablo eski (Sprint 1) formüldür, tarihsel referanstır.
+
+`compute_composite_score` (in `src/database/stock_model_db.py`) computed a
 0-100 score. Sprint 1 A1.4 reweighted the formula for advisory use:
 
 | Bileşen | Ağırlık | Açıklama |
@@ -246,6 +262,24 @@ the analysis API response.
   49.0 ile sertçe kapatılır (ineligible model lider olamaz).
 - Sharpe NaN olduğunda formül crash etmez; `sharpe_relative_score=50`
   (nötr) alınır.
+
+## Metrik Formülleri (2026-11-15, derin denetim Faz 2)
+
+- Sortino: hedef yarı sapma `sqrt(mean(min(excess, 0)^2))` tüm N üzerinden;
+  kayıpsız seride NaN.
+- Probabilistic / Deflated Sharpe: dönem başına SR, Bailey–López de Prado SE
+  (çarpıklık/basıklık), beklenen maksimum SR; deneme sayısı = modeller ×
+  nihai kalibrasyon denemesi.
+- Risksiz oran yalnız pozisyondaki barlarda düşülür (`exposure`); tarih bazlı
+  faiz serisi `risk_free_rate.get_risk_free_rate_series` (ay sonu + 1 gün).
+  Equity / `Net_Return` saf strateji getirisi olarak kalır.
+- MaxDD başlangıç sermayesi 1.0'ı içerir; 126 bardan kısa serilerde
+  `Annualized_Return`/`CAGR`/`Calmar` NaN; std `ddof=1`.
+- `Dir_Acc`/`Hit_Rate` sıfır gerçek getirili günleri paydadan çıkarır;
+  `Dir_Acc_N`, `Dir_Acc_PValue` (binom) raporlanır. `sign(pred)*ret` long/short
+  serisinin Sharpe'ı (ve `Sharpe_Concat`) rf=0 ile hesaplanır.
+- `Sharpe_CI_95_*`: durağan blok bootstrap (ortalama blok 5).
+- Varsayılan maliyet: komisyon 10.5 bps (10 + %5 BSMV), kayma 5 bps.
 
 ## Signal Generation
 

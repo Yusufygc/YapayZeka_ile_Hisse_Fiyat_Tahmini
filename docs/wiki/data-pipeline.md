@@ -331,8 +331,17 @@ Important walk-forward settings:
 - `wf_test_size`
 - `wf_max_train_size`
 - `wf_window_type`: `sliding` or `expanding`
-- `wf_embargo_size`
+- `wf_embargo_size`: None/0 -> otomatik `target_horizon + 5` (2026-11-15 öncesi
+  `max(200, time_steps)` idi). Yalnız etiket örtüşmesi sızdırır; sequence bağlamı
+  embargodan bağımsız olarak test başlangıcından önceki satırlardan alınır.
+  Açık değer `< target_horizon` ise `ValueError`.
 - `final_holdout_size`
+
+Model özellikleri (`DataServices.model_feature_names`) ham `Open/High/Low/Volume`
+seviyelerini ve `Adj_Close`'u içermez (durağan olmayan seviyeler). `data_loader`
+O/H/L'yi `Adj_Close/Close` oranıyla ölçekler. `DataUpdater` artık son 7 günü
+örtüşmeli indirir; örtüşmede |oran-1| > 0.005 (split/temettü yeniden ölçekleme)
+ise tüm geçmişi atomik olarak yeniden yazar (`full_refetch`).
 
 ## Calendar Maintenance
 
