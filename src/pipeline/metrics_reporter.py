@@ -53,8 +53,8 @@ class _MetricsReporterMixin:
         """Her modele ``DM_PValue_vs_benchmark`` (tek tarafli, H1: model daha iyi) ekler.
 
         ``predictions`` ve ``y_true`` AYNI uzayda (tercihen hedef/getiri uzayi)
-        ve hizali OOS dizileridir. Benchmark'in kendisi, tahmini olmayan ya da
-        uzunlugu uyusmayan modeller icin deger NaN'dir (secimde engel olmaz).
+        ve kuyruktan hizali OOS dizileridir. Benchmark'in kendisi ve tahmini olmayan
+        modeller icin deger NaN'dir (secimde engel olmaz).
         """
         y = np.asarray(y_true, dtype=float).ravel()
         for model_name, row in enriched.items():
@@ -63,8 +63,11 @@ class _MetricsReporterMixin:
             if bench and bench != model_name and model_name in predictions and bench in predictions:
                 pm = np.asarray(predictions[model_name], dtype=float).ravel()
                 pb = np.asarray(predictions[bench], dtype=float).ravel()
-                if pm.size == y.size and pb.size == y.size:
-                    _, p_value = diebold_mariano(y - pm, y - pb, h=horizon)
+                # Kuyruktan hizalama: ensemble gibi daha kisa (isinma foldu dusen) seriler
+                # icin cift (model, benchmark) ortak kuyruk uzerinde test edilir.
+                k = min(pm.size, pb.size, y.size)
+                if k >= 3:
+                    _, p_value = diebold_mariano(y[-k:] - pm[-k:], y[-k:] - pb[-k:], h=horizon)
             row["DM_PValue_vs_benchmark"] = p_value
 
     @staticmethod

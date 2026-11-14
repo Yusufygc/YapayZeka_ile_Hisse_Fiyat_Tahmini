@@ -139,10 +139,61 @@ def _write_attention_xai_if_available(owner, *, model_name: str, model, tensors:
         print(f"  [WARN] Attention XAI tablosu olusturulamadi ({model_name}): {exc}")
 
 
-def _attach_score_metadata(svc, metrics: dict) -> dict:
-    """Composite score + model-scope metadata ekler (3 run() workflow ortak)."""
-    metrics = svc._attach_composite_scores(metrics)
+def _attach_score_metadata(
+    svc,
+    metrics: dict,
+    *,
+    predictions: dict | None = None,
+    y_true=None,
+    horizon: int = 1,
+) -> dict:
+    """Composite score + model-scope metadata ekler (3 run() workflow ortak).
+
+    ``predictions`` (model -> hedef-uzayi tahmin) ve ``y_true`` (ayni uzay) verilirse
+    her modele ``DM_PValue_vs_benchmark`` eklenir; verilmezse alan eklenmez.
+    """
+    if predictions and y_true is not None:
+        metrics = svc._attach_composite_scores(
+            metrics, predictions=predictions, y_true=y_true, horizon=horizon
+        )
+    else:
+        metrics = svc._attach_composite_scores(metrics)
     return svc._attach_model_scope_metadata(metrics)
+
+
+def _collect_target_space_dm_inputs(backtest_inputs: dict | None, model_names) -> tuple:
+    """WF birlestirilmis OOS girdilerinden DM icin hedef-uzayi tahmin/gercek uretir.
+
+    Her model icin ``pred_target`` ve ``y_true_target`` kuyruktan (``[-k:]``) hizalanir.
+    Ensemble ``pred_target`` yoksa (``None``) model atlanir (DM yok). Ortak ``y_true``
+    en uzun diziden alinir; kendi ``y_true_target``'i bu dizinin kuyruguyla
+    ozdes olmayan model hizalanamadigi icin atlanir. Hicbiri yoksa ``(None, None)``.
+    """
+    series: dict = {}
+    for name in model_names:
+        entry = (backtest_inputs or {}).get(name)
+        if not entry:
+            continue
+        pred, true = entry.get("pred_target"), entry.get("y_true_target")
+        if pred is None or true is None:
+            continue
+        p = np.asarray(pred, dtype=float).ravel()
+        t = np.asarray(true, dtype=float).ravel()
+        k = min(p.size, t.size)
+        if k < 3:
+            continue
+        series[name] = (p[-k:], t[-k:])
+    if not series:
+        return None, None
+    reference = max(series.values(), key=lambda pair: pair[1].size)[1]
+    predictions = {
+        name: pred
+        for name, (pred, true) in series.items()
+        if np.allclose(true, reference[-true.size:], rtol=1e-9, atol=1e-12, equal_nan=True)
+    }
+    if not predictions:
+        return None, None
+    return predictions, reference
 
 
 def _attach_guard_metadata(svc, metrics: dict) -> dict:
@@ -313,8 +364,15 @@ class _EvaluationWorkflowBase:
         )
         return self.services.signal_calibration._calibrate_walk_forward_signal_parameters(**kwargs)
 
-    def _attach_composite_scores(self, metrics: dict) -> dict:
-        return self.services.metrics._attach_composite_scores(metrics)
+    def _attach_composite_scores(self, metrics: dict, **kwargs) -> dict:
+        return self.services.metrics._attach_composite_scores(metrics, **kwargs)
+
+    def _dm_horizon(self) -> int:
+        """DM testi icin tahmin ufku (uretimde 1; bozuk/eksik deger -> 1)."""
+        try:
+            return max(1, int((self.dataset_metadata or {}).get("target_horizon", 1) or 1))
+        except (TypeError, ValueError):
+            return 1
 
     def _attach_model_scope_metadata(self, metrics: dict) -> dict:
         return self.services.metrics._attach_model_scope_metadata(metrics)
@@ -549,7 +607,16 @@ class WalkForwardEvaluationWorkflow(_EvaluationWorkflowBase):
         print("=" * 60)
 
         self._add_walk_forward_ensembles(wf_results, wf_predictions, wf_y_true, wf_backtest_inputs)
-        wf_results = _attach_score_metadata(self, wf_results)
+        # DM p-degeri: hedef-uzayi OOS tahminleri (ensemble'lar dahil) secili benchmark'a karsi.
+        # Filtre (reportable) sonrasi benchmark satirlari dusebilir; bu yuzden once hesaplanir.
+        dm_predictions, dm_y_true = _collect_target_space_dm_inputs(wf_backtest_inputs, wf_results)
+        wf_results = _attach_score_metadata(
+            self,
+            wf_results,
+            predictions=dm_predictions,
+            y_true=dm_y_true,
+            horizon=self._dm_horizon(),
+        )
         wf_results = self._filter_reportable_models(wf_results, wf_results)
         wf_predictions = self._filter_reportable_models(wf_predictions, wf_results)
         wf_backtest_inputs = self._filter_reportable_models(wf_backtest_inputs or {}, wf_results)
@@ -773,11 +840,14 @@ class FinalHoldoutEvaluationWorkflow(_EvaluationWorkflowBase):
         y_true_price,
         y_true_target,
         prev_close,
+        predictions_out: dict | None = None,
     ) -> dict:
         """Naive benchmark'lari holdout tensorlerinde tahmin edip metriklerini hesaplar.
 
         Benchmark'lar yalniz holdout oncesi egitim verisiyle (tensors["y_train"])
         egitilir. Uretilemezse {} doner (goreli metrikler NaN kalir).
+        ``predictions_out`` verilirse her benchmark'in hedef-uzayi holdout tahmini
+        (``[-n_rows:]``) buraya yazilir (DM testi icin).
         """
         from src.pipeline.model_registry import get_spec, has_spec
 
@@ -808,6 +878,8 @@ class FinalHoldoutEvaluationWorkflow(_EvaluationWorkflowBase):
                     prev_close=prev_close,
                     target_mode=target_mode,
                 )
+                if predictions_out is not None:
+                    predictions_out[bench_name] = np.asarray(bench_pred_target[-n_rows:], dtype=float)
             except (KeyError, ValueError, TypeError, AttributeError, IndexError) as exc:
                 print(f"  [WARN] Holdout benchmark ({bench_name}) hesaplanamadi: {exc}")
         return results
@@ -846,14 +918,27 @@ class FinalHoldoutEvaluationWorkflow(_EvaluationWorkflowBase):
         # tek model sozlugunden hesaplanirsa model kendi kendine benchmark olur. Naive
         # baseline'lari holdout uzerinde de tahmin edip karsilastirmaya dahil ediyoruz;
         # yoksa goreli metrikler NaN kalir (lider kapisi gecilmez).
+        benchmark_predictions: dict = {}
         benchmark_metrics = self._compute_holdout_benchmark_metrics(
             model_name,
             tensors,
             y_true_price=y_true_price,
             y_true_target=y_true_target,
             prev_close=prev_close,
+            predictions_out=benchmark_predictions,
         )
-        scored = _attach_score_metadata(self, {**benchmark_metrics, model_name: metrics[model_name]})
+        dm_predictions = None
+        dm_y_true = None
+        if benchmark_predictions and pred_target is not None and y_true_target is not None:
+            dm_predictions = {**benchmark_predictions, model_name: np.asarray(pred_target, dtype=float)}
+            dm_y_true = y_true_target
+        scored = _attach_score_metadata(
+            self,
+            {**benchmark_metrics, model_name: metrics[model_name]},
+            predictions=dm_predictions,
+            y_true=dm_y_true,
+            horizon=self._dm_horizon(),
+        )
         metrics = {model_name: scored[model_name]}
         metrics = _attach_guard_metadata(self, metrics)
         metrics[model_name]["Selection_Source"] = "walk_forward_composite_score"

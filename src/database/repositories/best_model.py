@@ -65,6 +65,7 @@ class BestModelRepository:
             "is_production_candidate": int(is_production_candidate),
             "Trade_Count": metrics.get("Trade_Count", 0),
             "RMSE_vs_benchmark": metrics.get("RMSE_vs_benchmark"),
+            "DM_PValue_vs_benchmark": metrics.get("DM_PValue_vs_benchmark"),
             "Validation_Mode": validation_mode,
             "ensemble_metadata": ensemble_metadata,
         }
@@ -143,11 +144,19 @@ class BestModelRepository:
         from src.pipeline.selection_guard import evaluate_best_model_eligibility
 
         ensemble_metadata = _parse_jsonish(row["ensemble_metadata_json"])
+        # DM p-degeri su an experiments tablosunda kolon olarak YOK (sema degisikligi yapilmadi);
+        # kolon eklenirse (``dm_pvalue_vs_benchmark``) otomatik okunur, aksi halde None ->
+        # DM kapisi uygulanmaz (yalniz RMSE kapisi). Canli yol (update_production_best_model)
+        # DM'yi dogrudan metrics sozlugunden alir.
+        row_keys = row.keys()
         return evaluate_best_model_eligibility({
             "model_name": row["model_name"],
             "is_production_candidate": row["is_production_candidate"],
-            "Trade_Count": row["trade_count"] if "trade_count" in row.keys() else 0,
-            "RMSE_vs_benchmark": row["rmse_vs_benchmark"] if "rmse_vs_benchmark" in row.keys() else None,
+            "Trade_Count": row["trade_count"] if "trade_count" in row_keys else 0,
+            "RMSE_vs_benchmark": row["rmse_vs_benchmark"] if "rmse_vs_benchmark" in row_keys else None,
+            "DM_PValue_vs_benchmark": (
+                row["dm_pvalue_vs_benchmark"] if "dm_pvalue_vs_benchmark" in row_keys else None
+            ),
             "ensemble_metadata": ensemble_metadata,
         })
 
