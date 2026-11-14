@@ -14,6 +14,8 @@ EligibilityStatus = Literal[
 ]
 
 MIN_TRADES_DEFAULT = 6
+# Diebold-Mariano tek-tarafli anlamlilik esigi (src.evaluation.scoring.DM_ALPHA ile ayni).
+DM_ALPHA_DEFAULT = 0.10
 PRODUCTION_ENSEMBLE_METHODS = {"Inverse RMSE", "Cash-Gated", "Seq-Attention Inverse RMSE"}
 
 
@@ -25,6 +27,8 @@ def compute_eligibility(
     total_trade_count: int,
     rmse_vs_benchmark: float | None = None,
     min_trades: int = MIN_TRADES_DEFAULT,
+    dm_p_value: float | None = None,
+    dm_alpha: float = DM_ALPHA_DEFAULT,
 ) -> tuple[EligibilityStatus, str]:
     if not is_production_candidate:
         return ("no_candidate", "Model production candidate degil.")
@@ -37,6 +41,13 @@ def compute_eligibility(
         return (
             "benchmark_failed",
             f"Model benchmark'i gecemedi (RMSE_vs_benchmark={rmse_vs_benchmark:.3f}).",
+        )
+    # DM p-degeri yoksa/NaN ise kapi uygulanmaz (veri yok != kanit yok).
+    if dm_p_value is not None and math.isfinite(dm_p_value) and dm_p_value >= dm_alpha:
+        return (
+            "benchmark_failed",
+            f"Model benchmark'tan istatistiksel olarak anlamli iyi degil "
+            f"(Diebold-Mariano p={dm_p_value:.3f} >= {dm_alpha:.2f}).",
         )
     if is_baseline and total_trade_count < min_trades:
         return (
@@ -84,6 +95,12 @@ def evaluate_best_model_eligibility(
     except (TypeError, ValueError):
         rmse_vs_benchmark = None
 
+    try:
+        raw_dm = experiment_row.get("DM_PValue_vs_benchmark")
+        dm_p_value = None if raw_dm in (None, "") else float(raw_dm)
+    except (TypeError, ValueError):
+        dm_p_value = None
+
     return compute_eligibility(
         model_name=model_name,
         is_production_candidate=is_prod,
@@ -91,4 +108,5 @@ def evaluate_best_model_eligibility(
         total_trade_count=trade_count,
         rmse_vs_benchmark=rmse_vs_benchmark,
         min_trades=min_trades,
+        dm_p_value=dm_p_value,
     )

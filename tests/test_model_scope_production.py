@@ -95,6 +95,8 @@ def test_select_best_model_ignores_benchmarks_and_non_candidates():
         "LSTM": {
             "Composite_Score": 40.0,
             "RMSE": 1.0,
+            # P1: secim kapisi sonlu RMSE_vs_benchmark <= 1 ister (enrichment her zaman yazar).
+            "RMSE_vs_benchmark": 0.98,
             "Candidate_For_Selection": True,
         },
     }
@@ -130,6 +132,7 @@ def test_best_models_highest_scored_final_holdout_candidate_wins():
             "Dir_Acc": 55.0,
             "Sharpe": 0.4,
             "Hit_Rate": 55.0,
+            "RMSE_vs_benchmark": 0.99,
             "Trade_Count": 10,
         },
         validation_mode="final_holdout",
@@ -152,6 +155,7 @@ def test_best_models_highest_scored_final_holdout_candidate_wins():
             "Dir_Acc": 45.0,
             "Sharpe": -0.2,
             "Hit_Rate": 45.0,
+            "RMSE_vs_benchmark": 1.0,
             "Trade_Count": 10,
         },
         validation_mode="final_holdout",
@@ -176,6 +180,7 @@ def test_best_models_highest_scored_final_holdout_candidate_wins():
             "Dir_Acc": 90.0,
             "Sharpe": 5.0,
             "Hit_Rate": 90.0,
+            "RMSE_vs_benchmark": 0.5,
             "Trade_Count": 10,
         },
         validation_mode="final_holdout",

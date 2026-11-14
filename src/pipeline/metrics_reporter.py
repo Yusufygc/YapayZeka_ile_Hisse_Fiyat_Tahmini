@@ -8,7 +8,7 @@ Sorumluluklar:
   - _attach_model_family_metadata(): model ailesi metadatasi
   - _enrich_wf_fold_metrics(): fold bazli composite score zenginlestirme
   - _get_wf_fold_metric_report(): fold metrik raporu
-  - _select_best_model(): Composite_Score + RMSE bazli model secimi
+  - _select_best_model(): DM-anlamlilik + RMSE<=benchmark kapisi, sonra Composite_Score/RMSE
   - _get_xai_single_split() / _get_xai_walk_forward(): XAI aciklama raporu
 """
 
@@ -20,8 +20,8 @@ from typing import Any, Dict, Optional
 import numpy as np
 import pandas as pd
 
-from src.database.stock_model_db import compute_composite_score
 from src.evaluation.evaluator import enrich_with_benchmark_metrics
+from src.evaluation.scoring import DM_ALPHA, compute_composite_details, diebold_mariano
 from src.pipeline.model_scope import (
     BENCHMARK_MODELS,
     is_selection_candidate,
@@ -44,12 +44,46 @@ class _MetricsReporterMixin:
     # ------------------------------------------------------------------ #
 
     @staticmethod
+    def _attach_dm_pvalues(
+        enriched: Dict[str, Dict[str, Any]],
+        predictions: Dict[str, Any],
+        y_true: Any,
+        horizon: int = 1,
+    ) -> None:
+        """Her modele ``DM_PValue_vs_benchmark`` (tek tarafli, H1: model daha iyi) ekler.
+
+        ``predictions`` ve ``y_true`` AYNI uzayda (tercihen hedef/getiri uzayi)
+        ve hizali OOS dizileridir. Benchmark'in kendisi, tahmini olmayan ya da
+        uzunlugu uyusmayan modeller icin deger NaN'dir (secimde engel olmaz).
+        """
+        y = np.asarray(y_true, dtype=float).ravel()
+        for model_name, row in enriched.items():
+            p_value = float("nan")
+            bench = row.get("Benchmark_Model")
+            if bench and bench != model_name and model_name in predictions and bench in predictions:
+                pm = np.asarray(predictions[model_name], dtype=float).ravel()
+                pb = np.asarray(predictions[bench], dtype=float).ravel()
+                if pm.size == y.size and pb.size == y.size:
+                    _, p_value = diebold_mariano(y - pm, y - pb, h=horizon)
+            row["DM_PValue_vs_benchmark"] = p_value
+
+    @staticmethod
     def _attach_composite_scores(
-        metrics_dict: Dict[str, Dict[str, float]]
+        metrics_dict: Dict[str, Dict[str, float]],
+        *,
+        predictions: Optional[Dict[str, Any]] = None,
+        y_true: Any = None,
+        horizon: int = 1,
     ) -> Dict[str, Dict[str, float]]:
+        """Benchmark-relative metrikler + Composite_Score (+ opsiyonel DM p-degeri).
+
+        ``predictions``/``y_true`` verilirse ``DM_PValue_vs_benchmark`` hesaplanir;
+        verilmezse alan eklenmez (secim DM kapisini atlar, yalniz RMSE kapisi kalir).
+        """
         enriched = enrich_with_benchmark_metrics(metrics_dict)
+        if predictions is not None and y_true is not None:
+            _MetricsReporterMixin._attach_dm_pvalues(enriched, predictions, y_true, horizon)
         for _, model_metrics in enriched.items():
-            composite = compute_composite_score(model_metrics)
             # Benchmark yoksa (goreli metrikler NaN) model lider kapisini gecemez:
             # skor 49'da kapatilir ve Eligible_For_Leader=False zorlanir.
             try:
@@ -58,8 +92,9 @@ class _MetricsReporterMixin:
                 rmse_ratio = float("nan")
             if not np.isfinite(rmse_ratio):
                 model_metrics["Eligible_For_Leader"] = False
-                composite = min(composite, 49.0)
-            model_metrics["Composite_Score"] = composite
+            details = compute_composite_details(model_metrics)
+            model_metrics["Composite_Score"] = details["Composite_Score"]
+            model_metrics["Composite_Incomplete"] = details["Composite_Incomplete"]
         return enriched
 
     # ------------------------------------------------------------------ #
@@ -186,7 +221,31 @@ class _MetricsReporterMixin:
     # ------------------------------------------------------------------ #
 
     @staticmethod
+    def _passes_selection_gate(metrics: Dict[str, Any]) -> bool:
+        """Sonlu RMSE_vs_benchmark <= 1 ve (varsa) DM p < DM_ALPHA."""
+        try:
+            ratio = float(metrics.get("RMSE_vs_benchmark", float("nan")))
+        except (TypeError, ValueError):
+            return False
+        if not np.isfinite(ratio) or ratio > 1.0:
+            return False
+        try:
+            dm_p = float(metrics.get("DM_PValue_vs_benchmark", float("nan")))
+        except (TypeError, ValueError):
+            dm_p = float("nan")
+        # DM p-degeri yoksa (tahmin verilmedi / hesaplanamadi) kapi uygulanmaz.
+        return bool(np.isnan(dm_p) or dm_p < DM_ALPHA)
+
+    @staticmethod
     def _select_best_model(metrics_dict: Dict[str, Dict[str, Any]]) -> Optional[str]:
+        """Aday modeller arasindan en iyisini secer; anlamli aday yoksa ``None``.
+
+        Kapi: sonlu ``RMSE_vs_benchmark <= 1`` ve mevcutsa
+        ``DM_PValue_vs_benchmark < 0.10``. Kapidan gecenler arasinda
+        (Composite_Score, -RMSE) maksimumu secilir (composite yalniz es-puan
+        kirici). Hic aday gecmezse ``None`` doner ve aday satirlarina
+        ``Selection_Status="no_significant_candidate"`` yazilir.
+        """
         if not metrics_dict:
             return None
         candidates = {
@@ -196,11 +255,20 @@ class _MetricsReporterMixin:
         }
         if not candidates:
             return None
+        passing = {
+            name: metrics
+            for name, metrics in candidates.items()
+            if _MetricsReporterMixin._passes_selection_gate(metrics)
+        }
+        if not passing:
+            for metrics in candidates.values():
+                metrics["Selection_Status"] = "no_significant_candidate"
+            return None
         return max(
-            candidates,
+            passing,
             key=lambda name: (
-                float(candidates[name].get("Composite_Score", float("-inf"))),
-                -float(candidates[name].get("RMSE", float("inf"))),
+                float(passing[name].get("Composite_Score", float("-inf"))),
+                -float(passing[name].get("RMSE", float("inf"))),
             ),
         )
 

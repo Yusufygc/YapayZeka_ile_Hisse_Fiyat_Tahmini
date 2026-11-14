@@ -19,10 +19,13 @@ Kullanım:
 """
 
 import sqlite3
+
+from src.database.connection import ClosingConnection
 import hashlib
 import math
 from typing import Any, Dict, List, Optional
 
+from src.evaluation.scoring import compute_composite_score  # noqa: F401  (re-export; mantik scoring.py'de)
 from src.pipeline.model_scope import BENCHMARK_MODELS
 
 
@@ -211,92 +214,6 @@ REQUIRED_SCHEMA_TABLES = (
 )
 
 
-def compute_composite_score(metrics: Dict[str, float]) -> float:
-    """
-    Farklı ölçeklerdeki metrikleri 0-100 aralığına normalize edip
-    ağırlıklı bileşik skor üretir.
-
-    Sprint 1 (2026-05-25) Plan A1.4 — Advisory-aware ağırlıklandırma:
-      - Dir_Acc (yön doğruluğu) ve Hit_Rate (kazançlı işlem oranı) ön planda;
-      - Sharpe ağırlığı azaltıldı çünkü risk_free_unavailable durumunda
-        NaN gelebilir ve advisory için ikincil bir gösterge;
-      - Net_Return formülde KULLANILMAZ (zaten yoktu) — işlem maliyeti=0
-        olduğundan yatırımsal yorumlanmamalı, sadece yön bilgisini test eder;
-      - RMSE_vs_benchmark hâlâ önemli ama 0.45 → 0.30'a düştü.
-
-    Ağırlıklar (toplam=1.00):
-      0.30 RMSE_vs_benchmark        (hata-bazlı temel skor)
-      0.25 DirAcc_vs_benchmark      (göreli yön üstünlüğü)
-      0.20 Dir_Acc                  (mutlak yön doğruluğu — advisory)
-      0.15 Hit_Rate                 (kazançlı işlem oranı — advisory)
-      0.10 Sharpe_excess_vs_buyhold (rf-bağımlı, NaN olabilir)
-
-    NaN guard: Sharpe NaN ise (risk_free_unavailable) sharpe_relative_score=50
-    (nötr) alınır; ağırlık kaybolmasın ama yanlış ödül de verme.
-
-    Model seçilen benchmark'tan daha kötü RMSE üretiyorsa skor sert biçimde
-    aşağı çekilir; böylece benchmark'ı geçemeyen model lider olamaz.
-    """
-    import math
-
-    dir_acc = float(metrics.get("Dir_Acc", 0.0))
-    hit_rate = float(metrics.get("Hit_Rate", 0.0))
-    # Relative alanlar artık seçilen benchmark modeline göre hesaplanır.
-    rmse_vs_benchmark = max(float(metrics.get("RMSE_vs_benchmark", 1.0)), 1e-8)
-    diracc_vs_benchmark = float(metrics.get("DirAcc_vs_benchmark", 0.0))
-    sharpe_excess_raw = metrics.get("Sharpe_excess_vs_buy_hold", 0.0)
-    neutral_rate = float(metrics.get("Neutral_Rate", 0.0))
-
-    # NaN guard: Sharpe NaN'sa nötr puan (50) ver; bu uyari Sharpe_Warning
-    # sutununda zaten gorulebilir.
-    try:
-        sharpe_excess = float(sharpe_excess_raw)
-        sharpe_finite = math.isfinite(sharpe_excess)
-    except (TypeError, ValueError):
-        sharpe_finite = False
-
-    # NaN guard: Hit_Rate eksikse (eski raporlar) 0 al, advisory kalitesi
-    # belirsiz olarak yorumlanir.
-    if not math.isfinite(hit_rate):
-        hit_rate = 0.0
-
-    # RMSE oranı: 1.0 benchmark ile başa baş, daha düşükse daha iyi
-    rmse_score = min(100.0, 100.0 / rmse_vs_benchmark)
-
-    # Relative directional skill: ±12.5 puan farkı yaklaşık 0-100 bandına yay
-    diracc_relative_score = min(100.0, max(0.0, 50.0 + diracc_vs_benchmark * 4.0))
-
-    # Mutlak yön doğruluğu (0-100). 50 nötr (rastgele).
-    dir_acc_score = min(100.0, max(0.0, dir_acc))
-
-    # Hit rate (0-100). 50 nötr.
-    hit_rate_score = min(100.0, max(0.0, hit_rate))
-
-    # Buy-and-hold üstü Sharpe'ı ödüllendir; NaN ise 50 (nötr) puan.
-    if sharpe_finite:
-        sharpe_relative_score = (math.tanh(sharpe_excess / 1.5) + 1.0) * 50.0
-    else:
-        sharpe_relative_score = 50.0
-
-    neutral_penalty = min(15.0, neutral_rate * 0.15)
-
-    composite = (
-        rmse_score * 0.30 +
-        diracc_relative_score * 0.25 +
-        dir_acc_score * 0.20 +
-        hit_rate_score * 0.15 +
-        sharpe_relative_score * 0.10
-    )
-    composite -= neutral_penalty
-
-    if rmse_vs_benchmark > 1.0:
-        composite = min(composite, 49.0)
-    if metrics.get("Eligible_For_Leader") is False:
-        composite = min(composite, 49.0)
-
-    return round(max(0.0, composite), 4)
-
-
 def _compute_composite_score(metrics: Dict[str, float]) -> float:
     return compute_composite_score(metrics)
 
@@ -346,7 +263,7 @@ class StockModelDB:
             self._init_repositories()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, factory=ClosingConnection)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")

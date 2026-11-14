@@ -68,8 +68,11 @@ def test_composite_score_rewards_higher_dir_acc():
     assert high_dir > low_dir
 
 
-def test_composite_score_rewards_higher_hit_rate():
-    """A1.4: Daha yuksek Hit_Rate -> daha yuksek composite."""
+def test_composite_score_ignores_hit_rate():
+    """P1: Hit_Rate Dir_Acc ile eszsinyal (collinear) -> formulden cikarildi.
+
+    Alan raporda bilgi amacli kalir ama composite'i etkilemez.
+    """
     base = {
         "RMSE_vs_benchmark": 0.95,
         "DirAcc_vs_benchmark": 0.0,
@@ -80,7 +83,7 @@ def test_composite_score_rewards_higher_hit_rate():
     }
     low_hit = compute_composite_score(dict(base, Hit_Rate=40.0))
     high_hit = compute_composite_score(dict(base, Hit_Rate=70.0))
-    assert high_hit > low_hit
+    assert high_hit == low_hit
 
 
 def test_composite_score_nan_sharpe_does_not_crash():

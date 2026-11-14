@@ -66,8 +66,10 @@ METRICS_REPORT_COLUMNS = [
     "Hit_Rate",
     "DirAcc_vs_benchmark",
     "Composite_Score",
+    "Composite_Incomplete",
     # === ERROR METRICS ===
     "RMSE_vs_benchmark",
+    "DM_PValue_vs_benchmark",
     "RMSE",
     "MAE",
     "Return_RMSE",
@@ -234,6 +236,8 @@ def enrich_with_benchmark_metrics(
         row["RMSE_vs_benchmark"] = round(rmse / benchmark_rmse, 4) if benchmark_available else np.nan
         row["Mandatory_Zero_Return_RMSE"] = round(zero_return_rmse, 4) if np.isfinite(zero_return_rmse) else np.nan
         row["RMSE_vs_zero_return"] = round(rmse / max(zero_return_rmse, 1e-8), 4) if np.isfinite(zero_return_rmse) else np.nan
+        # Bilgi amaclidir: Composite_Score formulune ve lider kapisina GIRMEZ
+        # (benchmark Naive Zero Return iken ~Dir_Acc sabit bonusa doyuyordu).
         row["DirAcc_vs_benchmark"] = round(dir_acc - benchmark_dir_acc, 2) if benchmark_available else np.nan
         row["Sharpe_excess_vs_buy_hold"] = round(sharpe - buy_hold_sharpe, 4)
         row["Beats_Benchmark_RMSE"] = bool(benchmark_available and rmse <= benchmark_rmse)
@@ -443,6 +447,7 @@ def save_metrics_report(
                     "Benchmark_Model",
                     "Benchmark_Source",
                     "RMSE_vs_benchmark",
+                    "DM_PValue_vs_benchmark",
                     "Mandatory_Zero_Return_RMSE",
                     "RMSE_vs_zero_return",
                     "DirAcc_vs_benchmark",
