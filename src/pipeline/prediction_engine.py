@@ -11,6 +11,7 @@ Sorumluluklar:
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -35,6 +36,8 @@ except ImportError:  # pragma: no cover
             1.0 + np.asarray(returns, dtype=float).ravel()
         )
 
+
+logger = logging.getLogger(__name__)
 
 _SEQ_MODELS = {"LSTM", "LSTM Lite", "AttentionLSTM", "AttentionLSTM v2", "DLinear", "NLinear"}
 _TREE_MODELS = {"XGBoost", "Random Forest", "Ridge Return", "ElasticNet Return", "LightGBM Return"}
@@ -135,89 +138,96 @@ class _PredictionEngineMixin:
         "Ensemble Cash-Gated",
     )
 
-    def _compute_ensemble_blends(
+    # Seq-attention alt-ensemble uyeleri (equal + inverse-RMSE).
+    _SEQ_ATTN_MODELS = frozenset({"LSTM", "LSTM Lite", "AttentionLSTM v2"})
+    _SEQ_EQUAL_NAME = "Ensemble Seq-Attention Equal"
+    _SEQ_INV_NAME = "Ensemble Seq-Attention Inverse RMSE"
+
+    def _fit_ensemble_weights(
         self,
         base_preds: Dict[str, np.ndarray],
         base_targets: Dict[str, np.ndarray],
         *,
         y_true_inverse: Any,
         y_true_target: Any,
-        cg_prev_close: Any,
-    ) -> list:
-        """7 ensemble ağırlığını + (name, price_preds, target_preds) tuple listesini üretir.
+    ) -> Dict[str, Dict[str, float]]:
+        """Ensemble yontemi -> agirlik sozlugu (yalnizca verilen satirlarda fit).
 
-        Single-split ve walk-forward yollarının paylaştığı çekirdek (DRY): ağırlık
-        optimizasyonu (equal/inverse-RMSE/Sharpe/risk-parity/hierarchical/meta-stacker)
-        + Sharpe-Weighted'ı miras alan cash-gate + seq-attention alt-ensemble'ları.
-        Ağırlıklar `self.state.ensemble_weights`'e yazılır. `cg_prev_close` cash-gate fiyat
-        geri-dönüşümü içindir; uzunluğu yetersizse cash-gate Sharpe-Weighted'a düşer.
+        Sadece `y_true_*` satirlarini gorur: cagiran, fit penceresini (tum test seti
+        = research-only single-split; yalnizca onceki fold'lar = walk-forward) secer.
+        ``y_true_inverse`` bos/None ise (fit verisi yok, orn. ilk fold) TUM yontemler
+        esit agirliga duser. Cash-Gated, Sharpe-Weighted agirliklarini miras alir.
 
         Args:
-            base_preds: Ensemble'a girecek temel model fiyat tahminleri.
-            base_targets: Aynı modellerin hedef-uzayı tahminleri (target blend için).
-            y_true_inverse: inverse-RMSE ağırlığı için gerçek fiyat serisi.
-            y_true_target: Sharpe/risk-parity/stacker için gerçek hedef serisi.
-            cg_prev_close: Cash-gate hedef→fiyat dönüşümü için prev_close serisi.
-
-        Returns:
-            (name, price_preds, target_preds) üçlülerinin listesi.
+            base_preds: Temel model fiyat tahminleri (inverse-RMSE / hierarchical).
+            base_targets: Temel model hedef-uzayi tahminleri (Sharpe/risk-parity/stacker).
+            y_true_inverse: Inverse-RMSE icin gercek fiyat serisi.
+            y_true_target: Sharpe/risk-parity/stacker icin gercek hedef serisi.
         """
         n = len(base_preds)
-        (equal_name, inv_name, sharpe_name, rp_name, hier_name, stk_name, cg_name) = self._ENSEMBLE_NAMES
+        equal_w = {name: round(1.0 / n, 6) for name in base_preds}
+        names = self._ENSEMBLE_NAMES
+        y_inv = np.asarray([] if y_true_inverse is None else y_true_inverse, dtype=float).ravel()
+        y_tgt = np.asarray([] if y_true_target is None else y_true_target, dtype=float).ravel()
+        has_inv = len(y_inv) > 0
+        has_target = has_inv and bool(len(y_tgt) and base_targets)
 
-        equal_preds = EnsembleModel().combine(base_preds)
-        inverse_weights = EnsembleModel.optimize_inverse_rmse(np.asarray(y_true_inverse), base_preds)
-        inverse_preds = EnsembleModel(inverse_weights).combine(base_preds)
-
-        y_true_target = np.asarray(y_true_target, dtype=float).ravel()
-        has_target = bool(len(y_true_target) and base_targets)
-
-        # Faz 5 Katman 1: Sharpe-weighted blend (target-space).
-        sharpe_weights = (
-            EnsembleModel.optimize_by_sharpe(y_true_target, base_targets)
-            if has_target
-            else {name: 1.0 / n for name in base_preds}
+        inv_w = EnsembleModel.optimize_inverse_rmse(y_inv, base_preds) if has_inv else dict(equal_w)
+        if has_target:
+            sharpe_w = EnsembleModel.optimize_by_sharpe(y_tgt, base_targets)  # Faz 5 Katman 1
+            rp_w = EnsembleModel.optimize_by_risk_parity(  # Faz 5 Katman 2
+                EnsembleModel.compute_pnl_volatilities(y_tgt, base_targets)
+            )
+            stk_w = EnsembleModel.optimize_by_ridge_stacker(y_tgt, base_targets, alpha=1.0)  # Katman 4
+        else:
+            sharpe_w, rp_w, stk_w = dict(equal_w), dict(equal_w), dict(equal_w)
+        hier_w = (  # Faz 5 Katman 3: kategori-gated hierarchical
+            EnsembleModel.optimize_hierarchical_by_category(base_preds, self._resolve_categories(list(base_preds)))
+            if has_inv
+            else dict(equal_w)
         )
-        sharpe_preds = EnsembleModel(sharpe_weights).combine(base_preds)
-        # Faz 5 Katman 2: Risk-parity (inverse-volatility) blend.
-        if has_target:
-            pnl_vols = EnsembleModel.compute_pnl_volatilities(y_true_target, base_targets)
-            rp_weights = EnsembleModel.optimize_by_risk_parity(pnl_vols)
-        else:
-            rp_weights = {name: 1.0 / n for name in base_preds}
-        rp_preds = EnsembleModel(rp_weights).combine(base_preds)
-        # Faz 5 Katman 3: Kategori-gated hierarchical blend.
-        categories = self._resolve_categories(list(base_preds))
-        hier_weights = EnsembleModel.optimize_hierarchical_by_category(base_preds, categories)
-        hier_preds = EnsembleModel(hier_weights).combine(base_preds)
-        # Faz 5 Katman 4: Ridge meta-stacker (target-space).
-        if has_target:
-            stk_weights = EnsembleModel.optimize_by_ridge_stacker(y_true_target, base_targets, alpha=1.0)
-        else:
-            stk_weights = {name: 1.0 / n for name in base_preds}
-        stk_preds = EnsembleModel(stk_weights).combine(base_preds)
+        weights = {
+            names[0]: dict(equal_w),
+            names[1]: inv_w,
+            names[2]: sharpe_w,
+            names[3]: rp_w,
+            names[4]: hier_w,
+            names[5]: stk_w,
+            names[6]: dict(sharpe_w),  # Cash-Gated: gate transformasyondur, blend degil.
+        }
+        seq = {name: base_preds[name] for name in base_preds if name in self._SEQ_ATTN_MODELS}
+        if len(seq) >= 2:
+            weights[self._SEQ_EQUAL_NAME] = {name: round(1.0 / len(seq), 6) for name in seq}
+            weights[self._SEQ_INV_NAME] = (
+                EnsembleModel.optimize_inverse_rmse(y_inv, seq)
+                if has_inv
+                else dict(weights[self._SEQ_EQUAL_NAME])
+            )
+        return weights
 
-        self.state.ensemble_weights[equal_name] = {name: round(1.0 / n, 6) for name in base_preds}
-        self.state.ensemble_weights[inv_name] = inverse_weights
-        self.state.ensemble_weights[sharpe_name] = sharpe_weights
-        self.state.ensemble_weights[rp_name] = rp_weights
-        self.state.ensemble_weights[hier_name] = hier_weights
-        self.state.ensemble_weights[stk_name] = stk_weights
-        # Cash-Gated, Sharpe-Weighted ağırlıklarını miras alır (gate transformasyondur, blend değil).
-        self.state.ensemble_weights[cg_name] = dict(sharpe_weights)
+    def _apply_ensemble_weights(
+        self,
+        weights: Dict[str, Dict[str, float]],
+        base_preds: Dict[str, np.ndarray],
+        base_targets: Dict[str, np.ndarray],
+        *,
+        cg_prev_close: Any,
+    ) -> list:
+        """Hazir agirliklari uygulayip (name, price_preds, target_preds) listesi uretir.
 
-        def _target(weights):
-            return self._weighted_average(base_targets, weights) if len(base_targets) >= 2 else None
+        Y_true kullanmaz (leakage yok). Cash-gate satir-bazli agreement transformudur;
+        `cg_prev_close` hedef->fiyat donusumu icindir, yetersizse Sharpe-Weighted'a duser.
+        """
 
-        equal_target = EnsembleModel().combine(base_targets) if len(base_targets) >= 2 else None
-        inverse_target = _target(inverse_weights)
-        sharpe_target = _target(sharpe_weights)
-        rp_target = _target(rp_weights)
-        hier_target = _target(hier_weights)
-        stk_target = _target(stk_weights)
-        # Faz 5 Katman 5: Cash gate (Sharpe-Weighted hedef üzerinde, agreement >= 0.6).
-        cg_target = None
-        cg_preds = sharpe_preds
+        def blend(name, preds, targets):
+            tgt = self._weighted_average(targets, weights[name]) if len(targets) >= 2 else None
+            return name, EnsembleModel(weights[name]).combine(preds), tgt
+
+        tuples = [blend(name, base_preds, base_targets) for name in self._ENSEMBLE_NAMES[:6]]
+        cg_name = self._ENSEMBLE_NAMES[6]
+        _, sharpe_preds, sharpe_target = tuples[2]
+        # Faz 5 Katman 5: Cash gate (Sharpe-Weighted hedef uzerinde, agreement >= 0.6).
+        cg_target, cg_preds = None, sharpe_preds
         if sharpe_target is not None and base_targets:
             try:
                 cg_target = EnsembleModel.apply_cash_gate(
@@ -228,51 +238,113 @@ class _PredictionEngineMixin:
                     cg_preds = self._target_to_price(cg_target, cg_prev[-len(cg_target):])
                 else:
                     cg_target = None
-                    cg_preds = sharpe_preds
             except AttributeError:
                 cg_target = None
-                cg_preds = sharpe_preds
+        tuples.append((cg_name, cg_preds, cg_target))
 
-        ensemble_tuples = [
-            (equal_name, equal_preds, equal_target),
-            (inv_name, inverse_preds, inverse_target),
-            (sharpe_name, sharpe_preds, sharpe_target),
-            (rp_name, rp_preds, rp_target),
-            (hier_name, hier_preds, hier_target),
-            (stk_name, stk_preds, stk_target),
-            (cg_name, cg_preds, cg_target),
-        ]
+        if self._SEQ_EQUAL_NAME in weights:
+            seq_preds = {n: p for n, p in base_preds.items() if n in self._SEQ_ATTN_MODELS}
+            seq_targets = {n: base_targets[n] for n in seq_preds if n in base_targets}
+            tuples.append(blend(self._SEQ_EQUAL_NAME, seq_preds, seq_targets))
+            tuples.append(blend(self._SEQ_INV_NAME, seq_preds, seq_targets))
+        return tuples
 
-        # Seq-Attention alt-ensemble'lari
-        seq_attn_models = {"LSTM", "LSTM Lite", "AttentionLSTM v2"}
-        seq_attn_preds = {name: preds for name, preds in base_preds.items() if name in seq_attn_models}
-        if len(seq_attn_preds) >= 2:
-            seq_equal_name = "Ensemble Seq-Attention Equal"
-            seq_inv_name = "Ensemble Seq-Attention Inverse RMSE"
+    def _compute_ensemble_blends(
+        self,
+        base_preds: Dict[str, np.ndarray],
+        base_targets: Dict[str, np.ndarray],
+        *,
+        y_true_inverse: Any,
+        y_true_target: Any,
+        cg_prev_close: Any,
+    ) -> list:
+        """Single-split (research-only): agirliklar verilen y_true uzerinde fit edilir (in-sample).
 
-            seq_equal_preds = EnsembleModel().combine(seq_attn_preds)
-            seq_inv_weights = EnsembleModel.optimize_inverse_rmse(np.asarray(y_true_inverse), seq_attn_preds)
-            seq_inv_preds = EnsembleModel(seq_inv_weights).combine(seq_attn_preds)
+        Agirliklar `self.state.ensemble_weights`'e yazilir. Walk-forward metrikleri BU yolu
+        kullanmaz (bkz. `_compute_walk_forward_blends`).
+        """
+        weights = self._fit_ensemble_weights(
+            base_preds, base_targets, y_true_inverse=y_true_inverse, y_true_target=y_true_target
+        )
+        self.state.ensemble_weights.update(weights)
+        return self._apply_ensemble_weights(weights, base_preds, base_targets, cg_prev_close=cg_prev_close)
 
-            self.state.ensemble_weights[seq_equal_name] = {
-                name: round(1.0 / len(seq_attn_preds), 6) for name in seq_attn_preds
-            }
-            self.state.ensemble_weights[seq_inv_name] = seq_inv_weights
+    def _compute_walk_forward_blends(
+        self,
+        base_preds: Dict[str, np.ndarray],
+        base_targets: Dict[str, np.ndarray],
+        *,
+        fold_ids: Any,
+        y_true_inverse: Any,
+        y_true_target: Any,
+        cg_prev_close: Any,
+    ) -> tuple:
+        """Expanding / prior-folds-only ensemble (OOS metrikler icin leakage yok).
 
-            seq_base_targets = {name: base_targets[name] for name in seq_attn_preds if name in base_targets}
-            seq_equal_target = (
-                EnsembleModel().combine(seq_base_targets) if len(seq_base_targets) >= 2 else None
+        Fold f satirlari, yalnizca f'den ONCE baslayan satirlarda fit edilen agirliklarla
+        harmanlanir; ilk fold esit agirlik. Tum diziler `[-m:]` kuyruk hizasindadir.
+        `state.ensemble_weights` (production forward) TUM fold'larda fit edilir; metrikte
+        kullanilmaz. fold_ids yoksa/hizasizsa esit agirlik (asla in-sample) + uyari.
+
+        Returns:
+            (tuples, scope) — scope "expanding_prior_folds" veya "equal_weight_no_fold_ids".
+        """
+        arrs = [*base_preds.values(), *base_targets.values(), np.asarray(y_true_inverse).ravel()]
+        m = min(len(a) for a in arrs)
+
+        def tail(a):
+            a = None if a is None else np.asarray(a).ravel()
+            return a[-m:] if a is not None and len(a) >= m else None
+
+        preds = {k: np.asarray(v, dtype=float).ravel()[-m:] for k, v in base_preds.items()}
+        targets = {k: np.asarray(v, dtype=float).ravel()[-m:] for k, v in base_targets.items()}
+        y_inv = tail(y_true_inverse)
+        y_tgt = tail(y_true_target)
+        y_tgt = np.asarray([]) if y_tgt is None else y_tgt
+        prev = tail(cg_prev_close)
+        prev = np.asarray([]) if prev is None else prev
+        folds = tail(fold_ids)
+
+        # Production forward agirliklari: tum OOS satirlari (metrikte KULLANILMAZ).
+        self.state.ensemble_weights.update(
+            self._fit_ensemble_weights(preds, targets, y_true_inverse=y_inv, y_true_target=y_tgt)
+        )
+        if folds is None:
+            logger.warning(
+                "Walk-forward ensemble: fold_ids yok/hizasiz -> metrikler esit agirlikla "
+                "hesaplanir (in-sample agirlik kullanilmaz)."
             )
-            seq_inv_target = (
-                self._weighted_average(seq_base_targets, seq_inv_weights)
-                if len(seq_base_targets) >= 2
-                else None
+            weights = self._fit_ensemble_weights(preds, targets, y_true_inverse=None, y_true_target=None)
+            return (
+                self._apply_ensemble_weights(weights, preds, targets, cg_prev_close=prev),
+                "equal_weight_no_fold_ids",
             )
 
-            ensemble_tuples.append((seq_equal_name, seq_equal_preds, seq_equal_target))
-            ensemble_tuples.append((seq_inv_name, seq_inv_preds, seq_inv_target))
-
-        return ensemble_tuples
+        _, first_idx = np.unique(folds, return_index=True)
+        out_price: Dict[str, np.ndarray] = {}
+        out_target: Dict[str, Optional[np.ndarray]] = {}
+        for start in np.sort(first_idx):
+            mask = folds == folds[start]
+            prior = slice(0, int(start))  # yalnizca bu fold'dan ONCEKI satirlar
+            weights = self._fit_ensemble_weights(
+                {k: v[prior] for k, v in preds.items()},
+                {k: v[prior] for k, v in targets.items()},
+                y_true_inverse=y_inv[prior],
+                y_true_target=y_tgt[prior],
+            )
+            fold_tuples = self._apply_ensemble_weights(
+                weights,
+                {k: v[mask] for k, v in preds.items()},
+                {k: v[mask] for k, v in targets.items()},
+                cg_prev_close=prev[mask] if len(prev) == m else prev,
+            )
+            for name, price, tgt in fold_tuples:
+                out_price.setdefault(name, np.full(m, np.nan))[mask] = price
+                if tgt is None or out_target.get(name, 0) is None:
+                    out_target[name] = None
+                else:
+                    out_target.setdefault(name, np.full(m, np.nan))[mask] = tgt
+        return [(name, out_price[name], out_target[name]) for name in out_price], "expanding_prior_folds"
 
     def _add_single_split_ensembles(self) -> None:
         # Sprint 0 (2026-05-25): Bu metot ensemble agirliklarini test setinin
@@ -328,6 +400,22 @@ class _PredictionEngineMixin:
             "  [OK] Ensemble tahminleri eklendi: Equal Weight, Inverse RMSE, Sharpe-Weighted, Risk-Parity, Hierarchical, Meta-Stacker, Cash-Gated"
         )
 
+    @staticmethod
+    def _shared_fold_ids(base_preds, bt_inputs) -> Optional[np.ndarray]:
+        """Temel modellerin walk-forward ``fold_ids``'i (tail hizali); uyumsuzsa/yoksa None."""
+        arrays = [
+            np.asarray(bt_inputs[n]["fold_ids"]).ravel()
+            for n in base_preds
+            if n in bt_inputs and bt_inputs[n].get("fold_ids") is not None
+        ]
+        if not arrays:
+            return None
+        m = min(len(a) for a in arrays)
+        if m == 0 or any(not np.array_equal(a[-m:], arrays[0][-m:]) for a in arrays[1:]):
+            logger.warning("Walk-forward ensemble: temel modellerin fold_ids hizasi tutarsiz.")
+            return None
+        return arrays[0]
+
     def _add_walk_forward_ensembles(
         self,
         wf_results: Dict[str, Dict[str, Any]],
@@ -364,13 +452,21 @@ class _PredictionEngineMixin:
             if template
             else np.array([])
         )
-        ensemble_tuples = self._compute_ensemble_blends(
+        # P0-2: agirliklar yalnizca ONCEKI fold'lardan fit edilir (expanding); aksi halde
+        # ayni OOS satirlarinda metrik hesaplamak in-sample olur.
+        ensemble_tuples, weight_scope = self._compute_walk_forward_blends(
             base_preds,
             base_targets,
+            fold_ids=self._shared_fold_ids(base_preds, bt_inputs),
             y_true_inverse=wf_y_true,
             y_true_target=y_true_target_tpl,
             cg_prev_close=prev_close_tpl,
         )
+        for _name in (*self._ENSEMBLE_NAMES, self._SEQ_EQUAL_NAME, self._SEQ_INV_NAME):
+            if _name in self.state.ensemble_weights:
+                self.state.ensemble_weight_scope[_name] = weight_scope
+        if self.ctx.dataset_metadata is not None:
+            self.ctx.dataset_metadata["wf_ensemble_weight_scope"] = weight_scope
 
         for name, pred_price, pred_target in ensemble_tuples:
             k = min(len(pred_price), len(np.asarray(wf_y_true).ravel()))
