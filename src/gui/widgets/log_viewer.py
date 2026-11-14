@@ -9,7 +9,7 @@ from PySide6.QtGui import QTextCursor
 
 class LogViewer(QWidget):
     """
-    Subprocess Ã§Ä±ktÄ±sÄ±nÄ± anlÄ±k gÃ¶steren ve otomatik aÅŸaÄŸÄ± kaydÄ±ran log bileÅŸeni.
+    Subprocess çıktısını anlık gösteren ve otomatik aşağı kaydıran log bileşeni.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -19,13 +19,13 @@ class LogViewer(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Log ekranÄ±
+        # Log ekranı
         self.text_edit = QPlainTextEdit(self)
         self.text_edit.setObjectName("log_viewer")
         self.text_edit.setReadOnly(True)
-        self.text_edit.setMaximumBlockCount(5000)  # HafÄ±za dostu limit
+        self.text_edit.setMaximumBlockCount(5000)  # Hafıza dostu limit
 
-        # Kontrol butonlarÄ±
+        # Kontrol butonları
         btn_layout = QHBoxLayout()
         self.btn_clear = QPushButton("Logu Temizle", self)
         self.btn_clear.setMaximumWidth(120)
@@ -39,12 +39,13 @@ class LogViewer(QWidget):
 
     def append_text(self, text: str):
         """
-        Log ekranÄ±na yeni metin ekler ve otomatik aÅŸaÄŸÄ± kaydÄ±rÄ±r.
+        Log ekranına yeni metin ekler ve otomatik aşağı kaydırır.
         """
-        # ANSI Escape kodlarÄ±nÄ± temizleme (Basit filtre)
+        # ANSI escape kodlarını temizleme
         import re
         ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
         clean_text = ansi_escape.sub('', text)
+        clean_text = clean_text.replace("\r\n", "\n").replace("\r", "\n").replace("\b", "")
 
         # Scroll pozisyonunu kontrol et
         vertical_bar = self.text_edit.verticalScrollBar()
@@ -53,12 +54,12 @@ class LogViewer(QWidget):
         self.text_edit.insertPlainText(clean_text)
 
         if was_at_bottom:
-            # En alta kaydÄ±r
+            # En alta kaydır
             self.text_edit.moveCursor(QTextCursor.End)
             vertical_bar.setValue(vertical_bar.maximum())
 
     def clear(self):
         """
-        EkranÄ± temizler.
+        Ekranı temizler.
         """
         self.text_edit.clear()

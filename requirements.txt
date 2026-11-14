@@ -18,3 +18,16 @@ pandas-market-calendars==4.4.0
 statsmodels==0.14.6
 shap==0.49.1
 PySide6==6.7.1
+
+# --- Kodda import edilen ama onceden listede olmayan paketler (2026-11-10 denetim, bulgu 4) ---
+# torch: CPU wheel icin `pip install torch --index-url https://download.pytorch.org/whl/cpu`
+torch==2.14.1
+fastapi==0.162.2
+uvicorn==0.54.0
+pydantic==2.14.3
+httpx==0.28.1
+lime==0.2.0.1
+filelock==4.1.0
+# --- Test/gelistirme ---
+pytest==9.2.0
+pytest-cov==7.1.0

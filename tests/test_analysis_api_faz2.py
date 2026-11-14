@@ -285,7 +285,9 @@ def test_v1_alias_returns_same_response_as_unversioned():
 def test_v1_alias_route_registered():
     """A8.6 — /v1 alias route FastAPI'de kayitli."""
     from src.api.main import app
-    paths = {route.path for route in app.routes}
+    # OpenAPI semasi surumden bagimsiz public sozlesme (yeni FastAPI `app.routes`i
+    # lazy `_IncludedRouter` ile dondurur ve `.path` tasimaz).
+    paths = set(app.openapi()["paths"])
     assert "/v1/analysis/{symbol}" in paths
     assert "/analysis/{symbol}" in paths
 

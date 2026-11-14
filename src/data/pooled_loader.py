@@ -10,30 +10,39 @@ Tum hisse CSV'lerini tek uzun panele yukler:
 - Ozellikler her sembol icin AYRI uretilir (capraz-sembol kontaminasyon yok),
   sonra birlestirilir.
 - target = log(close[t+h]/close[t]); target_date = sembolun t+h tarihi (kesin
-  purge icin -> pooled_cv). Son h satir (NaN target) dusulur.
+  purge icin -> pooled_cv). Son h satir (NaN target) varsayilan olarak dusulur;
+  `keep_unlabeled=True` ile skorlama icin tutulur (target/target_date NaN).
 - Kosullandirma: sector (universe, GICS), symbol_id (stabil), liq_log (trailing
   TL ciro medyani, causal), vol (trailing realized-vol, causal). Bucketleme/
   olcekleme CV/model asamasina birakilir (loader'da global quantile = lookahead).
-- Survivorship: delisted sembollerin gecmisi DAHIL (include_delisted).
+- Survivorship: `bist_universe.csv` `Delisted_Date` dolu semboller `include_delisted`
+  ile kontrol edilir (True: gecmis DAHIL, delisting sonrasi bayat satirlar atilir;
+  False: sembol disarida). Evrende hic delisting yoksa panelin yalniz bugun hayatta
+  kalanlari icerdigi (survivorship yanlilik riski) `survivorship_status` ve uyari ile
+  bildirilir — sessiz gecilmez. Delisting verisi `Delisted_Date` kolonuna elle/
+  kaynaktan girilir (sablon: data/meta/delisted_template.csv).
 """
 from __future__ import annotations
 
 import glob
+import logging
 import os
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
+from src.data.panel_columns import PIPELINE_RAW_COLS
 from src.features.feature_pipeline import FeaturePipeline  # tests monkeypatch eder
+
+logger = logging.getLogger(__name__)
 
 _COL_MAP = {
     "Tarih": "Date", "Açılış": "Open", "Yüksek": "High",
     "Düşük": "Low", "Düzeltilmiş_Kapanış": "Close", "Hacim": "Volume",
 }
 _EXCLUDE_STEMS = {"bist_universe", "advisory_history"}
-_NON_FEATURE = {"Date", "Close", "Open", "High", "Low", "Volume",
-                "Adj Close", "Düzeltilmiş_Kapanış", "Hacim"}
+_NON_FEATURE = PIPELINE_RAW_COLS      # tek tanim: src/data/panel_columns.py
 
 
 @dataclass(frozen=True)
@@ -47,20 +56,45 @@ class PooledLoaderConfig:
     liq_lookback: int = 63
     vol_lookback: int = 63
     min_usable_rows: int = 10     # ozellik+target sonrasi en az kullanilabilir satir
+    # True: hedefi henuz gerceklesmemis son h satir (target/target_date NaN) panelde
+    # kalir -> skorlama en guncel piyasa gunune yapilabilir (K4). Egitim/OOS icin
+    # cagiran `panel[panel["target"].notna()]` ile etiketli alt kumeyi alir.
+    keep_unlabeled: bool = False
+    # K7: birincil `data_dir`'de olmayan semboller bu klasorlerden (sirayla) tamamlanir
+    # (ornegin "data/yedek"). Birincil dosya HER ZAMAN onceliklidir; dosya tasinmaz.
+    fallback_dirs: tuple[str, ...] = ()
+    # K8: kurumsal eylem karantinasi. |1 gunluk log-getiri| > jump_threshold olan gun
+    # (bolunme/duzeltilmemis olcek kirigi; BIST gunluk fiyat marji bu esigin cok
+    # altinda) etrafindaki satirlar panelden atilir: ozellik penceresi (jump gunu ve
+    # sonraki `quarantine_rows` satir) + hedefi sicramayi iceren satirlar (t..t+h).
+    quarantine_jumps: bool = False
+    jump_threshold: float = 0.30
+    quarantine_rows: int = 63
 
 
 class PooledPanelLoader:
     def __init__(self, cfg: PooledLoaderConfig) -> None:
         self.cfg = cfg
         self.report: dict[str, str] = {}  # symbol -> skip reason / "ok"
+        # "unknown" | "no_delisted_in_universe" | "delisted_handled"
+        self.survivorship_status: str = "unknown"
+        self.quarantined_days: dict[str, int] = {}   # symbol -> atilan satir sayisi (K8)
+        self.source_dir: dict[str, str] = {}         # symbol -> yuklenen klasor (K7)
+        self._paths: dict[str, str] | None = None
 
     # ----------------------------------------------------------------- public
     def load(self) -> pd.DataFrame:
         sector_map = self._sector_map()
+        delisted = self._delisted_map()
+        self._report_survivorship(delisted)
         frames: list[pd.DataFrame] = []
         for sym in self._symbols():
+            if sym in delisted and not self.cfg.include_delisted:
+                self.report[sym] = "delisted_excluded"
+                continue
             try:
-                f = self._engineer_symbol(sym, sector_map.get(sym, "Unknown"))
+                f = self._engineer_symbol(
+                    sym, sector_map.get(sym, "Unknown"), delisted.get(sym))
             except Exception as exc:  # tek sembol hatasi paneli durdurmasin
                 self.report[sym] = f"error:{str(exc)[:60]}"
                 continue
@@ -77,13 +111,22 @@ class PooledPanelLoader:
         return panel
 
     # ---------------------------------------------------------------- helpers
+    def _symbol_paths(self) -> dict[str, str]:
+        """{sembol: csv yolu}. Birincil data_dir once; eksikler fallback_dirs'ten (K7)."""
+        if self._paths is None:
+            paths: dict[str, str] = {}
+            for directory in (self.cfg.data_dir, *self.cfg.fallback_dirs):
+                for p in sorted(glob.glob(os.path.join(directory, "*.csv"))):
+                    stem = os.path.basename(p)[:-4]
+                    if stem in _EXCLUDE_STEMS or stem in paths:
+                        continue
+                    paths[stem] = p
+                    self.source_dir[stem] = directory
+            self._paths = paths
+        return self._paths
+
     def _symbols(self) -> list[str]:
-        out = []
-        for p in glob.glob(os.path.join(self.cfg.data_dir, "*.csv")):
-            stem = os.path.basename(p)[:-4]
-            if stem not in _EXCLUDE_STEMS:
-                out.append(stem)
-        return sorted(out)
+        return sorted(self._symbol_paths())
 
     def _sector_map(self) -> dict[str, str]:
         if not os.path.exists(self.cfg.universe_file):
@@ -98,8 +141,48 @@ class PooledPanelLoader:
             out[str(r["Symbol"]).strip().upper()] = sec or "Unknown"
         return out
 
-    def _engineer_symbol(self, symbol: str, sector: str) -> pd.DataFrame | None:
-        path = os.path.join(self.cfg.data_dir, f"{symbol}.csv")
+    def _universe_frame(self) -> pd.DataFrame | None:
+        if not os.path.exists(self.cfg.universe_file):
+            return None
+        uni = pd.read_csv(self.cfg.universe_file, encoding="utf-8-sig")
+        return uni if "Symbol" in uni.columns else None
+
+    def _delisted_map(self) -> dict[str, pd.Timestamp | None]:
+        """{sembol: delisting tarihi (bilinmiyorsa None)} — yalniz delisted isaretliler.
+
+        Delisted: `Delisted_Date` gecerli tarih VEYA `Status` 'delisted'.
+        """
+        uni = self._universe_frame()
+        if uni is None:
+            return {}
+        dates = (pd.to_datetime(uni["Delisted_Date"], errors="coerce")
+                 if "Delisted_Date" in uni.columns
+                 else pd.Series(pd.NaT, index=uni.index))
+        status = (uni["Status"].fillna("").astype(str).str.strip().str.lower()
+                  if "Status" in uni.columns else pd.Series("", index=uni.index))
+        out: dict[str, pd.Timestamp | None] = {}
+        for sym, d, st in zip(uni["Symbol"].astype(str).str.strip().str.upper(), dates, status):
+            if pd.notna(d):
+                out[sym] = pd.Timestamp(d)
+            elif st == "delisted":
+                out[sym] = None
+        return out
+
+    def _report_survivorship(self, delisted: dict) -> None:
+        if delisted:
+            self.survivorship_status = "delisted_handled"
+            return
+        self.survivorship_status = "no_delisted_in_universe"
+        logger.warning(
+            "Pooled evren hayatta kalma yanliligi riski: %s icinde hic delisted sembol "
+            "yok; panel yalniz bugun listelenen hisseleri icerir. Delisting verisini "
+            "Delisted_Date kolonuna girin (sablon: data/meta/delisted_template.csv).",
+            self.cfg.universe_file)
+
+    def _engineer_symbol(
+        self, symbol: str, sector: str, delisted_on: pd.Timestamp | None = None,
+    ) -> pd.DataFrame | None:
+        path = self._symbol_paths().get(symbol) or os.path.join(self.cfg.data_dir, f"{symbol}.csv")
         if not os.path.exists(path):
             self.report[symbol] = "no_csv"
             return None
@@ -109,6 +192,9 @@ class PooledPanelLoader:
             return None
         raw["Date"] = pd.to_datetime(raw["Date"], errors="coerce")
         raw = raw.dropna(subset=["Date", "Close"]).sort_values("Date").reset_index(drop=True)
+        if delisted_on is not None:
+            # delisting sonrasi satirlar (bayat/dolgu) panelde yer almaz
+            raw = raw[raw["Date"] <= delisted_on].reset_index(drop=True)
         if len(raw) < self.cfg.min_rows:
             self.report[symbol] = f"too_short:{len(raw)}"
             return None
@@ -133,10 +219,17 @@ class PooledPanelLoader:
         feat_cols = [c for c in feat.columns if c not in _NON_FEATURE]
         feat_clean = feat.drop(columns=["Close"], errors="ignore")
         merged = feat_clean.merge(cond, on="Date", how="inner")
-        merged = merged.dropna(subset=feat_cols + ["target"]).reset_index(drop=True)
+        required = feat_cols if self.cfg.keep_unlabeled else feat_cols + ["target"]
+        merged = merged.dropna(subset=required).reset_index(drop=True)
         if len(merged) < self.cfg.min_usable_rows:
             self.report[symbol] = f"few_usable:{len(merged)}"
             return None
+
+        if self.cfg.quarantine_jumps:
+            merged = self._apply_jump_quarantine(symbol, raw, merged)
+            if len(merged) < self.cfg.min_usable_rows:
+                self.report[symbol] = f"few_usable:{len(merged)}"
+                return None
 
         merged["symbol"] = symbol
         merged["sector"] = sector
@@ -144,6 +237,26 @@ class PooledPanelLoader:
             "target", "target_date", "sector", "liq_log", "vol"
         ]
         return merged[keep]
+
+    def _apply_jump_quarantine(
+        self, symbol: str, raw: pd.DataFrame, merged: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """K8: sicrama gunu etrafindaki satirlari at. `raw` Date-sirali, ham OHLCV."""
+        close = pd.to_numeric(raw["Close"], errors="coerce")
+        jump_pos = np.flatnonzero(
+            (np.log(close).diff().abs() > float(self.cfg.jump_threshold)).to_numpy())
+        if jump_pos.size == 0:
+            return merged
+        h = max(1, int(self.cfg.target_horizon))
+        q = max(0, int(self.cfg.quarantine_rows))
+        bad_pos: set[int] = set()
+        for p in jump_pos:
+            # hedefi sicramayi iceren satirlar [p-h, p-1], sicrama gunu p, ozellik penceresi [p, p+q-1]
+            bad_pos.update(range(max(0, p - h), min(len(raw), p + max(q, 1))))
+        bad_dates = set(raw["Date"].iloc[sorted(bad_pos)])
+        keep = ~merged["Date"].isin(bad_dates)
+        self.quarantined_days[symbol] = int((~keep).sum())
+        return merged[keep].reset_index(drop=True)
 
     def _causal_columns(self, raw: pd.DataFrame) -> pd.DataFrame:
         h = max(1, int(self.cfg.target_horizon))

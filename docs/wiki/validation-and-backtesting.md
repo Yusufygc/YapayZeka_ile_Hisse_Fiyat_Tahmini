@@ -2,7 +2,7 @@
 title: Validation and Backtesting
 type: concept
 status: active
-last_updated: 2026-06-14
+last_updated: 2026-11-10
 owner: llm
 source_count: 9
 ---
@@ -461,6 +461,17 @@ interval_calibration.py` içinde:
 Testler: `tests/test_interval_calibration.py` (σ/q̂/band/ACI/validasyon),
 `tests/test_forecast_interval_persist.py` (roll_forward dalı + ensemble kombinasyon +
 persistence round-trip + coverage + rapor).
+
+## Kol-B IC Raporlama Kuralları (2026-11-10)
+
+- Başlık IC/ICIR tek başına raporlanmaz: **seçim penceresi vs final holdout**, **örtüşmeli vs
+  örtüşmesiz** (`sample_gap_days≈h`) ve **tüm evren vs tradable alt küme** (medyan TL ciro ≥
+  `--liq-floor-tl`) birlikte verilir (`pooled_oos.split_ic_summary`, `validation/baselines.ic_report`).
+- Model, kural-tabanlı 5 günlük ters-momentum kıyasıyla (`reversal_factor_predictions`) aynı
+  likidite kantili kırılımında karşılaştırılır; model kıyası geçmiyorsa kazanç mikro-yapıdandır.
+- Segment kovaları nedensel olmalıdır (`per_date_bucket`); tam-örneklem medyanı (`symbol_segments`)
+  OOS dönemini de gördüğü için yalnız geriye uyum içindir.
+- Evren hayatta kalma yanlılığı bilinen açık sınırdır (`survivorship_status`).
 
 ## Related Pages
 

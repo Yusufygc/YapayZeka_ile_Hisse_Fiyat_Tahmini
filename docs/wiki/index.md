@@ -2,7 +2,7 @@
 title: Wiki Index
 type: index
 status: active
-last_updated: 2026-06-14
+last_updated: 2026-11-10
 owner: llm
 ---
 
@@ -110,6 +110,12 @@ linked pages below.
   `INTEREST_RATE.csv` and `RISK_FREE_RATE_ANNUAL` env are both missing.
   Backtest CSV/MD reports automatically prepend the cost + advisory
   disclaimer.
+
+- **Kol-B denetimi K1–K9 (2026-11-10):** doğrudan sızıntı bulunmadı; başlık IC tradable alfa
+  sayılmaz (likidite yoğunlaşması, hayatta kalma yanlılığı, çoklu OOS seçimi). Skorlama artık en
+  güncel piyasa gününe yapılır, holdout/örtüşmesiz/tradable IC raporlanır, segment kovaları
+  nedensel, `/health.serving_pool` tazelik gösterir. Ayrıntı:
+  [E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md) (Kol-B Denetim bölümü).
 
 ## Navigation Rules for Agents
 

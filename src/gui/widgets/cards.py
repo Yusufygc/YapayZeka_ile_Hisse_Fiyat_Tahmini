@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt
 
 class MetricCard(QFrame):
     """
-    Kurumsal stilize edilmiÅŸ metrik gÃ¶sterim kartÄ±.
+    Kurumsal stilize edilmiş metrik gösterim kartı.
     """
     def __init__(self, title: str, value: str, desc: str = "", parent=None):
         super().__init__(parent)
@@ -40,7 +40,7 @@ class MetricCard(QFrame):
 
     def update_value(self, value: str, desc: str = None):
         """
-        Kart deÄŸerini dinamik gÃ¼nceller.
+        Kart değerini dinamik günceller.
         """
         self.lbl_value.setText(value)
         if desc and hasattr(self, 'lbl_desc'):
@@ -49,7 +49,7 @@ class MetricCard(QFrame):
 
 class TrendCard(MetricCard):
     """
-    YÃ¶n eÄŸilimine gÃ¶re (YukarÄ±, AÅŸaÄŸÄ±, Yatay) renklenen Ã¶zel kart.
+    Yön eğilimine göre (Yukarı, Aşağı, Yatay) renklenen özel kart.
     """
     def __init__(self, title: str, value: str, trend: str, desc: str = "", parent=None):
         super().__init__(title, value, desc, parent)
@@ -57,12 +57,12 @@ class TrendCard(MetricCard):
 
     def update_trend_style(self, trend: str):
         """
-        Trend yÃ¶nÃ¼ne gÃ¶re metin stilini ayarlar.
+        Trend yönüne göre metin stilini ayarlar.
         """
         trend = trend.lower()
-        if "yukarÄ±" in trend or "up" in trend:
+        if "yukarı" in trend or "up" in trend:
             self.lbl_value.setStyleSheet("color: #22c55e;") # Emerald Green
-        elif "aÅŸaÄŸÄ±" in trend or "down" in trend:
+        elif "aşağı" in trend or "down" in trend:
             self.lbl_value.setStyleSheet("color: #ef4444;") # Red
         elif "yatay" in trend or "sideways" in trend:
             self.lbl_value.setStyleSheet("color: #eab308;") # Yellow

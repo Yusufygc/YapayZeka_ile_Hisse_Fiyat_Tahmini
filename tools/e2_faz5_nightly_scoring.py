@@ -26,11 +26,8 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.data.cross_sectional import (
-    add_cross_sectional_features,
-    add_cross_sectional_target,
-)
-from src.data.pooled_loader import PooledLoaderConfig, PooledPanelLoader
+from src.data.pooled_dataset import build_pooled_dataset
+from src.data.pooled_loader import PooledLoaderConfig
 from src.models.ensemble_pooled_model import (
     EnsemblePooledConfig,
     EnsemblePooledModel,
@@ -38,12 +35,13 @@ from src.models.ensemble_pooled_model import (
 from src.models.global_pooled_model import (
     GlobalPooledConfig,
     GlobalPooledModel,
-    build_pooled_features,
     make_global_model_factory,
 )
 from src.models.torch_mlp_model import TorchMLPConfig
 from src.serving.nightly_scoring import (
     assemble_peer_table,
+    coverage_warnings,
+    latest_scoring_rows,
     liqlog_floor_from_turnover,
     segment_icir_from_table,
 )
@@ -51,9 +49,9 @@ from src.serving.peer_store import GlobalRunMeta, PeerStore
 from src.validation.pooled_cv import PooledCVConfig, PooledPurgedWalkForward
 from src.validation.pooled_oos import PerSymbolOOSConfig, evaluate_per_symbol
 from src.validation.segment_ic import (
-    attach_segments,
+    attach_date_segments,
+    latest_date_segments,
     segment_cross_sectional_ic,
-    symbol_segments,
 )
 
 
@@ -77,29 +75,51 @@ def main() -> None:
     ap.add_argument("--liq-floor-tl", type=float, default=3_000_000.0,
                     help="tradable alt esigi: medyan gunluk TL ciro (default 3M=P20, Q1'i kapatir)")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--fallback-dir", action="append", default=[],
+                    help="birincil data-dir'de olmayan semboller icin yedek klasor (tekrarlanabilir), "
+                         "ornek: --fallback-dir data/yedek (K7)")
+    ap.add_argument("--quarantine-jumps", action=argparse.BooleanOptionalAction, default=True,
+                    help="|1g log-getiri|>0.30 olcek kiriklari etrafindaki satirlari at (K8)")
     args = ap.parse_args()
 
     t0 = time.time()
-    loader = PooledPanelLoader(PooledLoaderConfig(
-        data_dir=args.data_dir, universe_file=args.universe,
-        target_horizon=args.horizon, min_rows=args.min_rows))
-    if args.limit > 0:
-        syms = loader._symbols()[: args.limit]
-        loader._symbols = lambda: syms
-    panel = loader.load()
-    panel = add_cross_sectional_target(panel, min_names=args.min_names)
-    seg_table = symbol_segments(panel, n_buckets=5)
-    # tradable/stale referans: per-symbol son tarih + medyan likidite
-    latest_global = panel["Date"].max()
-    sym_last = panel.groupby("symbol")["Date"].max()
+    # K4: hedefi gerceklesmemis son h satir da yuklenir (keep_unlabeled) -> skorlama
+    # en guncel PIYASA gunune yapilir; egitim/OOS yalniz etiketli alt kumeyi kullanir.
+    ds = build_pooled_dataset(
+        PooledLoaderConfig(
+            data_dir=args.data_dir, universe_file=args.universe,
+            target_horizon=args.horizon, min_rows=args.min_rows,
+            fallback_dirs=tuple(args.fallback_dir), quarantine_jumps=args.quarantine_jumps),
+        min_names=args.min_names, limit=args.limit)
+    full_aug, aug, panel, feats, ci = ds.full, ds.aug, ds.labeled, ds.feats, ds.cat_idx
+    # K5: segment kovalari nedensel (tarih-bazli); serving tablosu skorlama gunu satirlarindan.
+    latest_rows, as_of = latest_scoring_rows(full_aug)
+    seg_table = latest_date_segments(latest_rows, n_buckets=5)
+    # tradable/stale referans: per-symbol son PIYASA tarihi (etiketsiz satirlar dahil)
+    latest_global = ds.latest_market_day
+    sym_last = full_aug.groupby("symbol")["Date"].max()
     sym_liq = panel.groupby("symbol")["liq_log"].median()
-    _log(f"panel: {len(panel)} rows, {panel['symbol'].nunique()} symbols, latest {latest_global.date()}")
+    _log(f"panel: {len(panel)} labeled rows, {panel['symbol'].nunique()} symbols, "
+         f"latest market day {latest_global.date()} "
+         f"(latest labeled {panel['Date'].max().date()})")
 
-    aug0, f0, _ = build_pooled_features(panel)
-    panel, _ = add_cross_sectional_features(
-        panel, [c for c in f0 if c not in ("symbol_id", "sector_code")])
-    aug, feats, ci = build_pooled_features(panel)
-    assert not any(c.startswith("target") for c in feats), "target leak!"
+    # K6/K7: kapsama ve veri yasi uyarilari (sessiz gecmez; run config'ine de yazilir)
+    n_universe = 0
+    if os.path.exists(args.universe):
+        n_universe = int(pd.read_csv(args.universe, encoding="utf-8-sig")["Symbol"].nunique())
+    warns = coverage_warnings(
+        int(full_aug["symbol"].nunique()), n_universe, latest_global,
+        pd.Timestamp.today(), stale_days=args.stale_days)
+    for w in warns:
+        _log(f"UYARI {w}")
+    meta = ds.loader_meta
+    if meta["survivorship_status"] != "delisted_handled":
+        _log("UYARI survivorship: evrende delisted sembol yok (hayatta kalma yanliligi riski)")
+    if meta["fallback_symbols"]:
+        _log(f"fallback klasorden yuklenen sembol: {len(meta['fallback_symbols'])}")
+    if meta["quarantined_days"]:
+        _log(f"karantina: {len(meta['quarantined_days'])} sembolde "
+             f"{sum(meta['quarantined_days'].values())} satir atildi")
 
     # --- segment ICIR referansi (OOS, likidite kovasi birincil) ---
     folds = PooledPurgedWalkForward(PooledCVConfig(
@@ -109,7 +129,7 @@ def main() -> None:
     res = evaluate_per_symbol(
         aug, folds, make_global_model_factory(ci, GlobalPooledConfig(num_boost_round=args.boost)),
         PerSymbolOOSConfig(feature_cols=feats, target_col="target_cs"))
-    preds_seg = attach_segments(res.predictions, seg_table)
+    preds_seg = attach_date_segments(res.predictions, aug, n_buckets=5)
     icir_maps = {
         "liq": segment_icir_from_table(
             segment_cross_sectional_ic(preds_seg, group_col="liq_bucket", min_names=10)),
@@ -138,8 +158,7 @@ def main() -> None:
         model_name = "GlobalPooledModel(CS+CSFEAT)"
     model.fit(X_full, y_full)
 
-    # --- en guncel evreni skorla ---
-    latest_rows = aug[aug["Date"] == aug["Date"].max()]
+    # --- en guncel evreni skorla (latest_rows/as_of yukarida) ---
     liq_floor = liqlog_floor_from_turnover(args.liq_floor_tl)
     def tradable_for(s: str) -> bool:
         return float(sym_liq.get(s, -1e9)) >= liq_floor
@@ -154,18 +173,22 @@ def main() -> None:
 
     # --- persist ---
     snap = hashlib.sha1(
-        f"{len(aug)}|{aug['Date'].max()}|{sorted(aug['symbol'].unique())[:5]}".encode()
+        f"{len(aug)}|{as_of}|{sorted(aug['symbol'].unique())[:5]}".encode()
     ).hexdigest()[:12]
     store = PeerStore(args.db)
     rid = store.insert_run(GlobalRunMeta(
         model_name=model_name,
-        as_of_date=str(aug["Date"].max().date()),
+        as_of_date=str(as_of.date()),
         data_snapshot_hash=snap, n_symbols=int(panel["symbol"].nunique()),
         n_rows=int(len(aug)), horizon=args.horizon,
         ic_mean=res.ic["ic_mean"], icir=res.ic["icir"],
         pct_ic_positive=res.ic["pct_positive"],
         config={"boost": args.boost, "model": args.model, "icir_maps": icir_maps,
-                "liq_floor_tl": args.liq_floor_tl, "stale_days": args.stale_days}))
+                "liq_floor_tl": args.liq_floor_tl, "stale_days": args.stale_days,
+                "warnings": warns,
+                "survivorship": meta["survivorship_status"],
+                "fallback_symbols": len(meta["fallback_symbols"]),
+                "quarantined_symbols": len(meta["quarantined_days"])}))
     n = store.insert_peer_scores(rid, table)
     dist = table["confidence_label"].value_counts().to_dict()
     _log(f"PeerStore run_id={rid}: {n} peer_scores yazildi -> {args.db}")

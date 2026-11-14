@@ -160,3 +160,28 @@ def test_empty_panel_safe():
     empty = pd.DataFrame({"symbol": [], "Date": [], "f0": []})
     out = assemble_peer_table(_StubModel(), empty, ["f0"], _seg_table(), _ICIR)
     assert out.empty
+
+
+def test_latest_scoring_rows_uses_latest_market_day_not_latest_label():
+    """K4: etiketsiz (hedefi NaN) en guncel gun skorlama as_of'u olur."""
+    from src.serving.nightly_scoring import latest_scoring_rows
+
+    d_old, d_new = pd.Timestamp("2026-05-26"), pd.Timestamp("2026-06-02")
+    full = pd.DataFrame({
+        "symbol": ["A", "B", "A", "B"],
+        "Date": [d_old, d_old, d_new, d_new],
+        "target": [0.01, -0.02, np.nan, np.nan],
+    })
+    rows, as_of = latest_scoring_rows(full)
+    assert as_of == d_new
+    assert sorted(rows["symbol"]) == ["A", "B"] and (rows["Date"] == d_new).all()
+    # etiketli-only panel eski gunu verirdi (davranis farki kilidi)
+    _, as_of_labeled = latest_scoring_rows(full[full["target"].notna()])
+    assert as_of_labeled == d_old
+
+
+def test_latest_scoring_rows_empty_panel():
+    from src.serving.nightly_scoring import latest_scoring_rows
+
+    rows, as_of = latest_scoring_rows(pd.DataFrame())
+    assert rows.empty and pd.isna(as_of)

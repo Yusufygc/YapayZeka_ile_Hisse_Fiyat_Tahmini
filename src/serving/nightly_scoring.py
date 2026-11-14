@@ -190,6 +190,41 @@ def liqlog_floor_from_turnover(min_turnover_tl: float) -> float:
     return float(np.log1p(max(0.0, float(min_turnover_tl))))
 
 
+def latest_scoring_rows(
+    full_panel: pd.DataFrame, date_col: str = "Date",
+) -> tuple[pd.DataFrame, pd.Timestamp]:
+    """En guncel PIYASA gununun sembol satirlari + as_of tarihi (K4).
+
+    `full_panel` loader'dan `keep_unlabeled=True` ile gelmeli: hedefi henuz
+    gerceklesmemis son h satir panelde kalir. Etiketli-only panelden max(Date)
+    almak skorlamayi hedefi gerceklesmis son gune (~h is gunu geriye) cekerdi.
+    """
+    if full_panel.empty or date_col not in full_panel.columns:
+        return full_panel.iloc[0:0], pd.NaT
+    as_of = pd.Timestamp(full_panel[date_col].max())
+    return full_panel[full_panel[date_col] == as_of].copy(), as_of
+
+
+def coverage_warnings(
+    n_loaded: int, n_universe: int, latest_market_day: pd.Timestamp,
+    today: pd.Timestamp, stale_days: int = 10,
+) -> list[str]:
+    """Gece kosusu sonunda operatore gosterilecek kapsama/tazelik uyarilari (K6/K7).
+
+    - panel evrenden kucukse (ornegin semboller yalniz yedek klasorunde kalmissa)
+    - en guncel piyasa gunu `stale_days` takvim gunden eskiyse
+    """
+    out: list[str] = []
+    if n_universe > 0 and n_loaded < n_universe:
+        out.append(f"kapsama: panelde {n_loaded}/{n_universe} sembol (eksik {n_universe - n_loaded})")
+    if pd.notna(latest_market_day):
+        age = int((pd.Timestamp(today).normalize() - pd.Timestamp(latest_market_day).normalize()).days)
+        if age > int(stale_days):
+            out.append(f"veri yasi: en guncel piyasa gunu {age} gun once "
+                       f"({pd.Timestamp(latest_market_day).date()}), esik {stale_days}")
+    return out
+
+
 def segment_icir_from_table(seg_ic_table: pd.DataFrame) -> dict[str, float]:
     """Faz 6 segment_cross_sectional_ic ciktisindan {segment: icir} sozlugu."""
     out = {}

@@ -1,0 +1,7 @@
+Symbol,Delisted_Date,Source,Note
+# Bu dosya SABLONDUR; pooled yukleyici bunu otomatik okumaz.
+# Gercek delisting/islem-yasagi kayitlarini `data/bist_universe.csv` icindeki ilgili
+# sembolun `Delisted_Date` (YYYY-MM-DD) ve `Status` (Delisted) kolonlarina yazin.
+# Kaynak ornegi: KAP "pay kotasyondan cikarma" duyurulari / Borsa Istanbul listesi.
+# Ornek satir (UYDURMA, gercek veri degildir):
+# XXXXX,2023-06-30,KAP duyuru no ...,borsadan cikarildi

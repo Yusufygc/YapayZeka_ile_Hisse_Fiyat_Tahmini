@@ -1,7 +1,7 @@
 ﻿# -*- coding: utf-8 -*-
 """
 src.gui.core.db_helper - SQLite database querying utility.
-stock_models.db verilerini okur ve GUI tablo modelleri iÃ§in hazÄ±rlar.
+stock_models.db verilerini okur ve GUI tablo modelleri için hazırlar.
 """
 
 import os
@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 class DBHelper:
     """
-    stock_models.db SQLite veritabanÄ±na eriÅŸim saÄŸlayan yardÄ±mcÄ± sÄ±nÄ±f.
+    stock_models.db SQLite veritabanına erişim sağlayan yardımcı sınıf.
     """
     def __init__(self, db_path: Optional[str] = None):
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -21,7 +21,7 @@ class DBHelper:
 
     def _get_connection(self):
         """
-        SQLite baÄŸlantÄ±sÄ± oluÅŸturur ve satÄ±rlarÄ± dict benzeri dÃ¶ndÃ¼recek row_factory kurar.
+        SQLite bağlantısı oluşturur ve satırları dict benzeri döndürecek row_factory kurar.
         """
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -29,7 +29,7 @@ class DBHelper:
 
     def get_best_models_summary(self) -> List[Dict[str, Any]]:
         """
-        best_models tablosundaki tÃ¼m kayÄ±tlarÄ± getirir.
+        best_models tablosundaki tüm kayıtları getirir.
         """
         if not os.path.exists(self.db_path):
             return []
@@ -54,12 +54,12 @@ class DBHelper:
                 cursor.execute(query)
                 return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
-            print(f"[DBHelper] get_best_models_summary hatasÄ±: {e}")
+            print(f"[DBHelper] get_best_models_summary hatası: {e}")
             return []
 
     def get_forecasts_by_symbol(self, symbol: str) -> List[Dict[str, Any]]:
         """
-        Belirli bir hisse iÃ§in en son baÅŸarÄ±lÄ± forecast_runs ve onun altÄ±ndaki forecast_points verilerini getirir.
+        Belirli bir hisse için en son başarılı forecast_runs ve onun altındaki forecast_points verilerini getirir.
         """
         if not os.path.exists(self.db_path):
             return []
@@ -104,13 +104,13 @@ class DBHelper:
                     "points": points
                 }
         except Exception as e:
-            print(f"[DBHelper] get_forecasts_by_symbol hatasÄ±: {e}")
+            print(f"[DBHelper] get_forecasts_by_symbol hatası: {e}")
             return []
 
     def get_available_stocks(self) -> List[str]:
         """
-        data/ klasÃ¶rÃ¼ altÄ±nda .csv uzantÄ±lÄ± hisse dosyalarÄ±nÄ± bulur ve listeler.
-        bist_universe, bist_calendar gibi dosyalarÄ± eler.
+        data/ klasörü altında .csv uzantılı hisse dosyalarını bulur ve listeler.
+        bist_universe, bist_calendar gibi dosyaları eler.
         """
         csv_files = glob.glob(os.path.join(self.data_dir, "*.csv"))
         meta_stems = {"bist_universe", "bist_calendar", "batch_summary"}

@@ -2,7 +2,7 @@
 title: Desktop GUI Application
 type: architecture-guide
 status: active
-last_updated: 2026-06-13
+last_updated: 2026-06-14
 owner: llm
 ---
 
@@ -20,22 +20,22 @@ To respect SOLID principles and prevent the **God Object** antipattern, the desk
 
 ```text
 src/gui/
-â”œâ”€â”€ main.py            # Entry point. Launches QAplication & Main Window.
-â”œâ”€â”€ styles/            # Modularity for Qt Style Sheets (QSS)
-â”‚   â”œâ”€â”€ base.qss       # Palette, main container layout
-â”‚   â”œâ”€â”€ widgets.qss    # Tables, forms, buttons styling
-â”‚   â”œâ”€â”€ custom.qss     # Card frames, logging viewer dark style
-â”‚   â””â”€â”€ manager.py     # Combines all QSS sheets dynamically
-â”œâ”€â”€ core/              # Separation of concern for business logic
-â”‚   â”œâ”€â”€ db_helper.py   # SQLite registry fetch methods
-â”‚   â””â”€â”€ process_runner.py # QProcess wrapper (non-blocking subprocess)
-â”œâ”€â”€ widgets/           # Reusable graphical components
-â”‚   â”œâ”€â”€ cards.py       # Render metrics/KPIs/direction warnings
-â”‚   â””â”€â”€ log_viewer.py  # Autoscrolling plaintext log terminal
-â””â”€â”€ tabs/              # High-level UI views (Tabs)
-    â”œâ”€â”€ dashboard_tab.py # Shows best models & leaderboard table
-    â”œâ”€â”€ training_tab.py  # Training triggers, preset selections, live execution logs
-    â””â”€â”€ forecast_tab.py  # Visualizes forward forecasts, intervals & XAI metrics
+|-- main.py              # Entry point. Launches QApplication and Main Window.
+|-- styles/              # Modularity for Qt Style Sheets (QSS)
+|   |-- base.qss         # Palette, main container layout
+|   |-- widgets.qss      # Tables, forms, buttons styling
+|   |-- custom.qss       # Card frames, message boxes, empty states, logging viewer
+|   `-- manager.py       # Combines all QSS sheets dynamically
+|-- core/                # Separation of concern for business logic
+|   |-- db_helper.py     # SQLite registry fetch methods
+|   `-- process_runner.py # QProcess wrapper (non-blocking subprocess)
+|-- widgets/             # Reusable graphical components
+|   |-- cards.py         # Render metrics/KPIs/direction warnings
+|   `-- log_viewer.py    # Autoscrolling plaintext log terminal
+`-- tabs/                # High-level UI views (Tabs)
+    |-- dashboard_tab.py # Shows best models and leaderboard table
+    |-- training_tab.py  # Training triggers, preset selections, live execution logs
+    `-- forecast_tab.py  # Visualizes forward forecasts, intervals and XAI metrics
 ```
 
 ---
@@ -43,7 +43,7 @@ src/gui/
 ## Core Technologies
 
 1. **PySide6 (Qt for Python):** Used as the core framework for windows, layouts, tables, and signal-slot mechanisms.
-2. **QProcess Subprocessing (YaklaÅŸÄ±m B):**
+2. **QProcess Subprocessing (Yaklaşım B):**
    - Training (`batch.py`) and forecasting (`forecast.py`) run as decoupled OS processes.
    - This isolates heavy ML resources (PyTorch, TensorFlow, LightGBM) from the GUI thread.
    - Standard output (`stdout`) and error (`stderr`) streams are dynamically parsed and forwarded to the `LogViewer` in real-time.
@@ -66,6 +66,18 @@ Styles are loaded on app startup via the custom style manager:
 from src.gui.styles import get_combined_stylesheet
 app.setStyleSheet(get_combined_stylesheet())
 ```
+
+---
+
+## UI/UX Integrity Rules
+
+- Visible Turkish UI strings are stored as valid UTF-8 and covered by the GUI smoke test to prevent mojibake regressions (for example `U+00C3`, `U+00C4`, `U+00C5`, `U+00E2`, `U+00C2`, `U+FFFD` markers).
+- Dashboard `dir_acc` and `hit_rate` values are displayed as already-percent values from `best_models`; the GUI must not multiply them by 100 again.
+- Forecast empty states are shown inline in the forecast table area instead of relying only on a modal dialog.
+- Training and forecast control group boxes stay compact with fixed vertical sizing so tables, cards, and logs remain visible in the first viewport.
+- `QMessageBox` is styled through QSS so dialog text remains readable under the dark application theme.
+- `ProcessRunner` forces subprocess Python output to UTF-8 and falls back to CP1254 decoding for legacy Windows CLI output; remaining stdout/stderr is drained on process finish so failure details are not lost.
+- Forecast idle/error empty states mention the selected symbol or point users to the visible production log instead of showing a generic "select stock" message after a symbol is already selected.
 
 ---
 

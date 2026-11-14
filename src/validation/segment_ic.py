@@ -49,6 +49,21 @@ def symbol_segments(
     return agg[["symbol", "liq_bucket", "vol_bucket", "sector"]]
 
 
+def per_date_bucket(
+    panel: pd.DataFrame, col: str, n_buckets: int = 5, date_col: str = "Date",
+) -> pd.Series:
+    """Her TARIH icinde `col` degerine gore Q1..Qn kovasi (Q1 = en dusuk).
+
+    `col` nedensel (kayan pencere) bir kolon ise (`liq_log`, `vol`) kova ataması
+    yalnizca o tarihte bilinen bilgiye dayanir -> statik tam-orneklem medyanindaki
+    ileriye bakis yok (K5). Seri `panel` indeksine hizalidir; NaN -> "nan".
+    """
+    pct = panel.groupby(date_col)[col].rank(method="first", pct=True)
+    idx = np.ceil(pct * n_buckets).clip(1, n_buckets)
+    out = idx.map(lambda v: f"Q{int(v)}" if np.isfinite(v) else "nan")
+    return out.astype(str)
+
+
 def segment_cross_sectional_ic(
     predictions: pd.DataFrame,
     group_col: str,
@@ -89,6 +104,40 @@ def segment_cross_sectional_ic(
                 "n_days": 0, "n_symbols": int(gseg["symbol"].nunique()),
             })
     return pd.DataFrame(recs).sort_values("segment").reset_index(drop=True)
+
+
+def _date_bucket_frame(panel: pd.DataFrame, n_buckets: int) -> pd.DataFrame:
+    p = panel[["symbol", "Date", "liq_log", "vol", "sector"]].drop_duplicates(["symbol", "Date"]).copy()
+    p["liq_bucket"] = per_date_bucket(p, "liq_log", n_buckets)
+    p["vol_bucket"] = per_date_bucket(p, "vol", n_buckets)
+    p["sector"] = p["sector"].fillna("Unknown").astype(str)
+    for c in ("liq_bucket", "vol_bucket"):
+        p[c] = p[c].replace("nan", np.nan)
+    return p[["symbol", "Date", "liq_bucket", "vol_bucket", "sector"]]
+
+
+def attach_date_segments(
+    predictions: pd.DataFrame, panel: pd.DataFrame, n_buckets: int = 5,
+) -> pd.DataFrame:
+    """`attach_segments`in NEDENSEL karsiligi (K5): kovalar her tarihte o tarihin
+    `liq_log`/`vol` degerlerinden (kayan-pencere, nedensel) evren-capinda atanir.
+
+    Statik `symbol_segments` tum-orneklem medyani kullandigi icin OOS donemini de
+    gorur; burada bir satirin kovasi yalniz o gunun bilgisine bagli. Cikti kolonlari
+    `attach_segments` ile ayni (liq_bucket, vol_bucket, sector) -> dogrudan degistirilebilir.
+    """
+    return predictions.merge(
+        _date_bucket_frame(panel, n_buckets), on=["symbol", "Date"], how="left")
+
+
+def latest_date_segments(latest_rows: pd.DataFrame, n_buckets: int = 5) -> pd.DataFrame:
+    """Tek (en guncel) tarihin satirlarindan serving segment tablosu.
+
+    Returns DataFrame[symbol, liq_bucket, vol_bucket, sector] — `symbol_segments`
+    ile ayni bicim, ama kovalar yalniz skorlama gunune kadar bilinen bilgiden.
+    """
+    out = _date_bucket_frame(latest_rows, n_buckets)
+    return out[["symbol", "liq_bucket", "vol_bucket", "sector"]].reset_index(drop=True)
 
 
 def attach_segments(predictions: pd.DataFrame, seg_table: pd.DataFrame) -> pd.DataFrame:

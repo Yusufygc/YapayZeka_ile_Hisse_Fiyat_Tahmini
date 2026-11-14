@@ -6,22 +6,23 @@ src.gui.tabs.training_tab - Triggers and monitors batch training runs.
 import os
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QComboBox, QSpinBox, QPushButton, QGroupBox, QMessageBox
+    QComboBox, QSpinBox, QPushButton, QGroupBox, QMessageBox, QSizePolicy
 )
+from PySide6.QtCore import Qt
 from src.gui.core import DBHelper, ProcessRunner
 from src.gui.widgets import LogViewer
 
 
 class TrainingTab(QWidget):
     """
-    Model eÄŸitimi yapÄ±landÄ±rma ve baÅŸlatma paneli.
+    Model eğitimi yapılandırma ve başlatma paneli.
     """
     def __init__(self, db_helper: DBHelper, runner: ProcessRunner, parent=None):
         super().__init__(parent)
         self.db = db_helper
         self.runner = runner
 
-        # Sinyal baÄŸlantÄ±larÄ±
+        # Sinyal bağlantıları
         self.runner.output_received.connect(self._append_log)
         self.runner.finished.connect(self._training_finished)
 
@@ -31,40 +32,43 @@ class TrainingTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
 
-        # YapÄ±landÄ±rma Paneli (GroupBox)
-        config_box = QGroupBox("EÄŸitim YapÄ±landÄ±rmasÄ±", self)
+        # Yapılandırma paneli (GroupBox)
+        config_box = QGroupBox("Eğitim Yapılandırması", self)
+        config_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        config_box.setMaximumHeight(150)
         config_layout = QHBoxLayout(config_box)
         config_layout.setSpacing(20)
+        config_layout.setContentsMargins(12, 16, 12, 12)
 
-        # 1. Hisse SeÃ§imi
+        # 1. Hisse seçimi
         vbox_stock = QVBoxLayout()
         vbox_stock.addWidget(QLabel("Hisse Senedi:", self))
         self.cmb_stock = QComboBox(self)
-        self.cmb_stock.setEditable(True)  # Kolay arama desteÄŸi
-        self.cmb_stock.setPlaceholderText("Hisse seÃ§in veya arayÄ±n...")
+        self.cmb_stock.setEditable(True)  # Kolay arama desteği
+        self.cmb_stock.setPlaceholderText("Hisse seçin veya arayın...")
         self.cmb_stock.setFixedWidth(150)
         vbox_stock.addWidget(self.cmb_stock)
         config_layout.addLayout(vbox_stock)
 
-        # 2. Model SeÃ§im Presetleri
+        # 2. Model seçim presetleri
         vbox_preset = QVBoxLayout()
         vbox_preset.addWidget(QLabel("Model Paketi (Preset):", self))
         self.cmb_preset = QComboBox(self)
         self.cmb_preset.addItems([
-            "HÄ±zlÄ± (XGBoost + LSTM)",
-            "AÄŸaÃ§ TabanlÄ± Modeller",
-            "YalnÄ±zca Derin Ã–ÄŸrenme",
+            "Hızlı (XGBoost + LSTM)",
+            "Ağaç Tabanlı Modeller",
+            "Yalnızca Derin Öğrenme",
             "Modern Baselines",
-            "YalnÄ±zca Prophet",
-            "TÃ¼m Modeller"
+            "Yalnızca Prophet",
+            "Tüm Modeller"
         ])
         self.cmb_preset.setFixedWidth(200)
         vbox_preset.addWidget(self.cmb_preset)
         config_layout.addLayout(vbox_preset)
 
-        # 3. Paralel Worker SayÄ±sÄ±
+        # 3. Paralel worker sayısı
         vbox_workers = QVBoxLayout()
-        vbox_workers.addWidget(QLabel("EÅŸzamanlÄ± Ä°ÅŸÃ§iler (Workers):", self))
+        vbox_workers.addWidget(QLabel("Eşzamanlı İşçiler (Workers):", self))
         self.sb_workers = QSpinBox(self)
         self.sb_workers.setRange(1, 16)
         self.sb_workers.setValue(2)
@@ -77,7 +81,7 @@ class TrainingTab(QWidget):
         vbox_actions.addStretch()
 
         btn_action_layout = QHBoxLayout()
-        self.btn_start = QPushButton("EÄŸitimi BaÅŸlat", self)
+        self.btn_start = QPushButton("Eğitimi Başlat", self)
         self.btn_start.clicked.connect(self._start_training)
 
         self.btn_stop = QPushButton("Durdur", self)
@@ -93,54 +97,56 @@ class TrainingTab(QWidget):
         config_layout.addStretch()
         layout.addWidget(config_box)
 
-        # Log Ä°zleyici Paneli (GroupBox)
-        log_box = QGroupBox("CanlÄ± Ä°ÅŸlem LoglarÄ±", self)
+        layout.setAlignment(config_box, Qt.AlignTop)
+
+        # Log izleyici paneli (GroupBox)
+        log_box = QGroupBox("Canlı İşlem Logları", self)
         log_layout = QVBoxLayout(log_box)
         self.log_viewer = LogViewer(self)
         log_layout.addWidget(self.log_viewer)
         layout.addWidget(log_box)
 
-        # Hisseleri yÃ¼kle
+        # Hisseleri yükle
         self._load_stocks()
 
     def _load_stocks(self):
         """
-        KullanÄ±labilir hisseleri yÃ¼kler ve combobox'a ekler.
+        Kullanılabilir hisseleri yükler ve combobox'a ekler.
         """
         self.cmb_stock.clear()
-        self.cmb_stock.addItem("TÃœM HÄ°SSELER (Batch)")
+        self.cmb_stock.addItem("TÜM HİSSELER (Batch)")
 
         stocks = self.db.get_available_stocks()
         self.cmb_stock.addItems(stocks)
 
     def _start_training(self):
         """
-        Model eÄŸitimi iÃ§in batch CLI aracÄ±nÄ± arka planda tetikler.
+        Model eğitimi için batch CLI aracını arka planda tetikler.
         """
         selected_stock = self.cmb_stock.currentText().strip()
         if not selected_stock:
-            QMessageBox.warning(self, "UyarÄ±", "LÃ¼tfen geÃ§erli bir hisse senedi seÃ§in.")
+            QMessageBox.warning(self, "Uyarı", "Lütfen geçerli bir hisse senedi seçin.")
             return
 
-        # Preset eÅŸleÅŸtirme
+        # Preset eşleştirme
         preset_idx = self.cmb_preset.currentIndex()
-        # "HÄ±zlÄ± (XGBoost + LSTM)", "AÄŸaÃ§ TabanlÄ±", "Derin Ã–ÄŸrenme", "Baselines", "Prophet", "TÃ¼m"
-        # batch.py parametreleri model seÃ§imi iÃ§in:
+        # "Hızlı (XGBoost + LSTM)", "Ağaç Tabanlı", "Derin Öğrenme", "Baselines", "Prophet", "Tüm"
+        # batch.py parametreleri model seçimi için:
         # --disabled-models veya default candidate_models.
-        # Bizim batch.py'da model preset argÃ¼manÄ± yoksa, modelleri direkt --disabled-models ile filtreleyebiliriz
-        # veya interactive.py presets mantÄ±ÄŸÄ±na gÃ¶re argÃ¼man geÃ§ebiliriz.
-        # batch.py'nin parametrelerini okuduÄŸumuzda: --stocks veya --universe parametreleri var.
-        # AyrÄ±ca model kÄ±sÄ±tlamalarÄ± iÃ§in batch.py argÃ¼manlarÄ±nÄ± kontrol ettik, --disabled-models veya specific models seÃ§imi destekliyor.
-        # KolaylÄ±k aÃ§Ä±sÄ±ndan ve batch.py yetenekleri Ã§erÃ§evesinde args listesi:
+        # Bizim batch.py'da model preset argümanı yoksa, modelleri direkt --disabled-models ile filtreleyebiliriz
+        # veya interactive.py presets mantığına göre argüman geçebiliriz.
+        # batch.py'nin parametrelerini okuduğumuzda: --stocks veya --universe parametreleri var.
+        # Ayrıca model kısıtlamaları için batch.py argümanlarını kontrol ettik, --disabled-models veya specific models seçimi destekliyor.
+        # Kolaylık açısından ve batch.py yetenekleri çerçevesinde args listesi:
         args = []
 
-        if selected_stock == "TÃœM HÄ°SSELER (Batch)":
+        if selected_stock == "TÜM HİSSELER (Batch)":
             project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
             universe_file = os.path.join(project_root, "data", "bist_universe.csv")
             if os.path.exists(universe_file):
                 args.extend(["--universe", universe_file])
             else:
-                QMessageBox.critical(self, "Hata", f"BIST universe dosyasÄ± bulunamadÄ±: {universe_file}")
+                QMessageBox.critical(self, "Hata", f"BIST universe dosyası bulunamadı: {universe_file}")
                 return
         else:
             args.extend(["--stocks", selected_stock])
@@ -148,20 +154,20 @@ class TrainingTab(QWidget):
         args.extend(["--mode", "walk_forward"])
         args.extend(["--workers", str(self.sb_workers.value())])
 
-        # Model preset kÄ±sÄ±tlamalarÄ±nÄ± batch.py formatÄ±na uyarlama
-        # batch.py iÃ§inde:
+        # Model preset kısıtlamalarını batch.py formatına uyarlama
+        # batch.py içinde:
         # parser.add_argument("--disabled-models", default="")
         # parser.add_argument("--require-available", action="store_true")
-        # batch.py specific model listesi yerine --disabled-models ile Ã§alÄ±ÅŸabiliyor.
-        # interactive presets mantÄ±ÄŸÄ±na gÃ¶re disabled edilecek modelleri belirleyelim:
+        # batch.py specific model listesi yerine --disabled-models ile çalışabiliyor.
+        # interactive presets mantığına göre disabled edilecek modelleri belirleyelim:
         all_models = ["XGBoost", "Random Forest", "LightGBM Return", "LSTM", "LSTM Lite", "AttentionLSTM v2", "Prophet", "Ridge Return", "ElasticNet Return", "DLinear", "NLinear"]
         disabled = []
 
-        if preset_idx == 0:  # HÄ±zlÄ± (XGBoost + LSTM)
+        if preset_idx == 0:  # Hızlı (XGBoost + LSTM)
             disabled = [m for m in all_models if m not in ["XGBoost", "LSTM"]]
-        elif preset_idx == 1:  # AÄŸaÃ§ TabanlÄ±
+        elif preset_idx == 1:  # Ağaç Tabanlı
             disabled = [m for m in all_models if m not in ["XGBoost", "Random Forest", "LightGBM Return"]]
-        elif preset_idx == 2:  # Derin Ã–ÄŸrenme
+        elif preset_idx == 2:  # Derin Öğrenme
             disabled = [m for m in all_models if m not in ["LSTM", "LSTM Lite", "AttentionLSTM v2"]]
         elif preset_idx == 3:  # Modern Baselines
             disabled = [m for m in all_models if m not in ["Ridge Return", "ElasticNet Return", "LightGBM Return", "DLinear", "NLinear"]]
@@ -171,7 +177,7 @@ class TrainingTab(QWidget):
         if disabled:
             args.extend(["--disabled-models", ",".join(disabled)])
 
-        # GUI Durumunu GÃ¼ncelle (UX Koruma)
+        # GUI durumunu güncelle (UX koruma)
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.cmb_stock.setEnabled(False)
@@ -179,26 +185,26 @@ class TrainingTab(QWidget):
         self.sb_workers.setEnabled(False)
 
         self.log_viewer.clear()
-        self.log_viewer.append_text("[GUI] Model eÄŸitim sÃ¼reci baÅŸlatÄ±lÄ±yor...\n")
+        self.log_viewer.append_text("[GUI] Model eğitim süreci başlatılıyor...\n")
 
-        # Ã‡alÄ±ÅŸtÄ±r
+        # Çalıştır
         self.runner.start_process("src.cli.batch", args)
 
     def _stop_training(self):
         """
-        Ã‡alÄ±ÅŸmakta olan eÄŸitimi zorla sonlandÄ±rÄ±r.
+        Çalışmakta olan eğitimi zorla sonlandırır.
         """
         self.runner.kill_process()
 
     def _append_log(self, text: str):
         """
-        Ä°ÅŸlem loglarÄ±nÄ± canlÄ± ekrana yazar.
+        İşlem loglarını canlı ekrana yazar.
         """
         self.log_viewer.append_text(text)
 
     def _training_finished(self, exit_code: int, message: str):
         """
-        EÄŸitim bittiÄŸinde arayÃ¼z kontrollerini tekrar aktif eder.
+        Eğitim bittiğinde arayüz kontrollerini tekrar aktif eder.
         """
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
@@ -206,8 +212,8 @@ class TrainingTab(QWidget):
         self.cmb_preset.setEnabled(True)
         self.sb_workers.setEnabled(True)
 
-        # KullanÄ±cÄ±ya iÅŸlem bitti mesajÄ± gÃ¶ster (UX)
+        # Kullanıcıya işlem bitti mesajı göster (UX)
         if exit_code == 0:
-            QMessageBox.information(self, "Bilgi", "Model eÄŸitimi baÅŸarÄ±yla tamamlandÄ±!")
+            QMessageBox.information(self, "Bilgi", "Model eğitimi başarıyla tamamlandı!")
         else:
-            QMessageBox.warning(self, "Hata / Ä°ptal", "EÄŸitim sÃ¼reci tamamlanamadÄ± veya durduruldu.")
+            QMessageBox.warning(self, "Hata / İptal", "Eğitim süreci tamamlanamadı veya durduruldu.")

@@ -27,18 +27,12 @@ from typing import Callable, Sequence
 import numpy as np
 import pandas as pd
 
+from src.data.panel_columns import is_non_feature
 from src.data.pooled_matrix import as_float32_matrix, as_float32_vector
 
-# loader/oos ile ayni "ozellik olmayan" kolonlar. target* varyantlari (target,
-# target_cs, ...) ASLA feature olmamali -> sizinti.
-_BASE_NON_FEAT = {
-    "symbol", "Date", "Close", "target_date", "sector", "symbol_id",
-    "liq_log", "vol", "sector_code",
-}
+# panel kolon siniflandirmasi: tek tanim src/data/panel_columns.py (target* ASLA ozellik degil).
+_is_non_feature = is_non_feature
 
-
-def _is_non_feature(col: str) -> bool:
-    return col in _BASE_NON_FEAT or col == "target" or col.startswith("target_")
 # kosullandirma sirasi sabit: once sayisal, sonra kategorik (cat_indices sonda).
 _NUMERIC_COND = ["liq_log", "vol"]
 _CATEGORICAL_COND = ["symbol_id", "sector_code"]

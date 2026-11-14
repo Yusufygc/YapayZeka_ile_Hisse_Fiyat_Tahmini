@@ -40,6 +40,26 @@ QLabel#card_desc {
     color: #64748b;
 }
 
+QLabel#empty_state {
+    color: #94a3b8;
+    font-size: 14px;
+    padding: 24px;
+}
+
+QMessageBox {
+    background-color: #1e293b;
+    color: #f8fafc;
+}
+
+QMessageBox QLabel {
+    color: #f8fafc;
+    font-size: 13px;
+}
+
+QMessageBox QPushButton {
+    min-width: 64px;
+}
+
 /* Success / Warning / Danger labels */
 QLabel#label_success {
     color: #22c55e; /* Green 500 */

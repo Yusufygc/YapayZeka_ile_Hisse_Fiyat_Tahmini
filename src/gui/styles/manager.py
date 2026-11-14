@@ -1,7 +1,7 @@
 ﻿# -*- coding: utf-8 -*-
 """
 src.gui.styles.manager - Theme and QSS loader.
-ModÃ¼ler QSS dosyalarÄ±nÄ± okur, birleÅŸtirir ve uygulamaya sunar.
+Modüler QSS dosyalarını okur, birleştirir ve uygulamaya sunar.
 """
 
 import os
@@ -12,7 +12,7 @@ QSS_FILES = ["base.qss", "widgets.qss", "custom.qss"]
 
 def get_combined_stylesheet() -> str:
     """
-    TÃ¼m modÃ¼ler QSS dosyalarÄ±nÄ± sÄ±rasÄ±yla okur ve tek bir stylesheet string'i dÃ¶ndÃ¼rÃ¼r.
+    Tüm modüler QSS dosyalarını sırasıyla okur ve tek bir stylesheet string'i döndürür.
     """
     combined = []
     for filename in QSS_FILES:
@@ -22,8 +22,8 @@ def get_combined_stylesheet() -> str:
                 with open(filepath, "r", encoding="utf-8") as f:
                     combined.append(f.read())
             except Exception as e:
-                print(f"[GUI Style Manager] Hata: {filename} okunamadÄ±: {e}")
+                print(f"[GUI Style Manager] Hata: {filename} okunamadı: {e}")
         else:
-            print(f"[GUI Style Manager] UyarÄ±: Stil dosyasÄ± bulunamadÄ±: {filepath}")
+            print(f"[GUI Style Manager] Uyarı: Stil dosyası bulunamadı: {filepath}")
 
     return "\n\n".join(combined)

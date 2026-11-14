@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
@@ -10,7 +11,11 @@ import numpy as np
 import pandas as pd
 
 from src.data.preprocessor import create_sequences, scale_data
-from src.forecasting.artifacts import ForecastArtifactError, load_forecast_artifact_package
+from src.forecasting.artifacts import (
+    ForecastArtifactError,
+    artifact_sidecar_paths,
+    load_forecast_artifact_package,
+)
 from src.forecasting.bist_rules import RULES_VERSION
 from src.pipeline.config import DataConfig, ValidationConfig
 from src.pipeline.data_manager import DataManager
@@ -19,6 +24,7 @@ _TREE_MODELS = {"XGBoost", "Random Forest", "Ridge Return", "ElasticNet Return",
 _SEQ_MODELS = {"LSTM", "LSTM Lite", "AttentionLSTM v2", "DLinear", "NLinear"}
 _BASELINE_MODELS = {"Naive Last Value", "Naive Zero Return", "Naive Drift"}
 _DATE_AWARE_MODELS = {"Prophet", "Prophet-ML/DL Hybrid"}
+_MACRO_FEATURES = {"Rate_Level", "Rate_Change", "CPI_MoM", "CPI_YoY", "Real_Rate"}
 
 
 @dataclass
@@ -83,6 +89,7 @@ class ForecastSymbolWorkflow:
         """
         symbol = symbol.upper()
         selection = self.ctx.model_resolver.resolve(symbol, force_model_name)
+        use_macro = bool(use_macro or self._selection_requires_macro(symbol, selection))
         data_manager = self.ctx.data_preparation_service.prepare(
             symbol=symbol,
             data_file=data_file,
@@ -146,6 +153,45 @@ class ForecastSymbolWorkflow:
             trend_threshold=trend_threshold,
             points=points,
         )
+
+    def _selection_requires_macro(self, symbol: str, selection: Dict[str, Any]) -> bool:
+        model_path = selection.get("model_path")
+        print(f"[DEBUG] _selection_requires_macro symbol={symbol} model_path={model_path}")
+        features = self._artifact_feature_names(model_path)
+        print(f"[DEBUG] _selection_requires_macro loaded features={features}")
+        if any(feature in _MACRO_FEATURES for feature in features):
+            return True
+        metadata = selection.get("ensemble_metadata") or {}
+        for member in metadata.get("members") or []:
+            member_exp = self.ctx.model_resolver.latest_member_experiment(symbol, member)
+            if member_exp and any(
+                feature in _MACRO_FEATURES
+                for feature in self._artifact_feature_names(member_exp.get("model_path"))
+            ):
+                return True
+        return False
+
+    def _artifact_feature_names(self, model_path: Any) -> list[str]:
+        model_path = self._resolve_model_path(str(model_path or ""))
+        print(f"[DEBUG] _artifact_feature_names resolved model_path={model_path}")
+        if not model_path:
+            return []
+        metadata_path = artifact_sidecar_paths(model_path)["metadata"]
+        print(f"[DEBUG] _artifact_feature_names metadata_path={metadata_path} exists={os.path.isfile(metadata_path)}")
+        if not os.path.isfile(metadata_path):
+            return []
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+        except Exception as e:
+            print(f"[DEBUG] _artifact_feature_names json load failed: {e}")
+            return []
+        return [str(feature) for feature in metadata.get("feature_names") or []]
+
+    def _resolve_model_path(self, model_path: str) -> str:
+        if not model_path or os.path.isabs(model_path):
+            return model_path
+        return os.path.join(self.ctx.project_root, model_path)
 
     def _run_ensemble(
         self,

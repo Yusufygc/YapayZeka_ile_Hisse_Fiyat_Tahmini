@@ -204,3 +204,49 @@ def test_evaluate_per_symbol_feeds_float32_fold_matrices():
     for _, dtype, contiguous in _DTypeRecorder.calls:
         assert dtype == np.float32
         assert contiguous
+
+
+def test_predictions_carry_is_holdout_flag():
+    """K3: holdout tahminleri `is_holdout=True` ile isaretlenir, secim fold'lari degil."""
+    from src.validation.pooled_oos import split_ic_summary  # noqa: F401
+
+    panel = _panel()
+    folds = _folds(panel)
+    res = evaluate_per_symbol(panel, folds, _LinModel,
+                              PerSymbolOOSConfig(include_holdout=True))
+    hold_idx = {f.index for f in folds if f.is_final_holdout}
+    assert hold_idx
+    flagged = res.predictions[res.predictions["is_holdout"]]["fold"].unique()
+    assert set(flagged) == hold_idx
+    assert not res.predictions[~res.predictions["is_holdout"]]["fold"].isin(hold_idx).any()
+    # varsayilan: holdout yok -> hic True yok
+    res0 = evaluate_per_symbol(panel, folds, _LinModel)
+    assert not res0.predictions["is_holdout"].any()
+
+
+def test_split_ic_summary_separates_holdout_and_nonoverlap():
+    from src.validation.pooled_oos import split_ic_summary
+
+    # Spearman en az 3 sembol ister; holdout tarihlerinde kesilmeyen 4 sembol.
+    panel = _panel(symbols=("AAA", "BBB", "DDD", "EEE"))
+    folds = _folds(panel)
+    res = evaluate_per_symbol(panel, folds, _LinModel,
+                              PerSymbolOOSConfig(include_holdout=True))
+    out = split_ic_summary(res.predictions, gap_days=5, min_names=3)
+    assert out["selection"]["n_days"] > 0 and out["holdout"]["n_days"] > 0
+    # ortusmesiz ornekleme gun sayisini azaltir
+    assert out["selection_nonoverlap"]["n_days"] <= out["selection"]["n_days"]
+    assert out["holdout_nonoverlap"]["n_days"] <= out["holdout"]["n_days"]
+    # ogrenilebilir sinyal -> iki bolumde de pozitif IC
+    assert out["selection"]["ic_mean"] > 0 and out["holdout"]["ic_mean"] > 0
+
+
+def test_split_ic_summary_without_holdout_rows():
+    from src.validation.pooled_oos import split_ic_summary
+
+    panel = _panel()
+    res = evaluate_per_symbol(panel, _folds(panel), _LinModel)  # holdout yok
+    out = split_ic_summary(res.predictions, min_names=2)
+    assert out["holdout"] is None and out["holdout_nonoverlap"] is None
+    assert out["selection"] is not None
+    assert split_ic_summary(pd.DataFrame())["selection"] is None

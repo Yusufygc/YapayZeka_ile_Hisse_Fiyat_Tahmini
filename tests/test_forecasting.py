@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 
 import os
+import json
 import shutil
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -9,6 +11,7 @@ import pytest
 from sklearn.preprocessing import StandardScaler
 
 from src.database.stock_model_db import StockModelDB
+from src.forecasting.artifacts import artifact_sidecar_paths
 from src.forecasting.artifacts import save_forecast_artifact_package
 from src.forecasting.bist_rules import BistMarketRules
 from src.forecasting.runner import ForecastRunner
@@ -168,6 +171,105 @@ def test_forecast_runner_replacement_excludes_baselines():
 
     assert replacement is not None
     assert replacement["model_name"] == "Ridge Return"
+
+
+def test_forecast_runner_auto_enables_macro_when_artifact_requires_macro():
+    project_root = _workspace_tmp("auto_macro_artifact")
+    data_dir = os.path.join(project_root, "data")
+    os.makedirs(data_dir, exist_ok=True)
+    db_path = os.path.join(data_dir, "stock_models.db")
+    model_path = os.path.join(project_root, "outputs", "TEST", "models", "rf.pkl")
+    os.makedirs(os.path.dirname(model_path), exist_ok=True)
+    with open(model_path, "wb") as handle:
+        handle.write(b"model")
+    with open(artifact_sidecar_paths(model_path)["metadata"], "w", encoding="utf-8") as handle:
+        json.dump({"feature_names": ["Feature", "Rate_Level", "CPI_YoY"]}, handle)
+
+    calendar_path = os.path.join(data_dir, "bist_calendar.csv")
+    with open(calendar_path, "w", encoding="utf-8") as handle:
+        handle.write(
+            "\n".join([
+                "Date,Is_Trading_Day,Session_Type,Note",
+                "2026-05-04,True,full,open",
+            ])
+        )
+
+    runner = ForecastRunner(
+        project_root=project_root,
+        db_path=db_path,
+        calendar_path=calendar_path,
+    )
+    prepare_calls = []
+
+    class FakeResolver:
+        def resolve(self, symbol, force_model_name=None):
+            return {
+                "model_name": "Random Forest",
+                "source_experiment_id": 1,
+                "target_mode": "log_return",
+                "feature_mode": "stationary_features",
+                "scaling_mode": "robust_x_standard_y_clip",
+                "model_path": model_path,
+                "dataset_hash": "hash",
+                "ensemble_metadata": None,
+            }
+
+        def latest_member_experiment(self, symbol, member):
+            return None
+
+    class FakeDataPreparation:
+        def prepare(self, **kwargs):
+            prepare_calls.append(kwargs)
+            return SimpleNamespace(
+                df=pd.DataFrame({
+                    "Date": pd.date_range("2026-04-01", periods=90, freq="B"),
+                    "Close": np.linspace(100.0, 110.0, 90),
+                })
+            )
+
+    class FakeTraining:
+        def train(self, model_name, data_manager, *, selection=None):
+            return object(), {
+                "last_close": 100.0,
+                "last_observed_date": pd.Timestamp("2026-04-30"),
+                "forecast_strategy": "recursive_direct_target",
+                "artifact_mode": "artifact_loaded",
+                "forecast_warnings": [],
+            }
+
+    class FakePointGenerator:
+        def roll_forward_recursive(self, **kwargs):
+            return [{
+                "horizon_index": 1,
+                "target_date": "2026-05-04",
+                "raw_predicted_close": 101.0,
+                "bounded_predicted_close": 101.0,
+                "predicted_return": 0.01,
+                "lower_band": 90.0,
+                "upper_band": 110.0,
+                "price_tick": 0.05,
+            }]
+
+    class FakePersistence:
+        def save_run(self, **kwargs):
+            return 123
+
+    runner.context.model_resolver = FakeResolver()
+    runner.context.data_preparation_service = FakeDataPreparation()
+    runner.context.production_training_workflow = FakeTraining()
+    runner.context.forecast_point_generator = FakePointGenerator()
+    runner.context.persistence = FakePersistence()
+
+    result = runner.run_symbol(
+        symbol="TEST",
+        data_file=os.path.join(data_dir, "TEST.csv"),
+        horizon_days=1,
+        use_macro=False,
+        auto_update_data=False,
+    )
+
+    assert result.run_id == 123
+    assert prepare_calls[0]["use_macro"] is True
 
 
 def test_forecast_runner_creates_five_bist_bounded_points(monkeypatch):

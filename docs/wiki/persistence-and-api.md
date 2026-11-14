@@ -2,7 +2,7 @@
 title: Persistence and API
 type: concept
 status: active
-last_updated: 2026-06-14
+last_updated: 2026-11-10
 owner: llm
 source_count: 14
 ---
@@ -412,6 +412,14 @@ trading-day gate → universe data refresh (`DataUpdater.check_and_update` loop)
 scoring batch (`tools/e2_faz5_nightly_scoring.py`). `scripts/nightly_serving.ps1`
 is the Windows Task Scheduler target (daily 21:00, logs to `logs/nightly_*.log`);
 `scripts/register_nightly_task.ps1` registers it.
+
+## Serving Havuzu Tazelik Alanı (K6, 2026-11-10)
+
+`GET /health` additive olarak `serving_pool` döner: `available`, `as_of_date`, `age_days`, `stale`
+(`age_days > 7`), `n_symbols`, `n_rows`, `created_at`. `src/api/services/serving_health.py`
+`data/serving_pool.db`yi **salt-okunur** açar (dosyayı oluşturmaz); yoksa/bozuksa
+`{"available": false, "reason": ...}` döner, istisna metnini sızdırmaz. Mevcut `/health`
+alanları değişmedi.
 
 ## Related Pages
 

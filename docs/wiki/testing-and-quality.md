@@ -2,7 +2,7 @@
 title: Testing and Quality
 type: concept
 status: active
-last_updated: 2026-06-14
+last_updated: 2026-11-10
 owner: llm
 source_count: 6
 ---
@@ -261,6 +261,19 @@ This writes `graphify-out/graph.json`, `graphify-out/graph.html`, and
 FastAPI and uvicorn are required for the API service but are not listed in the
 visible `requirements.txt` snapshot; install them separately if running
 `src/api/main.py`.
+
+## Yerel Ortam ve Kol-B Denetim Testleri (2026-11-10)
+
+- Proje venv'i: `ts_forecasting_lab/.venv` (Python 3.10; `.gitignore` kapsar). Kurulum:
+  `python -m venv .venv`, `pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu`
+  (`torch` CPU wheel). `requirements.txt`e `torch`, `fastapi`, `uvicorn`, `pydantic`, `httpx`,
+  `lime`, `filelock`, `pytest`, `pytest-cov` eklendi.
+- Tam suite bu venv'de: **799 passed** (denetim öncesi 764 + 35 yeni test). Yeni dosyalar:
+  `test_baselines.py`, `test_pooled_dataset.py`, `test_panel_columns.py`, `test_serving_health.py`;
+  genişletilenler: `test_pooled_loader.py` (keep_unlabeled, delisting, fallback, karantina),
+  `test_pooled_oos.py`, `test_segment_ic.py`, `test_nightly_scoring.py`.
+- `test_v1_alias_route_registered` artık `app.openapi()["paths"]` kullanır (yeni FastAPI
+  `app.routes`i lazy `_IncludedRouter` ile döndürür, `.path` taşımaz).
 
 ## Quality Invariants To Protect
 

@@ -2,7 +2,7 @@
 title: E2 Pooled Global Model Epic
 type: feature-plan
 status: active
-last_updated: 2026-06-02
+last_updated: 2026-11-10
 owner: llm
 branch: feat/e2-pooled-global-model
 ---
@@ -598,6 +598,50 @@ Audit of all 592 stock CSVs in `data/` via `tools/e2_faz0_universe_audit.py`.
   internals only, not the response contract.)
 - Conditioning via explicit features only, or add a learned symbol embedding?
 - Pool everything vs sector/liquidity peer-pools as a Faz 6 refinement.
+
+## Kol-B Denetim K1–K9 (2026-11-10)
+
+Kaynak: `analizler/kolb_sizinti_denetimi_2026-11-09.md` (repo dışı denetim raporu). Sonuç:
+doğrudan zamansal sızıntı yok (purge `target_date < a_k`, embargo `h+5`, aynı-tarih rank
+hedefi, `target*` assert'i); ama başlık IC 0.099 / ICIR 1.55 **tradable alfa kanıtı sayılmaz**:
+sinyal en az likit hisselerde yoğun (Faz 6: Q1 IC 0.149 / Q5 0.051); model-bağımsız
+5 günlük ters-momentum faktörü aynı kantil desenini veriyor (Q1 +0.065, Q5 −0.031, tradable
+filtreli −0.011 — son 378 gün, yerel veri); evren hayatta kalma yanlılığı taşıyor.
+
+Kod karşılıkları (hepsi geriye uyumlu, varsayılan davranış değişmez):
+- **K4 skorlama tarihi:** `PooledLoaderConfig.keep_unlabeled` hedefi gerçekleşmemiş son `h`
+  satırı tutar; `src/data/pooled_dataset.py::build_pooled_dataset` etiketli eğitim/OOS
+  panelini (`aug`) ve etiketsiz skorlama panelini (`full`) ayırır;
+  `nightly_scoring.latest_scoring_rows` skorlamayı **en güncel piyasa gününe** yapar
+  (önceden hedefi gerçekleşmiş son gün ≈ `h` iş günü geride kalıyordu). `as_of_date` ve
+  `stale_for` artık etiketsiz paneldendir.
+- **K3 holdout + örtüşmesiz IC:** `evaluate_per_symbol` tahminlere `is_holdout` ekler;
+  `pooled_oos.split_ic_summary` seçim/holdout × örtüşmeli/örtüşmesiz (`gap_days`) ayırır.
+- **K2 tradable IC + kıyas:** `src/validation/baselines.py` (`reversal_factor_predictions`,
+  `tradable_subset`, `liquidity_quantile_ic`, `ic_report`). Hepsini üreten araç:
+  `tools/e2_kolb_validity_report.py` (ağır; `--limit 60 --boost 50` hızlı deneme).
+- **K1 hayatta kalma:** `include_delisted` artık gerçek: `bist_universe.csv`
+  `Delisted_Date`/`Status=Delisted` okunur (`True`: geçmiş dahil, delisting sonrası satırlar
+  atılır; `False`: sembol dışlanır). Evrende hiç delisted yoksa `survivorship_status =
+  "no_delisted_in_universe"` + uyarı. **Veri hâlâ yok** → yanlılık giderilmedi, yalnız
+  görünür kılındı; şablon `data/meta/delisted_template.csv`. Bilinen sınır: delisting
+  öncesi son `h` gün hedefsiz kalır, terminal getiri modellenmez.
+- **K5 nedensel segment:** `segment_ic.per_date_bucket / attach_date_segments /
+  latest_date_segments` (kova her tarihte o günün `liq_log`/`vol`'undan). Gece aracı ICIR
+  haritalarını bununla üretir; `symbol_segments` (tam-örneklem medyanı) geriye uyum için
+  duruyor.
+- **K6 tazelik:** `/health.serving_pool` (`as_of_date`, `age_days`, `stale`);
+  `nightly_scoring.coverage_warnings` kapsama/veri yaşı uyarılarını run `config`ine yazar.
+- **K7 yedek klasörü:** `fallback_dirs` (araçta `--fallback-dir data/yedek`): birincil
+  `data/`'da olmayan semboller (ARDYZ, ENKAI, KCHOL, LOGO, SAHOL, SASA, TUPRS) tamamlanır;
+  birincil dosya önceliklidir, dosya taşınmaz.
+- **K8 karantina:** `quarantine_jumps` (araçlarda varsayılan **açık**, yükleyicide kapalı):
+  |1g log-getiri| > 0.30 günü etrafında `[p−h, p+63)` satırları atılır. Kök çözüm veri
+  güncellemesindeki ölçek kaymasıdır (denetim raporu bulgu 20).
+- **K9:** panel kolon sınıflandırması tek dosyada: `src/data/panel_columns.py`.
+
+Açık: IC 0.099 yeniden üretilmedi; holdout/tradable/örtüşmesiz rakamlar için
+`tools/e2_kolb_validity_report.py` tam koşulmalı, sonuç bu sayfaya işlenmeli.
 
 ## Related Pages
 

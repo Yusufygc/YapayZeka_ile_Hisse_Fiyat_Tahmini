@@ -26,6 +26,7 @@ from typing import Callable, Sequence
 import numpy as np
 import pandas as pd
 
+from src.data.panel_columns import is_non_feature
 from src.data.pooled_matrix import pooled_feature_matrix, pooled_target_array
 from src.validation.pooled_cv import PooledFold
 
@@ -42,16 +43,8 @@ class PerSymbolOOSConfig:
     include_holdout: bool = False
 
 
-# panel'de ozellik OLMAYAN kolonlar (loader ciktisi + CV alanlari). target*
-# varyantlari (target, target_cs, ...) ASLA feature olmamali -> sizinti.
-_NON_FEAT = {
-    "symbol", "Date", "target_date", "sector", "symbol_id",
-    "liq_log", "vol", "sector_code",
-}
-
-
-def _is_non_feature(col: str) -> bool:
-    return col in _NON_FEAT or col == "target" or col.startswith("target_")
+# panel'de ozellik OLMAYAN kolonlar: tek tanim src/data/panel_columns.py (target* ASLA ozellik degil).
+_is_non_feature = is_non_feature
 
 
 def _auto_feature_cols(panel: pd.DataFrame) -> list[str]:
@@ -144,6 +137,34 @@ def daily_cross_sectional_ic(
     }
 
 
+def split_ic_summary(predictions: pd.DataFrame, gap_days: int = 5, min_names: int = 8) -> dict:
+    """OOS IC'yi secim penceresi / final holdout ve ortusmeli / ortusmesiz ayirir (K3).
+
+    `predictions`: `evaluate_per_symbol(..., include_holdout=True)` ciktisi
+    (`is_holdout` kolonu gerekir). Her bolum icin `daily_cross_sectional_ic` ozeti:
+      selection / holdout           : gunluk (h-gun hedefleri ortusur)
+      *_nonoverlap                  : `gap_days` takvim gunu arali orneklem
+    Holdout satiri yoksa ilgili anahtarlar `None`.
+    """
+    out: dict = {}
+    if predictions is None or predictions.empty or "is_holdout" not in predictions.columns:
+        return {"selection": None, "holdout": None,
+                "selection_nonoverlap": None, "holdout_nonoverlap": None}
+    parts = {
+        "selection": predictions[~predictions["is_holdout"]],
+        "holdout": predictions[predictions["is_holdout"]],
+    }
+    for name, part in parts.items():
+        if part.empty:
+            out[name] = None
+            out[name + "_nonoverlap"] = None
+            continue
+        out[name] = daily_cross_sectional_ic(part, min_names=min_names)
+        out[name + "_nonoverlap"] = daily_cross_sectional_ic(
+            part, min_names=min_names, sample_gap_days=gap_days)
+    return out
+
+
 @dataclass
 class PerSymbolOOSResult:
     per_symbol: pd.DataFrame   # bir satir/sembol: dir_acc, rmse, edge, n, fold orani
@@ -195,6 +216,7 @@ def evaluate_per_symbol(
         pred_rows.append(pd.DataFrame({
             "symbol": sym_all[te],
             "fold": f.index,
+            "is_holdout": bool(f.is_final_holdout),
             "Date": date_all[te],
             "y_true": y_all[te],
             "y_pred": y_hat,

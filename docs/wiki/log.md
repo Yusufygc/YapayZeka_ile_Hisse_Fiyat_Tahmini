@@ -1,3 +1,39 @@
+## [2026-11-10] REVIEW | Kol-B sızıntı denetimi K1–K9 uygulandı
+
+- Denetim (`analizler/kolb_sizinti_denetimi_2026-11-09.md`) bulguları dal `audit/kolb-k1-k9`
+  üzerinde uygulandı: K4 skorlama en güncel piyasa gününe (`keep_unlabeled`,
+  `build_pooled_dataset`, `latest_scoring_rows`); K3 `is_holdout` + `split_ic_summary`;
+  K2 `validation/baselines.py` + `tools/e2_kolb_validity_report.py`; K1 `include_delisted`
+  gerçek + `survivorship_status` uyarısı (delisting verisi yok → yanlılık giderilmedi);
+  K5 nedensel `per_date_bucket`/`attach_date_segments`; K6 `/health.serving_pool`;
+  K7 `fallback_dirs`; K8 `quarantine_jumps`; K9 `src/data/panel_columns.py`.
+- Ortam: proje venv'i kuruldu, `requirements.txt`e eksik paketler eklendi, tam suite
+  799 passed (öncesi 764 + 35 yeni; 1 test FastAPI uyumu için OpenAPI tabanlı yapıldı).
+- Doğrulanamayan: IC 0.099'un yeniden üretimi, holdout/tradable IC rakamları (ağır koşu
+  yapılmadı); 40–60 sembollü smoke koşusu yalnız uçtan uca kabloyu doğruladı, kanıt değildir.
+- Nightly araçta `--quarantine-jumps` varsayılan açık (üretim sonucu değişir); `--fallback-dir`
+  açıkça verilmeli (`scripts/nightly_serving.ps1` henüz güncellenmedi).
+
+## [2026-06-14] Bugfix | Desktop GUI Türkçe karakter ve UI/UX düzeltmeleri
+
+- PySide6 GUI içindeki mojibake Türkçe metinler gerçek UTF-8 metinlere çevrildi;
+  sekme başlıkları, butonlar, kartlar, tablo başlıkları, status bar ve süreç
+  logları doğru Türkçe karakterlerle gösterilir.
+- Subprocess logları için `PYTHONIOENCODING=utf-8`, `PYTHONUTF8=1`,
+  CP1254 fallback decode ve finish-time stdout/stderr drain eklendi; Windows CLI
+  çıktıları artık `�` karakterine düşmeden görünür.
+- Dashboard `dir_acc` ve `hit_rate` metrikleri veritabanındaki yüzde değerleri
+  yeniden 100 ile çarpmadan gösterir; uzun model adları tooltip ile desteklenir
+  ve tablo kolon genişlikleri daha tutarlı hale getirildi.
+- Forecast ekranında boş tahmin durumu modal yerine panel içinde okunabilir
+  ve seçili sembolü dikkate alan mesajla gösterilir; hata sonrası kullanıcı
+  görünür üretim loguna yönlendirilir. Eğitim/tahmin kontrol alanları kompakt
+  yüksekliğe sabitlendi ve `QMessageBox` koyu tema altında okunabilir hale
+  getirildi.
+- `tests/test_gui_smoke.py` görünür GUI metinlerinde mojibake belirteci
+  kalmamasını, CP1254 fallback decode'u, forecast boş durum mesajını ve yüzde
+  formatının tekrar ölçeklenmemesini doğrular.
+
 ## [2026-06-14] Feature | XAI makro/gosterge grup ozetleri
 
 - Analysis API `xai.group_summaries` ve `peer.xai_group_summaries` alanlarini
