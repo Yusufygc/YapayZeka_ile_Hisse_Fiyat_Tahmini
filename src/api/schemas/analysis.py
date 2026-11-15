@@ -5,7 +5,7 @@ yeniTasarim/04 API sözleşmesiyle birebir uyumludur.
 """
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 try:
     from pydantic import BaseModel
