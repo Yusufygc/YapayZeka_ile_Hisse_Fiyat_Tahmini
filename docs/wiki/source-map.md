@@ -63,6 +63,7 @@ deep inspection so source reads stay targeted.
 | `data/meta/bist_calendar.csv` | BIST trading calendar for forward forecasts |
 | `data/macro/` | Macro cache generated from external sources |
 | `data/feature_cache/` | Feature cache generated from raw data and config |
+| `data/clean/` | Kol-B temizlenmiş OHLCV Parquet deposu (CSV'lerden türetilir, gitignored; bkz. data-pipeline.md) |
 | `data/stock_models.db` | SQLite registry, generated runtime artifact |
 | `data/serving_pool.db` | E2 isolated `PeerStore` (global_model_runs + peer_scores); generated runtime artifact |
 | `logs/nightly_*.log` | E2 nightly job logs (gitignored, 14-day retention) |

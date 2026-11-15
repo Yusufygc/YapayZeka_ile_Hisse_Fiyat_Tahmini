@@ -32,6 +32,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from src.data.clean_store import CleanStore
 from src.data.freshness import DEFAULT_MAX_BUSINESS_DAYS, warn_if_stale
 from src.data.ohlcv_clean import clean_ohlcv_csv
 from src.data.panel_columns import PIPELINE_RAW_COLS
@@ -77,6 +78,9 @@ class PooledLoaderConfig:
     # Sembol basi Parquet ozellik onbellegi (src/features/pooled_feature_cache.py).
     # None = kapali (varsayilan; FeaturePipeline'i patch'leyen testler etkilenmez).
     feature_cache_dir: str | None = None
+    # Temizlenmis OHLCV'nin Parquet deposu (src/data/clean_store.py). CSV'ler kaynak kalir;
+    # depo yalniz degisen CSV'leri yeniden temizler. None = kapali (eski per-CSV yol).
+    clean_store_dir: str | None = None
 
 
 class PooledPanelLoader:
@@ -92,6 +96,10 @@ class PooledPanelLoader:
         self._paths: dict[str, str] | None = None
         self._fcache = (PooledFeatureCache(cfg.feature_cache_dir)
                         if cfg.feature_cache_dir else None)
+        self._cstore = CleanStore(cfg.clean_store_dir) if cfg.clean_store_dir else None
+        self._clean_frames: dict[str, pd.DataFrame] | None = None
+        # {enabled, content_hash, refresh (ozet)}; depo kapaliyken yalniz enabled=False
+        self.clean_store_info: dict[str, object] = {"enabled": self._cstore is not None}
 
     @property
     def feature_cache_stats(self) -> dict[str, int | bool]:
@@ -105,6 +113,7 @@ class PooledPanelLoader:
         delisted = self._delisted_map()
         self._report_survivorship(delisted)
         frames: list[pd.DataFrame] = []
+        self._prepare_clean_store()
         for sym in self._symbols():
             if sym in delisted and not self.cfg.include_delisted:
                 self.report[sym] = "delisted_excluded"
@@ -149,6 +158,25 @@ class PooledPanelLoader:
 
     def _symbols(self) -> list[str]:
         return sorted(self._symbol_paths())
+
+    def _prepare_clean_store(self) -> None:
+        """Depo aciksa TUM kaynak CSV'leri esitle (kalkanlari dusurur; `limit` depoyu daraltmaz)
+        ve bu kosunun sembollerinin temiz cercevelerini + icerik hash'ini al."""
+        if self._cstore is None or self._clean_frames is not None:
+            return
+        report = self._cstore.refresh(self._symbol_paths())
+        symbols = self._symbols()
+        self._clean_frames = self._cstore.load(symbols)
+        self.clean_store_info.update(
+            content_hash=self._cstore.content_hash(symbols), refresh=report.summary(),
+            failed=list(report.failed))
+
+    def _clean_frame(self, symbol: str, path: str) -> pd.DataFrame:
+        """Sembolun temiz OHLCV'si: depodan (varsa) yoksa dogrudan CSV'den (ayni sonuc)."""
+        self._prepare_clean_store()
+        if self._clean_frames is not None and symbol in self._clean_frames:
+            return self._clean_frames[symbol]
+        return clean_ohlcv_csv(path, label=symbol)
 
     def _check_freshness(self, panel: pd.DataFrame) -> None:
         """Sembol bazinda son Date bugunden cok geride ise tek ozet uyari + kayit."""
@@ -224,7 +252,7 @@ class PooledPanelLoader:
         # Tek-sembol loader ile ORTAK temizleme (src/data/ohlcv_clean.py): alan-sayisi
         # dogrulamasi (bozuk satir karantina, kolon kaymasi yok), parse_dates, tekrar
         # tarih (son tutulur), Open/High/Low'u Adj/Close ile olcekleme, sifir-hacim atma.
-        raw = clean_ohlcv_csv(path, label=symbol)
+        raw = self._clean_frame(symbol, path)
         if raw.empty or "Date" not in raw.columns or "Close" not in raw.columns:
             self.report[symbol] = "bad_schema"
             return None

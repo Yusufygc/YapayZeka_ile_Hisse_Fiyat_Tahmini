@@ -26,6 +26,7 @@ ForecastingPipeline                         src/pipeline/orchestrator.py
 |   |-- FeaturePipeline                     src/features/feature_pipeline.py
 |   |-- MacroPipeline                       src/features/macro_pipeline.py
 |   |-- FeatureCache                        src/features/feature_cache.py
+|   |-- CleanStore (Kol-B, Parquet)         src/data/clean_store.py  (CSV'lerden türetilen temiz OHLCV deposu, data/clean/)
 |   `-- TimeSeriesSplitter                  src/utils/data_splitter.py
 |-- ModelTrainer                            src/pipeline/model_trainer.py
 |   |-- Model implementations               src/models/

@@ -66,5 +66,6 @@ def build_pooled_dataset(
             "rejected_rows": dict(loader.rejected_rows),
             "stale_symbols": dict(loader.stale_symbols),
             "feature_cache": dict(loader.feature_cache_stats),
+            "clean_store": dict(loader.clean_store_info),
         },
     )

@@ -49,6 +49,9 @@ optuna_studies_*.db
 # Feature cache (ham veriden otomatik yeniden oluşturulur)
 data/feature_cache/
 
+# Temizlenmis OHLCV Parquet deposu (CSV'lerden turetilir, otomatik yeniden olusur)
+data/clean/
+
 # İndirilen makro veri CSV'leri (yfinance/FRED'den yeniden çekilir)
 data/macro/*.csv
 

@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import glob
-import hashlib
 import os
 import time
 from datetime import date, datetime, timedelta
@@ -167,6 +166,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="sembol basi Parquet ozellik onbellegini ac (ayni veride tekrar kosular icin)")
     ap.add_argument("--feature-cache-dir", default=os.path.join("data", "feature_cache", "pooled"),
                     help="ozellik onbellegi dizini (--feature-cache ile)")
+    ap.add_argument("--clean-store-dir", default=os.path.join("data", "clean"),
+                    help="temizlenmis OHLCV Parquet deposu (CSV kaynak kalir; yalniz degisenler yeniden temizlenir)")
+    ap.add_argument("--no-clean-store", action="store_true",
+                    help="Parquet temiz veri deposunu kapat (her kosuda tum CSV'ler temizlenir)")
     ap.add_argument("--sleep-s", type=float, default=0.0, help="yalniz tekli dusus yolunda semboller arasi bekleme")
     ap.add_argument("--skip-data", action="store_true")
     ap.add_argument("--skip-trading-gate", action="store_true")
@@ -189,6 +192,7 @@ def assemble_serving_table(model, full_aug: pd.DataFrame, latest_rows: pd.DataFr
 def run_scoring(args: argparse.Namespace) -> int:
     """Global modeli tum gecmise egit, en guncel evreni skorla, PeerStore'a yaz (surec-ici)."""
     # Agir bagimliliklar (lightgbm/torch) yalniz skorlamada yuklenir (--help / kapi hizli kalir).
+    from src.data.clean_store import panel_content_hash
     from src.data.pooled_dataset import build_pooled_dataset
     from src.data.pooled_loader import PooledLoaderConfig
     from src.models.ensemble_pooled_model import EnsemblePooledConfig, EnsemblePooledModel
@@ -209,7 +213,8 @@ def run_scoring(args: argparse.Namespace) -> int:
             data_dir=args.data_dir, universe_file=args.universe,
             target_horizon=args.horizon, min_rows=args.min_rows,
             fallback_dirs=tuple(args.fallback_dir), quarantine_jumps=args.quarantine_jumps,
-            feature_cache_dir=args.feature_cache_dir if args.feature_cache else None),
+            feature_cache_dir=args.feature_cache_dir if args.feature_cache else None,
+            clean_store_dir=None if args.no_clean_store else args.clean_store_dir),
         min_names=args.min_names, limit=args.limit)
     full_aug, aug, panel, feats, ci = ds.full, ds.aug, ds.labeled, ds.feats, ds.cat_idx
     # K5: segment kovalari nedensel (tarih-bazli); serving tablosu skorlama gunu satirlarindan.
@@ -234,6 +239,9 @@ def run_scoring(args: argparse.Namespace) -> int:
         _log(f"UYARI {w}")
     meta = ds.loader_meta
     fc = meta.get("feature_cache", {})
+    cs = meta.get("clean_store", {})
+    if cs.get("enabled"):
+        _log(f"temiz veri deposu: {cs.get('refresh')}")
     if fc.get("enabled"):
         _log(f"ozellik onbellegi: {fc['hits']} hit, {fc['misses']} miss, {fc['errors']} hata")
     if meta["survivorship_status"] != "delisted_handled":
@@ -311,9 +319,11 @@ def run_scoring(args: argparse.Namespace) -> int:
     _log(f"scored {len(table)} symbols at {table['as_of_date'].iloc[0] if len(table) else '-'}")
 
     # --- persist ---
-    snap = hashlib.sha1(
-        f"{len(aug)}|{as_of}|{sorted(aug['symbol'].unique())[:5]}".encode()
-    ).hexdigest()[:12]
+    # Gercek veri parmak izi: depo aciksa kaynak CSV sha256'larindan tureyen manifest hash'i,
+    # kapaliysa panelin (symbol, Date, Close, target) icerik hash'i.
+    data_hash = cs.get("content_hash") if cs.get("enabled") else None
+    data_hash = data_hash or panel_content_hash(aug)
+    snap = data_hash[:16]
     store = PeerStore(args.db)
     # probability_source PeerStore kolonu degil (peer_store.py disinda) -> run config'inde.
     prob_src = (sorted(table["probability_source"].dropna().unique().tolist())
@@ -333,6 +343,9 @@ def run_scoring(args: argparse.Namespace) -> int:
                 "stale_symbols_now": len(stale_now),
                 "panel_freshness": glob_fresh.message,
                 "rejected_rows_symbols": len(meta.get("rejected_rows", {})),
+                "data_hash": data_hash,
+                "data_hash_source": "clean_store_manifest" if cs.get("content_hash") else "panel_content",
+                "clean_store": cs.get("refresh") if cs.get("enabled") else None,
                 "survivorship": meta["survivorship_status"],
                 "fallback_symbols": len(meta["fallback_symbols"]),
                 "quarantined_symbols": len(meta["quarantined_days"])}), table)

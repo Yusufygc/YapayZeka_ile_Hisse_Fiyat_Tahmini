@@ -319,6 +319,33 @@ daily/global merge, monthly ffill, and final feature-engineering helpers. Public
 inputs and output schema are unchanged; the split exists to keep EVDS/FRED/manual
 CSV fallback behavior and release-lag leakage controls independently testable.
 
+### Parquet temiz veri deposu (2026-11-15)
+
+`src/data/clean_store.py::CleanStore` (varsayılan kök `data/clean/`, `.gitignore`'da) **CSV'lerden türetilen** temizlenmiş OHLCV deposudur.
+**Kaynak doğruluk CSV'de kalır** (DataUpdater, GUI, araçlar CSV yazıp okur; Kol-A `data_loader.py` değişmedi); depo silinirse kendiliğinden yeniden kurulur.
+Amaç: panel kurulumunda 585 CSV'yi her koşuda okuyup `clean_ohlcv_csv` ile temizlemenin (~8-14 s) tekrarını önlemek.
+
+- **Düzen:** `panel.parquet` (uzun: `symbol, Date, Open, High, Low, Close, Volume`; zstd; sembol sıralı; `drop_zero_volume=True` hali = panel yolunun kullandığı) +
+  `manifest.parquet` (sembol başına `source_path, source_sha256, source_size, source_mtime_ns, n_rows, first_date, last_date, rejected_rows, cleaned_at, schema`)
+  + `panel.parquet.lock` (`csv_safety.csv_lock`). Standart dışı kolonlar (Dividends vb.) depolanmaz (panel yolu zaten yalnız standart OHLCV'yi kullanır).
+- **`refresh(paths)`:** hızlı yol boyut + `mtime_ns`; uyuşmazsa sha256; sha aynıysa (yalnız mtime değişti) yeniden temizleme YOK, stat manifeste yazılır;
+  yalnız sha'sı değişen/yeni semboller yeniden temizlenir, kalkanlar düşürülür. Panel ve manifest geçici dosya + `os.replace` ile yazılır
+  (manifest son = commit noktası; ikisini `tsfl.panel_id` metadata'sı bağlar). Temizlenemeyen CSV depoya alınmaz (`RefreshReport.failed`); yükleyici o sembol için doğrudan CSV'ye düşüp hatayı kendisi raporlar.
+- **`load(symbols)`:** sembol çerçeveleri `clean_ohlcv_csv(path)` çıktısının standart kolon izdüşümüyle `assert_frame_equal(check_exact=True)` aynıdır
+  (RangeIndex, dtype manifest `schema`'sından, `attrs["rejected_rows"]` manifesttan). Panel float64 saklar; tam sayı dtype'lı kolonlar (>2^53 değilse) geri cast edilir.
+- **`content_hash(symbols=None)`:** sha256( bicim sürümü + temizleyici kod parmak izi + sıralı (sembol, `source_sha256`) ). Veri veya temizleyici kod değişince değişir; mtime tek başına değiştirmez.
+- **Otomatik tam yeniden kurulum (uyarılı):** temizleyici kod parmak izi (`ohlcv_clean.py` + `dates.py` kapanışı + pandas/numpy sürümü, `code_fingerprint`) veya `SCHEMA_VERSION` değişirse; panel/manifest bozuk, `panel_id` uyuşmuyor veya satır sayısı tutmuyorsa.
+- **Yükleyici:** `PooledLoaderConfig.clean_store_dir` (varsayılan `None` = eski per-CSV yol; testler etkilenmez). Açıkken `load()` TÜM kaynak CSV'leri (`_symbol_paths()`, `fallback_dirs` önceliği aynen) bir kez `refresh` eder
+  (`limit` depoyu daraltmaz), sonra `_engineer_symbol` temiz çerçeveyi depodan alır; sonrası değişmedi. Açık: `src/serving/nightly.py` (`--clean-store-dir`, `--no-clean-store`) ve
+  `tools/e2_kolb_validity_report.py` (aynı bayraklar). Bir depo = bir kaynak-klasör yapılandırması (farklı `data_dir`/`fallback_dirs` ile aynı depoyu paylaşmayın: kalkan semboller düşürülür).
+  `PooledDataset.loader_meta["clean_store"] = {enabled, content_hash, refresh, failed}`.
+- **Tekrarlanabilirlik:** nightly `data_snapshot_hash` eskiden `len(aug)|as_of|ilk 5 sembol` idi (veri hash'i değildi); artık depo açıkken `content_hash()[:16]`, kapalıyken panelin `(symbol, Date, Close, target)` içerik hash'i (`panel_content_hash`). Tam hash + kaynağı PeerStore run config'inde (`data_hash`, `data_hash_source`, `clean_store`).
+  Kol-A `dataset_hash` yalnız metadata JSON'unu hashliyordu; artık metadata'ya `data_content_sha256` (özellik çerçevesinin `frame_content_hash`'i) eklendi (şema/kolon değişmedi), aynı konfigürasyonla değişen veri hash'i değiştirir.
+- **Kol-A `data_loader.py` depodan OKUMAZ:** kendi Adj_Close anomali kontrolü/`attrs` raporu panel temizleyicisinden farklıdır; birebir eşitlik kolay değil.
+- **Ölçüm** (585 CSV, 581 sembol, özellik önbelleği kapalı): `build_pooled_dataset` depo kapalı 48,4 s; depo soğuk 48,5 s (refresh 7,6 s: 585 sha + temizleme + yazma); depo sıcak 41,0 s (refresh 0,02 s, `load` ~0,4 s) -> ~7,4 s kazanç (CSV temizleme maliyeti bu makinede ~7,6 s). 1 CSV değişince refresh 0,41 s. `full/aug/labeled/feats/cat_idx/loader_report` depo kapalıyla `check_exact` BİREBİR eşit (soğuk ve sıcak). Disk: `panel.parquet` ~29 MB.
+  Not: gece işinde DataUpdater her CSV'ye yeni gün ekler -> her sembol `changed` olur; depo asıl kazancı aynı veride tekrar koşularda (doğrulama raporu, skorlama tekrarı, araştırma) sağlar.
+- Testler: `tests/test_clean_store.py`, `tests/test_data_services.py::test_dataset_hash_reflects_data_content_not_only_metadata`.
+
 ### Macro feature-cache poisoning guard (2026-06-02 fix)
 
 The feature-cache key already includes `use_macro`, but a transient macro-fetch

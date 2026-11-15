@@ -317,3 +317,19 @@ def test_macro_frame_cached_and_poisoned_entry_self_heals(tmp_path, monkeypatch)
     # Stale kayit yerine makrolu frame uretildi + cache'e yazildi.
     assert "Rate_Level" in manager.feature_names
     assert len(_cache_pkls(tmp_path)) == 1
+
+
+def test_dataset_hash_reflects_data_content_not_only_metadata(tmp_path):
+    manager = _manager(tmp_path)
+    manager.df = _frame(30)
+    manager.feature_names = ["Feature_A", "Feature_B"]
+    manager.data_ingestion_service.refresh_dataset_metadata()
+    h1 = manager.dataset_hash
+    manager.data_ingestion_service.refresh_dataset_metadata()
+    assert manager.dataset_hash == h1                       # kararli
+    changed = _frame(30)
+    changed.loc[12, "Feature_A"] += 1e-9                    # metadata ayni, deger farkli
+    manager.df = changed
+    manager.data_ingestion_service.refresh_dataset_metadata()
+    assert manager.dataset_hash != h1
+    assert len(manager.dataset_metadata["data_content_sha256"]) == 64

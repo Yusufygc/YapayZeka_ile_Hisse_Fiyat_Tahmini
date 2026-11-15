@@ -18,6 +18,7 @@ from src.data.preprocessor import create_sequences, scale_data
 from src.features.feature_cache import FeatureCache
 from src.features.feature_pipeline import FeaturePipeline
 from src.features.macro_pipeline import MacroPipeline
+from src.features.pooled_feature_cache import frame_content_hash
 from src.features.sector_mapping import resolve_sector_mapping
 from src.pipeline.config import DataConfig, ValidationConfig
 from src.utils.data_splitter import (
@@ -402,6 +403,9 @@ class DataIngestionService:
             "corporate_action": self.state.corporate_action_report,
             "survivorship_bias": self.state.survivorship_bias_report,
             "training_window": self.state.training_window_report,
+            # Gercek veri icerigi (ozellik cercevesi: kolon adi+dtype+deger baytlari); yalniz
+            # metadata hash'i ayni konfigurasyonla degisen veriyi (yeni gun/duzeltme) ayirt edemezdi.
+            "data_content_sha256": frame_content_hash(self.state.df),
         }
         payload = json.dumps(self.state.dataset_metadata, ensure_ascii=False, sort_keys=True)
         self.state.dataset_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]

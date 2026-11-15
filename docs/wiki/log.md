@@ -1,3 +1,10 @@
+## [2026-11-15] Feature | Parquet temiz veri deposu
+
+- Yeni: `src/data/clean_store.py::CleanStore` (`data/clean/panel.parquet` uzun format + `manifest.parquet`; CSV'ler KAYNAK kalır, depo türevdir). `refresh(paths)`: boyut+mtime_ns hızlı yol -> sha256; yalnız değişen/yeni sembol yeniden temizlenir, kalkanlar düşer, atomik yazım + `csv_lock`; temizleyici kod parmak izi/şema sürümü değişirse veya dosya bozuksa uyarılı tam yeniden kurulum. `load()` sembol çerçeveleri `clean_ohlcv_csv` ile `check_exact` birebir (attrs manifesttan). `content_hash()` = sha256(sürüm + parmak izi + sıralı (sembol, kaynak sha256)).
+- `PooledLoaderConfig.clean_store_dir` (varsayılan `None`); nightly (`--clean-store-dir`, `--no-clean-store`) ve `tools/e2_kolb_validity_report.py` açık; `data/clean/` gitignore'da; `loader_meta["clean_store"]`.
+- Tekrarlanabilirlik: nightly `data_snapshot_hash` artık gerçek veri hash'i (depo manifest hash'i; depo kapalıysa panel içerik hash'i; tam hash PeerStore run config'inde `data_hash`). Kol-A `dataset_hash` metadata'ya `data_content_sha256` (özellik çerçevesi içerik hash'i) kattı. Kol-A `data_loader.py` depodan okumaz (kendi Adj_Close mantığı farklı).
+- Gerçek veri: önbelleksiz 48,4 s / depo soğuk 48,5 s / sıcak 41,0 s; 1 CSV değişince refresh 0,41 s; `full/aug/labeled` birebir eşit. 18 yeni test; toplam 1019 test.
+
 ## [2026-11-15] Config | Nightly özellik önbelleği varsayılan kapalı
 
 - Gece işinde veri her gün değiştiği için her sembol ıska oluyor ve yazma ~11 sn ekliyordu (soğuk 65,1 sn vs önbelleksiz 53,7 sn). `src/serving/nightly.py` artık varsayılan önbelleksiz; `--feature-cache` ile açılır (`--no-feature-cache` kaldırıldı). `tools/e2_kolb_validity_report.py` açık kalır (aynı veride tekrar koşular).

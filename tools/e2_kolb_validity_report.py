@@ -117,6 +117,9 @@ def main() -> None:
     ap.add_argument("--feature-cache-dir", default=os.path.join("data", "feature_cache", "pooled"),
                     help="sembol basi Parquet ozellik onbellegi")
     ap.add_argument("--no-feature-cache", action="store_true", help="ozellik onbellegini kapat")
+    ap.add_argument("--clean-store-dir", default=os.path.join("data", "clean"),
+                    help="temizlenmis OHLCV Parquet deposu (CSV kaynak kalir)")
+    ap.add_argument("--no-clean-store", action="store_true", help="Parquet temiz veri deposunu kapat")
     ap.add_argument("--out-dir", default=os.path.join("outputs", "_audits"))
     args = ap.parse_args()
 
@@ -126,7 +129,8 @@ def main() -> None:
                            target_horizon=args.horizon, min_rows=args.min_rows,
                            fallback_dirs=tuple(args.fallback_dir),
                            quarantine_jumps=args.quarantine_jumps,
-                           feature_cache_dir=None if args.no_feature_cache else args.feature_cache_dir),
+                           feature_cache_dir=None if args.no_feature_cache else args.feature_cache_dir,
+                           clean_store_dir=None if args.no_clean_store else args.clean_store_dir),
         min_names=args.min_names, limit=args.limit)
     aug = ds.aug
     _log(f"panel: {len(aug)} etiketli satir, {aug['symbol'].nunique()} sembol, "
