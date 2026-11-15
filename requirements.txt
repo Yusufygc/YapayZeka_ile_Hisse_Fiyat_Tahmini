@@ -30,6 +30,8 @@ lime==0.2.0.1
 filelock==4.1.0
 # pyarrow: Kol-B sembol basi Parquet ozellik onbellegi (src/features/pooled_feature_cache.py)
 pyarrow==26.0.1
+# duckdb: salt-okunur analiz katmani (src/analysis/analytics_db.py, tools/analytics.py); servis yolu DEGIL
+duckdb==2.0.0
 # --- Test/gelistirme ---
 pytest==9.2.0
 pytest-cov==7.1.0

@@ -27,6 +27,7 @@ linked pages below.
 - [Validation and Backtesting](validation-and-backtesting.md): Single split, walk-forward, final holdout, signal gates, backtest metrics, and leakage boundaries.
 - [Backtest Signal Improvement Plan](backtest-signal-improvement-plan.md): Draft plan for improving signal logic and model tiers before API integration or cost modelling.
 - [Persistence and API](persistence-and-api.md): Outputs, SQLite registry, forecast persistence, FastAPI endpoints, and downstream integration.
+- [Analytics Layer](analytics-layer.md): Salt-okunur DuckDB analiz katmanı (çapraz-koşu/çapraz-kaynak analitik; servis için değil), view'lar, adlandırılmış sorgular, CLI, ağdan eklenti yok.
 - [Testing and Quality](testing-and-quality.md): Test suites, quality gates, smoke tests, configured tools, and known verification commands.
 - [Staged Code Review Guide](code-review-stages.md): Project split into 8 dependency-ordered stages for staged code review; per-stage files, checklist, tests, and dependency notes.
 - [Code Quality and Refactoring](code-quality-and-refactoring.md): Code thresholds, file/class size limits, input validation guidelines, error handling, and datetime policy.

@@ -1,3 +1,9 @@
+## [2026-11-15] Feature | DuckDB analiz katmanı
+
+- Yeni: `src/analysis/analytics_db.py` (`AnalyticsDB`: bellek-içi DuckDB, kaynak varsa view'lar: `runs`, `run_model_metrics`, `run_experiments`, SQLite köprüsüyle `experiments/best_models/forecast_runs/forecast_points/peer_runs/peer_scores`, Parquet'ten `panel/panel_manifest`), `analytics_sources.py`, `analytics_queries.py` (`leaderboard`, `forecast_accuracy`, `ic_history`, `data_coverage`, `run_status`, `model_stability`), `tools/analytics.py` (`list/views/query/sql`; yalnız SELECT/WITH). `duckdb==2.0.0` requirements'a eklendi; `.gitignore`'a `!tools/analytics.py`.
+- Kararlar: DuckDB servis için DEĞİL (SQLite leaderboard 1-4 ms vs DuckDB 9-121 ms) — SQLite servis/kayıt yolunda kalır; koşu çıktıları CSV/JSON kalır (biçim göçü yok); `sqlite_scanner` ağdan indirme gerektirdiğinden kullanılmaz, SQLite Python `sqlite3` ile `mode=ro` açılıp pandas üzerinden `register()` edilir; kaynaklara hiç yazılmaz.
+- Gerçek veri: `leaderboard` sorgusu `run_leaderboard.build_multi_symbol_leaderboard` ile 14/14 sembolde birebir (lider, metrikler, güvenilirlik sınıfı); sorgu medyanı 3-32 ms, açılış ~2,2 s. 26 yeni test; toplam 1056 test. Ayrıntı: [Analytics Layer](analytics-layer.md).
+
 ## [2026-11-15] Perf | Pooled panel paralel sembol hesabı
 
 - Yeni: `src/data/pooled_parallel.py` (loky süreç havuzu; `SymbolTask`/`SymbolResult`/`ChunkResult`, `run_chunk` işçisi, parça bölme, işçi uyarı loglarını yeniden yayınlama). `PooledLoaderConfig.n_jobs` (varsayılan 1 = eski yol; -1 = `min(cpu-1, 8)`) ve `parallel_chunk_size` (0 = otomatik 4-20). `PooledPanelLoader._engineer_symbol_safe` hem sekansiyel döngünün hem işçinin ortak girişi; sonuçlar sembol sırasında birleştirilir (report/rejected_rows/quarantined_days/önbellek sayaçları aynen). Nightly ve `e2_kolb_validity_report` `--n-jobs` (varsayılan -1).
