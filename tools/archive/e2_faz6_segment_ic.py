@@ -8,7 +8,7 @@ segment-tabanini besler (Faz 5).
 
 Run (dl_env):
     set PYTHONUNBUFFERED=1 & set TQDM_DISABLE=1
-    python tools/e2_faz6_segment_ic.py --min-rows 300 --boost 400
+    python tools/archive/e2_faz6_segment_ic.py --min-rows 300 --boost 400
 
 Outputs:
     outputs/e2_faz6_segment_ic.md
@@ -23,7 +23,7 @@ import time
 
 import pandas as pd
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from src.data.cross_sectional import (
     add_cross_sectional_features,

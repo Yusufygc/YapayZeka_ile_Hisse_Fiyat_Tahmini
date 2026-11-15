@@ -8,7 +8,7 @@ through the leakage-safe pooled CV + OOS harness.
 
 Run (dl_env), background-friendly:
     set PYTHONUNBUFFERED=1 & set TQDM_DISABLE=1
-    python tools/e2_faz35_cs_ic_study.py --min-rows 300 --boost 400
+    python tools/archive/e2_faz35_cs_ic_study.py --min-rows 300 --boost 400
 
 Outputs:
     outputs/e2_faz35_cs_ic_study.md         (summary)
@@ -24,7 +24,7 @@ import time
 import pandas as pd
 
 # repo-root sys.path (python tools/x.py -> sys.path[0]=tools/, src bulunmaz)
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from src.data.cross_sectional import (
     add_cross_sectional_features,

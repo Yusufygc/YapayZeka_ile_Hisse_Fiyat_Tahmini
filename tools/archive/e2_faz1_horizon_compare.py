@@ -16,8 +16,8 @@ Backtest/Sharpe YOK — bu yalniz predictive sinyal taramasi. Backtest semantigi
 h>1 icin henuz horizon-aware degil (Faz 1b).
 
 Kullanim:
-    python tools/e2_faz1_horizon_compare.py
-    python tools/e2_faz1_horizon_compare.py --symbols EREGL,AKBNK --horizons 1,5
+    python tools/archive/e2_faz1_horizon_compare.py
+    python tools/archive/e2_faz1_horizon_compare.py --symbols EREGL,AKBNK --horizons 1,5
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 
 warnings.filterwarnings("ignore")
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 

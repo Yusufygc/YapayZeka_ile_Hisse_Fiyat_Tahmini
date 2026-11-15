@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 
 from src.forecasting.interval_calibration import z_for_level
-from src.serving.confidence import ConfidenceThresholds, peer_confidence
+from src.serving.confidence import ConfidenceThresholds, peer_confidence, select_segment_icir
 from src.serving.peer_scoring import PeerScoringConfig, score_latest_universe
 from src.serving.trend_tendency import TrendCalibration, trend_from_peer
 
@@ -57,6 +57,54 @@ def composite_icir(
     return (num / wsum) if wsum > 0 else float("nan")
 
 
+def composite_n_eff(
+    liq_b: Optional[str], vol_b: Optional[str], sec: Optional[str],
+    neff_maps: Optional[Mapping[str, Mapping[str, Optional[int]]]],
+) -> Optional[int]:
+    """Harman ICIR'in dayandigi ortusmeyen tarih sayisi (n_eff): katkida bulunan
+    eksenlerin MINIMUMU (muhafazakar). Bilinen n_eff yoksa None (kapi uygulanmaz)."""
+    if not neff_maps:
+        return None
+    vals = []
+    for axis, bucket in (("liq", liq_b), ("vol", vol_b), ("sector", sec)):
+        m = neff_maps.get(axis)
+        if m is None or bucket is None:
+            continue
+        v = m.get(bucket)
+        if v is not None and v == v:
+            vals.append(int(v))
+    return min(vals) if vals else None
+
+
+def symbol_vol_ratios(
+    panel: pd.DataFrame, as_of: pd.Timestamp, window: int = 20,
+    date_col: str = "Date", close_col: str = "Close",
+) -> dict[str, float]:
+    """Sembol trailing `window`-gun log-getiri std'si / o gunku evren medyani (nedensel).
+
+    Yalniz `Date <= as_of` satirlari kullanilir (look-ahead yok). Ratio'su
+    hesaplanamayan (yetersiz gecmis/NaN) semboller dondurulmez -> trend_from_peer
+    1.0 varsayar.
+    """
+    if panel.empty or close_col not in panel.columns or pd.isna(as_of):
+        return {}
+    p = panel.loc[panel[date_col] <= as_of, ["symbol", date_col, close_col]]
+    p = p.sort_values(["symbol", date_col])
+    close = pd.to_numeric(p[close_col], errors="coerce").where(lambda c: c > 0)
+    lr = np.log(close).groupby(p["symbol"]).diff()
+    vol = lr.groupby(p["symbol"]).rolling(window, min_periods=max(5, window // 2)).std()
+    vol = vol.reset_index(level=0, drop=True).reindex(p.index)
+    last = pd.DataFrame({"symbol": p["symbol"], "d": p[date_col], "vol": vol})
+    last = last[last["d"] == pd.Timestamp(as_of)].dropna(subset=["vol"])
+    last = last[last["vol"] > 0]
+    if last.empty:
+        return {}
+    med = float(last["vol"].median())
+    if not np.isfinite(med) or med <= 0:
+        return {}
+    return {str(r.symbol): float(r.vol / med) for r in last.itertuples()}
+
+
 def assemble_peer_table(
     model,
     panel_latest: pd.DataFrame,
@@ -74,6 +122,8 @@ def assemble_peer_table(
     trend_cfg: Optional[TrendCalibration] = None,
     price_band_level: float = 0.8,
     price_horizon_days: int = 5,
+    neff_maps: Optional[Mapping[str, Mapping[str, Optional[int]]]] = None,
+    symbol_vol_ratio: Optional[Mapping[str, float]] = None,
 ) -> pd.DataFrame:
     """En guncel evreni skorla + segment + confidence -> PeerStore'a hazir tablo.
 
@@ -82,6 +132,10 @@ def assemble_peer_table(
         agirlikli ortalamasi (composite_icir).
       - yoksa `segment_icir_map` + `icir_segment_col` tek-eksen (geriye uyumlu).
     tradable_for/stale_for : symbol -> bool (varsayilan: hepsi tradable, taze).
+    neff_maps : {axis: {bucket: n_eff}} segment ICIR'inin ortusmeyen tarih sayisi;
+        verilirse peer_confidence'a n_eff olarak gecer ('high' icin n_eff kapisi).
+    symbol_vol_ratio : {symbol: trailing vol / evren medyan vol}; trend_from_peer'a
+        gecer (return_std / fiyat bandi sembol oynakligina olceklenir).
     """
     scoring_cfg = scoring_cfg or PeerScoringConfig()
     thr = thr or ConfidenceThresholds()
@@ -117,7 +171,10 @@ def assemble_peer_table(
             r["segment_icir"], r["peer_label"],
             tradable=bool(tradable_for(r["symbol"])),
             stale=bool(stale_for(r["symbol"])),
-            universe_ok=universe_ok, thr=thr)
+            universe_ok=universe_ok, thr=thr,
+            n_eff=(composite_n_eff(r["segment_liq"], r["segment_vol"],
+                                   r["segment_sector"], neff_maps)
+                   if icir_maps is not None else None))
         labels.append(c.label)
         reasons.append(c.reasons)
         warns.append(c.warnings)
@@ -127,9 +184,12 @@ def assemble_peer_table(
 
     # --- mutlak trend eğilimi (Faz 7 kalibrasyonu) ---
     tcfg = trend_cfg or TrendCalibration()
-    t_labels, t_pup, t_exp, t_std = [], [], [], []
+    vol_ratios = symbol_vol_ratio or {}
+    t_labels, t_pup, t_exp, t_std, t_src = [], [], [], [], []
     for _, r in merged.iterrows():
-        t = trend_from_peer(r["peer_percentile"], r["universe_size"], tcfg)
+        t = trend_from_peer(r["peer_percentile"], r["universe_size"], tcfg,
+                            symbol_vol_ratio=vol_ratios.get(r["symbol"]))
+        t_src.append(t.probability_source)
         t_labels.append(t.label)
         t_pup.append(t.prob_up)
         t_exp.append(t.expected_return)
@@ -137,6 +197,9 @@ def assemble_peer_table(
     merged["trend_label"] = t_labels
     merged["trend_prob_up"] = t_pup
     merged["trend_expected_return"] = t_exp
+    # PeerStore'da kolon yok (peer_store.py bu gorevde degistirilmez): tablo kolonu +
+    # run config'inde saklanir; store eksik kolonlari yok sayar.
+    merged["probability_source"] = t_src
 
     # --- Kol-B pooled fiyat bandı ---
     last_closes = {}
@@ -226,9 +289,23 @@ def coverage_warnings(
 
 
 def segment_icir_from_table(seg_ic_table: pd.DataFrame) -> dict[str, float]:
-    """Faz 6 segment_cross_sectional_ic ciktisindan {segment: icir} sozlugu."""
+    """Faz 6 segment_cross_sectional_ic ciktisindan {segment: icir} sozlugu.
+
+    Ortusmeyen ICIR (`icir_nonoverlap`) kolonu varsa ve gecerliyse o tercih edilir
+    (confidence.select_segment_icir); yoksa eski ortusmeli `icir`.
+    """
     out = {}
     for _, r in seg_ic_table.iterrows():
-        v = r.get("icir")
+        v, _n = select_segment_icir(r.to_dict())
         out[str(r["segment"])] = float(v) if v is not None and np.isfinite(v) else float("nan")
+    return out
+
+
+def segment_neff_from_table(seg_ic_table: pd.DataFrame) -> dict[str, Optional[int]]:
+    """{segment: n_eff}: `segment_icir_from_table`'in ICIR'inin dayandigi ortusmeyen
+    tarih sayisi; ortusmeli geri-dusus (veya kolon yok) -> None (kapi uygulanmaz)."""
+    out: dict[str, Optional[int]] = {}
+    for _, r in seg_ic_table.iterrows():
+        _v, n = select_segment_icir(r.to_dict())
+        out[str(r["segment"])] = n
     return out

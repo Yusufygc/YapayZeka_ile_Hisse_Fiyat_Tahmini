@@ -11,9 +11,21 @@ Set-Location $RepoRoot
 $env:PYTHONUNBUFFERED = "1"
 $env:TQDM_DISABLE = "1"
 
-$Py = "C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe"
-if (-not (Test-Path $Py)) {
-    Write-Error "dl_env python bulunamadi: $Py"
+# Python yorumlayici: AI_CORE_PYTHON env -> proje .venv -> PATH'teki python.
+$Py = $null
+if ($env:AI_CORE_PYTHON -and (Test-Path $env:AI_CORE_PYTHON)) {
+    $Py = $env:AI_CORE_PYTHON
+} else {
+    $VenvPy = Join-Path $RepoRoot ".venv\Scripts\python.exe"
+    if (Test-Path $VenvPy) {
+        $Py = $VenvPy
+    } else {
+        $Cmd = Get-Command python -ErrorAction SilentlyContinue
+        if ($Cmd) { $Py = $Cmd.Source }
+    }
+}
+if (-not $Py) {
+    Write-Error "python bulunamadi (AI_CORE_PYTHON, .venv\Scripts\python.exe, PATH denendi)"
     exit 2
 }
 
@@ -27,7 +39,7 @@ $Log = Join-Path $LogDir "nightly_$Stamp.log"
 
 # stdout + stderr (PS 5.1: *>>) log'a eklenir.
 # --model ensemble (E2 Faz 9): LGB+MLP 2-bacak ensemble; ~4x gece hesap, IC +%18.
-& $Py "tools/e2_nightly_pipeline.py" --db "data/serving_pool.db" --boost 400 --model ensemble *>> $Log
+& $Py -m src.serving.nightly --db "data/serving_pool.db" --boost 400 --model ensemble --fallback-dir "data/yedek" *>> $Log
 $rc = $LASTEXITCODE
 
 "==== nightly_serving bitis exit=$rc $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ====" |

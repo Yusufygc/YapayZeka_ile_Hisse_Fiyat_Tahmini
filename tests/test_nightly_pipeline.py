@@ -1,19 +1,12 @@
 # -*- coding: utf-8 -*-
 """E2 Faz 8 — gecelik pipeline orkestratoru tests (ag yok)."""
 
-import importlib.util
-import os
 from datetime import date, datetime
 
 import pandas as pd
 import pytest
 
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SPEC = importlib.util.spec_from_file_location(
-    "e2_nightly_pipeline", os.path.join(_REPO, "tools", "e2_nightly_pipeline.py"))
-nl = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(nl)
-
+import src.serving.nightly as nl
 
 from src.data.data_updater import DataUpdateResult  # noqa: E402
 
@@ -132,36 +125,29 @@ def test_gate_target_boundary_close_hour():
 
 
 # ------------------------------------------------------------------ main flow
-def _argv(monkeypatch, *args):
-    monkeypatch.setattr(nl.sys, "argv", ["e2_nightly_pipeline.py", *args])
-
-
 def test_main_skips_on_non_trading_day(monkeypatch):
-    _argv(monkeypatch, "--skip-data")
     monkeypatch.setattr(nl, "is_trading_day", lambda d, calendar="XIST": False)
     called = {"score": False}
     monkeypatch.setattr(nl, "run_scoring",
-                        lambda *a, **k: called.__setitem__("score", True) or 0)
-    rc = nl.main()
+                        lambda args: called.__setitem__("score", True) or 0)
+    rc = nl.main(["--skip-data"])
     assert rc == 0
     assert called["score"] is False  # skip -> skorlama cagrilmadi
 
 
 def test_main_runs_scoring_on_trading_day(monkeypatch):
-    _argv(monkeypatch, "--skip-data", "--skip-trading-gate")
     seen = {}
     monkeypatch.setattr(nl, "run_scoring",
-                        lambda db, boost, data_dir, universe, limit=0, model="lgb":
-                        seen.update(db=db, boost=boost, model=model) or 0)
-    rc = nl.main()
+                        lambda a: seen.update(db=a.db, boost=a.boost, model=a.model,
+                                              fb=a.fallback_dir, qj=a.quarantine_jumps) or 0)
+    rc = nl.main(["--skip-data", "--skip-trading-gate"])
     assert rc == 0
     assert seen["db"] == "data/serving_pool.db" and seen["boost"] == 400
-    assert seen["model"] == "lgb"
+    assert seen["model"] == "lgb" and seen["fb"] == [] and seen["qj"] is True
 
 
 def test_main_skip_data_does_not_refresh(monkeypatch):
-    _argv(monkeypatch, "--skip-data", "--skip-trading-gate")
-    monkeypatch.setattr(nl, "run_scoring", lambda *a, **k: 0)
+    monkeypatch.setattr(nl, "run_scoring", lambda a: 0)
     monkeypatch.setattr(nl, "refresh_universe",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("cagrilmamali")))
-    assert nl.main() == 0  # refresh_universe cagrilmadi -> exception yok
+    assert nl.main(["--skip-data", "--skip-trading-gate"]) == 0

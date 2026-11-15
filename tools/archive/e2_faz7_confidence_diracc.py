@@ -17,7 +17,7 @@ Akis:
 
 Run (dl_env):
     set PYTHONUNBUFFERED=1 & set TQDM_DISABLE=1
-    python tools/e2_faz7_confidence_diracc.py --min-rows 300 --boost 400 --liq-floor-tl 3000000
+    python tools/archive/e2_faz7_confidence_diracc.py --min-rows 300 --boost 400 --liq-floor-tl 3000000
 
 Outputs:
     outputs/e2_faz7_confidence_diracc.md
@@ -33,7 +33,7 @@ import time
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from src.data.cross_sectional import (
     add_cross_sectional_features,
