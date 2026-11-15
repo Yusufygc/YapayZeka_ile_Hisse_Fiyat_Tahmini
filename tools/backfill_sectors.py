@@ -100,7 +100,8 @@ def main() -> None:
         return
 
     tmp = args.universe + ".tmp"
-    uni.to_csv(tmp, index=False, encoding="utf-8-sig")
+    # Kaynak dosya bicimi korunur (BOM yok, CRLF) ki diff yalniz Sector kolonu olsun.
+    uni.to_csv(tmp, index=False, encoding="utf-8", lineterminator="\r\n")
     os.replace(tmp, args.universe)
     print(f"[BACKFILL] universe guncellendi -> {args.universe}")
     print("[BACKFILL] sektor dagilimi:")

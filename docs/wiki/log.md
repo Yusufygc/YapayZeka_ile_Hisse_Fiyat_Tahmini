@@ -1,3 +1,18 @@
+## [2026-11-15] Data | Sektör etiketleri dolduruldu, outputs temizliği uygulandı
+
+- `tools/backfill_sectors.py` ile `data/bist_universe.csv` `Sector` kolonu yfinance GICS sektörüyle tek tip dolduruldu: 592 sembolün 578'i çözüldü, 14 `Unknown` (önce 584 boş, pooled panelde satırların %98,7'si Unknown). `Sector_Index` dokunulmadı. Yedek: `data/yedek_bak_20261115/bist_universe.csv.bak`. Betik artık dosya biçimini (BOM yok, CRLF) korur.
+- Kullanıcı onayıyla `tools/prune_outputs.py --keep 5 --clean-tmp --apply`: 24 eski run ve `.codex_tmp` (127 MB) silindi; `outputs/` ~539 MB.
+- 990 test geçiyor.
+
+## [2026-11-15] Fix | PSI 30g kalibrasyonu
+
+- Sorun: `compute_psi_30d` eşikleri (0.10/0.25) ve tahmin edicisi (eşit genişlik 3 bin, birleşik aralık, boş bin için eps=1e-4, 3 feature'ın max'ı) 30 örneklik pencerede gürültüyü drift sayıyordu. Gerçek veride (581 sembol, sembol başına her 21 iş günü placebo bitiş, 50.600 pencere) eski istatistiğin null medyanı 0.295, q90 0.92, q99 2.10 idi -> eski eşikler null medyanının bile altında; ilk 200 sembolde 86 major / 66 moderate.
+- Çözüm: referans (252g) kantil kesimli (%10/35/65/90, 5 açık uçlu bin) + Laplace (+1) yumuşatmalı yerel `_psi_smoothed`; 3 feature ortalaması. Paylaşılan `src/data/quality._psi_one_feature` (başka çağıran: `compute_psi`) değiştirilmedi.
+- Null (mean-PSI): q50 0.171 / q75 0.263 / q90 0.399 / q95 0.512 / q99 0.795. Yeni eşikler: moderate >= 0.40, major >= 0.80. Sentetik güç: 1 sigma ortalama kayması ~%95, 2x ölçek kayması ~%72 (q90'da); iid gürültüde ~%0 yanlış alarm.
+- Güncel pencere (585 CSV): stable 527 (%90,1) / moderate 51 (%8,7) / major 7 (%1,2) / unavailable 1 — null beklentisiyle (≈%10 / ≈%1) uyumlu. İlk 200 sembol: 184 / 13 / 3 (eskiden 48 / 66 / 86).
+- `analysis_service.py` uyarı/neden metinleri eşik sabitlerinden üretiliyor (`_>=0.80`, `PSI 30g < 0.40`). `psi_30d` artık max değil feature ortalaması. Wiki: persistence-and-api, analysis-api-contract, confidence-and-risk-policy güncellendi.
+- `tests/test_psi_monitor.py`: iid çoklu tohum (>=%90 stable), vol/hacim rejim kayması -> major, boş-bin patlamaması, tier sınırları. 990 test geçiyor.
+
 ## [2026-11-15] Fix | Veri yönetimi entegrasyonu: nightly toplu tazeleme, PSI kapısı, outputs sıkıştırma uygulandı
 
 - `src/serving/nightly.py::refresh_universe` artık `DataUpdater.update_many` (chunk + retry + kilit) kullanır; toplu çağrı patlarsa sembol başına tekli yola düşer. `--sleep-s` varsayılanı 0 (yalnız düşüş yolunda).
