@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Dict, Optional
 
 _DEFAULT_STALE_DAYS = 7
@@ -60,4 +60,57 @@ def serving_pool_status(
         "n_symbols": int(n_symbols or 0),
         "n_rows": int(n_rows or 0),
         "created_at": created_at,
+    }
+
+
+# Tamamlanmamis bir kosu bu sureden uzun suredir "calisiyor" gorunuyorsa oldurulmus sayilir
+# (Task Scheduler sinirinin biraz ustu; gece isi ~2 sa icinde bitmeli).
+_RUNNING_MAX_HOURS = 3.0
+
+
+def nightly_run_status(
+    db_path: Optional[str] = None,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Son gecelik kosunun durum dosyasi (`nightly_status.json`, serving DB'nin yaninda) ozeti.
+
+    `interrupted=True`: kosu bitmedi (completed=false) ve ya cokme kaydi var ya da
+    ``_RUNNING_MAX_HOURS``'tan eski -> surec oldurulmus/donmus. `healthy`: tamamlandi, cikis 0.
+    Dosya yok/bozuk ise `available=False`; istisna metni sizdirilmaz.
+    """
+    # Yalniz stdlib modul (agir bagimlilik yuklemez); durum dosyasi serving DB'nin yaninda.
+    from src.serving.run_status import read_status, status_path_for_db
+
+    try:
+        data = read_status(status_path_for_db(db_path or default_serving_db_path()))
+    except ValueError:
+        return {"available": False, "reason": "unreadable"}
+    if data is None:
+        return {"available": False, "reason": "no_status_file"}
+    completed = bool(data.get("completed"))
+    exit_code = data.get("exit_code")
+    interrupted = False
+    if not completed:
+        try:
+            started = datetime.fromisoformat(str(data.get("started_at")))
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            age_h = ((now or datetime.now(timezone.utc)) - started).total_seconds() / 3600.0
+            interrupted = data.get("phase") == "crashed" or age_h > _RUNNING_MAX_HOURS
+        except ValueError:
+            interrupted = True
+    return {
+        "available": True,
+        "started_at": data.get("started_at"),
+        "finished_at": data.get("finished_at"),
+        "phase": data.get("phase"),
+        "completed": completed,
+        "interrupted": interrupted,
+        "exit_code": exit_code,
+        "healthy": bool(completed and exit_code == 0),
+        "scoring": data.get("scoring"),
+        "stale_symbols_after_refresh": data.get("stale_symbols_after_refresh"),
+        "stale_fraction": data.get("stale_fraction"),
+        "refresh": data.get("refresh"),
+        "error": data.get("error"),
     }

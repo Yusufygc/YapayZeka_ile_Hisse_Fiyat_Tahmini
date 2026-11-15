@@ -3,7 +3,7 @@
 preprocessor.py — Veri Ön İşleme (Split, Scale, Windowing)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Zaman serisi verisini kronolojik sırayla train/test'e ayırır,
-RobustScaler ile ölçeklendirir ve LSTM için 3-boyutlu pencereler oluşturur.
+RobustScaler ile ölçeklendirir.
 
 ⚠ Data Leakage Önlemi: Scaler yalnızca eğitim verisi üzerinde fit edilir.
 
@@ -194,38 +194,3 @@ def reconstruct_prices_from_return(
 
     preds_return = np.clip(preds_return, -0.95, 5.0)
     return prev_close * (1.0 + preds_return)
-
-
-def create_sequences(
-    X: np.ndarray,
-    y: np.ndarray,
-    time_steps: int = 30,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    LSTM için kayan pencere (sliding window) yöntemiyle 3-boyutlu tensör üretir.
-
-    Girdi  : (N, features) -> Çıktı: (N - time_steps + 1, time_steps, features)
-    Hedef  : Her pencerenin son gününe ait hedef.
-
-    Semantik:
-      X[t] = t gününün sonunda bilinen özellikler
-      y[t] = t+1 gününün hedefi
-    Bu nedenle pencere [t-time_steps+1 ... t] -> y[t] eşleşmesi kurulur.
-
-    Parameters
-    ----------
-    X : np.ndarray  (samples, features)
-    y : np.ndarray  (samples, 1)
-    time_steps : int  Pencere uzunluğu (varsayılan: 30 gün).
-
-    Returns
-    -------
-    X_seq : np.ndarray  (samples - time_steps + 1, time_steps, features)
-    y_seq : np.ndarray  (samples - time_steps + 1,)
-    """
-    X_seq, y_seq = [], []
-    for end_idx in range(time_steps - 1, len(X)):
-        start_idx = end_idx - time_steps + 1
-        X_seq.append(X[start_idx : end_idx + 1])
-        y_seq.append(y[end_idx, 0])
-    return np.array(X_seq), np.array(y_seq)

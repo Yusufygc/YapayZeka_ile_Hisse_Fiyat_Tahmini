@@ -2,26 +2,17 @@
 """Lightweight model package exports.
 
 Model implementations are imported lazily so optional dependencies such as
-Prophet, TensorFlow, PyTorch, LightGBM, or joblib do not break unrelated tests
-or baseline-only workflows during package import.
+PyTorch, LightGBM, or joblib do not break unrelated tests or baseline-only
+workflows during package import.
 """
 
 _EXPORTS = {
-    "ProphetModel": ("prophet_model", "ProphetModel"),
     "XGBoostModel": ("xgboost_model", "XGBoostModel"),
-    "AttentionLSTMModel": ("lstm_model", "AttentionLSTMModel"),
-    "AttentionLSTMV2Model": ("attention_lstm_v2_model", "AttentionLSTMV2Model"),
-    "LSTMLiteModel": ("lstm_lite_model", "LSTMLiteModel"),
-    "RandomForestModel": ("random_forest_model", "RandomForestModel"),
     "NaiveLastValueModel": ("naive_model", "NaiveLastValueModel"),
     "NaiveZeroReturnModel": ("naive_model", "NaiveZeroReturnModel"),
     "NaiveDriftModel": ("naive_model", "NaiveDriftModel"),
-    "ARIMAModel": ("arima_model", "ARIMAModel"),
     "RidgeReturnModel": ("linear_model", "RidgeReturnModel"),
-    "ElasticNetReturnModel": ("linear_model", "ElasticNetReturnModel"),
     "LightGBMReturnModel": ("gradient_boosting_model", "LightGBMReturnModel"),
-    "DLinearSequenceModel": ("linear_sequence_model", "DLinearSequenceModel"),
-    "NLinearSequenceModel": ("linear_sequence_model", "NLinearSequenceModel"),
 }
 
 __all__ = list(_EXPORTS)
@@ -41,7 +32,7 @@ def __getattr__(name):
 
 # --- Plug-in kesfi (Faz 1 - additive) ------------------------------------
 # `model_registry.ensure_loaded()` tarafindan bir kez cagrilir.
-# Her *_model.py (ve linear_sequence_model) import edilince
+# Her *_model.py import edilince
 # iclerindeki `register_model(ModelSpec(...))` cagrilari registry'i doldurur.
 _DISCOVERED = False
 
@@ -64,11 +55,8 @@ def _discover_models() -> None:
     # Discover kapsami: bu paketin dogrudan modulleri/alt paketleri.
     for mod_info in pkgutil.iter_modules(__path__):
         name = mod_info.name
-        # Sadece model dosyalari ve bilinen alt paketler.
-        if not (
-            name.endswith("_model")
-            or name == "linear_sequence_model"
-        ):
+        # Sadece model dosyalari.
+        if not name.endswith("_model"):
             continue
         # base_model abstrakttir, kayit gerekmez.
         if name == "base_model":

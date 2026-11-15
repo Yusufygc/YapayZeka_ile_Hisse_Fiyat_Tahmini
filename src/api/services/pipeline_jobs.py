@@ -82,6 +82,12 @@ def start_pipeline_job(
     def _bg_run() -> None:
         _jobs[job_id]["status"] = "running"
         try:
+            if request.models:
+                # Kaldirilmis/bilinmeyen model -> job hata mesajiyla 'error' olur
+                # (sessizce yalniz naive benchmark egitilip 'completed' denmez).
+                from src.pipeline.model_scope import validate_selected_models
+
+                validate_selected_models(request.models)
             data_file = os.path.join(project_root, request.data_dir, f"{symbol}.csv")
             if not os.path.exists(data_file):
                 raise FileNotFoundError(f"Veri dosyası bulunamadı: {data_file}")

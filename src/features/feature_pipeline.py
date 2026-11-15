@@ -4,43 +4,46 @@ feature_pipeline.py — Modular Feature Engineering
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Teknik göstergeler + isteğe bağlı makroekonomik özellikler üretir.
 
-Adımlar:
-  1. Getiri hesaplamaları (Return, Log_Return)
-  2. Hareketli ortalamalar → fiyata göre göreli oran (SMA_N_rel, EMA_N_rel)
-  3. Volatilite → fiyata göre normalize (RollStd_N_norm, BB_Width)
-  4. Momentum göstergeleri (RSI — zaten 0-100, MACD → fiyata göre normalize)
-  5. Makro bağlam (USD/TRY, BIST100, faiz, CPI) — opsiyonel
-     + Göreli güç (Relative_Strength = hisse getirisi − BIST100 getirisi)
+2026-11 IC denetimi sonrasi KURATE ozellik seti (stationary_features, makro var,
+takvim acik) — 19 model ozelligi:
+  Return, SMA_{7,21,50}_rel, RollStd_{14,21}_norm, NATR_14, RSI_14,
+  MACD_Diff_norm, LogRet_Lag_1, day_of_week,
+  USDTRY_Return, USDTRY_Volatility7, BIST100_Return, BIST100_MA7,
+  Relative_Strength, momentum_60d, market_momentum_60d, relative_to_market_60d.
 
-v2 (H2 düzeltmesi):
-  Tüm fiyat-birimi özellikler (SMA, EMA, RollingStd, MACD) **stasyonerleştirildi**
-  (Close'a göre oran alınarak). Böylece trend piyasasında bu özellikler 0'ın
-  etrafında dalgalanır ve test döneminde ölçekleyici dışına fırlayıp OOD
-  üretmez. Eskiden SMA_50 train-max'ının 2-3 katı olunca MinMaxScaler
-  [0,1] aralığı dışına ekstrapole ediyor → model eğitim ortalamasına çöküyordu.
+Denetimde tam/yakin kopya (rank corr > 0.9) veya gurultu cikan ozellikler
+(EMA_*, SMA_14, BB_Width, MACD_norm/Signal, ADX/MFI/CMF, OBV/VWAP, takvim
+detaylari, FOMC, sektor endeksi, EURTRY/VIX/Altin/Petrol/DXY/US10Y, faiz/CPI)
+KALDIRILDI. Detay: docs/wiki/data-pipeline.md (ayri adimda guncellenir).
+
+Notlar:
+  * ``Log_Return`` sutunu artik uretilmez (``Return`` ile rank-ozdes). Lag
+    ozellikleri log-getiriyi dogrudan Close'dan hesaplar.
+  * ``Market_Regime_SMA200`` model OZELLIGI DEGILDIR; sinyal/backtest kapilari
+    (data_services -> backtesting) okudugu icin frame'de hesaplanmaya devam eder
+    ve ``feature_names``/model girdisinden dislanir (src/data/panel_columns.py).
+  * Tum fiyat-birimi ozellikler Close'a gore stasyonerlestirilir (oran).
 """
 
 import logging
-import os
 import pandas as pd
 import numpy as np
 import ta
 from typing import Optional
 
+from src.data.panel_columns import PIPELINE_AUX_COLS
 from src.features.correlation_pruning import prune_correlated_features
-from src.features.sector_mapping import (
-    DEFAULT_SECTOR_INDEX,
-    SectorMapping,
-    sector_return_column,
-)
+from src.features.sector_mapping import SECTOR_FEATURES_DISABLED_REPORT
 from src.xai.feature_dictionary import feature_group
-
-# Sprint 7 (2026-05-25) A7.1: takvim feature'lari icin statik FOMC kaynak.
-_DEFAULT_FOMC_CSV = os.path.join("data", "meta", "fomc_calendar.csv")
-_FOMC_LARGE_GAP_DAYS = 365  # sonraki FOMC bulunamazsa kullanilacak yer tutucu
 
 # Sprint 7 A7.2: cross-sectional momentum lookback (is gunu).
 _MOMENTUM_LOOKBACK_DAYS = 60
+
+# Stationary mod pencereleri (kurate set). Legacy/hybrid mutlak SMA/EMA eski
+# pencerelerle (14 dahil) uretilmeye devam eder.
+_STATIONARY_SMA_WINDOWS = (7, 21, 50)
+_LEGACY_MA_WINDOWS = (7, 14, 21, 50)
+_VOL_WINDOWS = (14, 21)
 
 
 logger = logging.getLogger(__name__)
@@ -64,8 +67,7 @@ class FeaturePipeline:
         feature_mode: str = "stationary_features",
         prune_correlated_features: bool = False,
         correlation_threshold: float = 0.88,
-        lag_feature_count: int = 5,
-        fomc_calendar_path: Optional[str] = None,
+        lag_feature_count: int = 1,
         enable_calendar_features: bool = True,
         enable_cross_sectional_momentum: bool = True,
     ):
@@ -81,13 +83,11 @@ class FeaturePipeline:
         self.lag_feature_count = max(0, int(lag_feature_count))
         self.enable_calendar_features = bool(enable_calendar_features)
         self.enable_cross_sectional_momentum = bool(enable_cross_sectional_momentum)
-        self.fomc_calendar_path = fomc_calendar_path
-        self._fomc_dates_cache: Optional[np.ndarray] = None
         self.feature_groups: dict[str, str] = {}
-        self.sector_mapping_report: dict = {
-            "status": "not_evaluated",
-            "feature_created": False,
-        }
+        # Sektor endeksi ozellikleri kaldirildi (IC denetimi: sektor endeksi serileri
+        # hic feature matrisine ulasmiyordu; "sektor" kolonlari BIST100 kopyasiydi).
+        # Rapor anahtari tuketiciler (metadata/manifest) icin dogru durumla korunur.
+        self.sector_mapping_report: dict = dict(SECTOR_FEATURES_DISABLED_REPORT)
         self.pruning_report: dict = {
             "enabled": prune_correlated_features,
             "threshold": correlation_threshold,
@@ -100,7 +100,6 @@ class FeaturePipeline:
         df: pd.DataFrame,
         macro_df: Optional[pd.DataFrame] = None,
         symbol: Optional[str] = None,
-        sector_mapping: Optional[SectorMapping | dict] = None,
         prune_fit_tail: int = 0,
     ) -> pd.DataFrame:
         """
@@ -111,7 +110,7 @@ class FeaturePipeline:
             macro_df : MacroPipeline'dan gelen makro özellik DataFrame'i
                        (Date sütunu + makro sütunlar).
                        None ise makro katman atlanır.
-            symbol   : Sektörel eşleştirme için opsiyonel hisse sembolü.
+            symbol   : Geriye uyumluluk icin korunur (kullanilmaz).
 
         Returns:
             Model eğitimine hazır, NaN içermeyen DataFrame.
@@ -121,46 +120,34 @@ class FeaturePipeline:
         # 1. Getiriler
         df = self._add_returns(df)
 
-        # 2. Hareketli Ortalamalar
+        # 2. Hareketli Ortalamalar (+ sinyal kapilari icin piyasa rejimi; OZELLIK DEGIL)
         df = self._add_moving_averages(df)
         df = self._add_market_regime(df)
 
-        # 3. Volatilite & Bollinger
+        # 3. Volatilite
         df = self._add_volatility(df)
 
         # 4. Momentum
         df = self._add_momentum_indicators(df)
 
-        # 5. Volume and stationary lag features
-        df = self._add_volume_features(df)
+        # 5. Stasyoner lag ozellikleri
         df = self._add_lag_features(df)
 
-        # 5b. Takvim feature'lari (Sprint 7 A7.1) — Date'e bagli, OHLCV'den
-        # bagimsiz. Macro merge'den once ekleniyor ki cross-sectional
-        # momentum hesabi da bunlari gorebilsin.
+        # 5b. Takvim feature'lari — Date'e bagli, OHLCV'den bagimsiz.
         if self.enable_calendar_features:
             df = self._add_calendar_features(df)
 
-        # 5. Makro bağlam (opsiyonel)
+        # 6. Makro bağlam (opsiyonel)
         if macro_df is not None and not macro_df.empty:
-            df = self._merge_macro(
-                df,
-                macro_df,
-                symbol=symbol,
-                sector_mapping=sector_mapping,
-            )
-        else:
-            self.sector_mapping_report = {
-                **self._sector_mapping_dict(symbol, sector_mapping),
-                "status": "skipped",
-                "reason": "macro_data_missing",
-                "feature_created": False,
-            }
+            df = self._merge_macro(df, macro_df)
 
         # NaN temizle
         df = df.dropna().reset_index(drop=True)
 
-        candidate_features = [c for c in df.columns if c not in ["Date", self.close_col]]
+        candidate_features = [
+            c for c in df.columns
+            if c not in ["Date", self.close_col] and c not in PIPELINE_AUX_COLS
+        ]
         if self.prune_correlated_features:
             df, candidate_features = self._prune_correlated(
                 df, candidate_features, prune_fit_tail=prune_fit_tail
@@ -196,8 +183,9 @@ class FeaturePipeline:
 
     # ── Teknik Göstergeler ────────────────────────────────────────────────────
     def _add_returns(self, df: pd.DataFrame) -> pd.DataFrame:
+        # Log_Return kaldirildi: Return ile rank-ozdes (lag ozellikleri log-getiriyi
+        # _add_lag_features icinde Close'dan hesaplar).
         df["Return"] = df[self.close_col].pct_change()
-        df["Log_Return"] = np.log(df[self.close_col] / df[self.close_col].shift(1))
         return df
 
     def _add_moving_averages(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -209,20 +197,23 @@ class FeaturePipeline:
         Bu dönüşüm serinin stasyoner olmasını sağlar: trend piyasasında
         oranlar uzun vadede 0 civarında kalır, MinMax/Robust skalanın
         dışına fırlamaz.
+
+        Kurate set: yalniz SMA_{7,21,50}_rel (EMA_*_rel ve SMA_14_rel kopya/gurultu).
+        Legacy/hybrid modda mutlak SMA/EMA eski pencerelerle uretilir.
         """
         close = df[self.close_col]
-        for w in [7, 14, 21, 50]:
-            sma = ta.trend.sma_indicator(close, window=w)
-            ema = ta.trend.ema_indicator(close, window=w)
-            if self.feature_mode in {"stationary_features", "hybrid"}:
+        if self.feature_mode in {"stationary_features", "hybrid"}:
+            for w in _STATIONARY_SMA_WINDOWS:
+                sma = ta.trend.sma_indicator(close, window=w)
                 df[f"SMA_{w}_rel"] = close / sma.replace(0, np.nan) - 1.0
-                df[f"EMA_{w}_rel"] = close / ema.replace(0, np.nan) - 1.0
-            if self.feature_mode in {"legacy_price_features", "hybrid"}:
-                df[f"SMA_{w}"] = sma
-                df[f"EMA_{w}"] = ema
+        if self.feature_mode in {"legacy_price_features", "hybrid"}:
+            for w in _LEGACY_MA_WINDOWS:
+                df[f"SMA_{w}"] = ta.trend.sma_indicator(close, window=w)
+                df[f"EMA_{w}"] = ta.trend.ema_indicator(close, window=w)
         return df
 
     def _add_market_regime(self, df: pd.DataFrame) -> pd.DataFrame:
+        """SMA-200 rejimi (+1/-1/0). Sinyal/backtest kapisi girdisi; model OZELLIGI DEGIL."""
         close = df[self.close_col]
         sma_200 = close.rolling(window=200, min_periods=200).mean()
         regime = np.where(close > sma_200, 1, -1)
@@ -235,16 +226,15 @@ class FeaturePipeline:
         v2: Rolling_Std fiyat birimiydi (₺). Fiyat arttıkça büyüyor →
             non-stationary. RollStd_N_norm = Rolling_Std_N / Close
             (rolling coefficient of variation) ile stasyoner yapılır.
-            BB_Width zaten oran (%); olduğu gibi kalır.
+        BB_Width_* kaldirildi (RollStd_*_norm ile rank corr > 0.9).
         """
         close = df[self.close_col]
-        for w in [14, 21]:
+        for w in _VOL_WINDOWS:
             rolling_std = close.rolling(window=w).std()
-            bb = ta.volatility.BollingerBands(close=close, window=w, window_dev=2)
             if self.feature_mode in {"stationary_features", "hybrid"}:
                 df[f"RollStd_{w}_norm"] = rolling_std / close.replace(0, np.nan)
-                df[f"BB_Width_{w}"] = bb.bollinger_wband()
             if self.feature_mode in {"legacy_price_features", "hybrid"}:
+                bb = ta.volatility.BollingerBands(close=close, window=w, window_dev=2)
                 df[f"Rolling_Std_{w}"] = rolling_std
                 df[f"BB_Upper_{w}"] = bb.bollinger_hband()
                 df[f"BB_Lower_{w}"] = bb.bollinger_lband()
@@ -261,7 +251,8 @@ class FeaturePipeline:
     def _add_momentum_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         v2: RSI zaten 0-100 arası → stasyoner, korunur.
-            MACD/MACD_Signal/MACD_Diff fiyat birimiydi → Close'a bölünür.
+            MACD_Diff fiyat birimiydi → Close'a bölünür (MACD_norm/MACD_Signal_norm
+            ve ADX/MFI/CMF kurate sette yok).
         """
         close = df[self.close_col]
         df["RSI_14"] = ta.momentum.rsi(close=close, window=14)
@@ -269,27 +260,7 @@ class FeaturePipeline:
         macd = ta.trend.MACD(close=close)
         close_safe = close.replace(0, np.nan)
         if self.feature_mode in {"stationary_features", "hybrid"}:
-            df["MACD_norm"] = macd.macd() / close_safe
-            df["MACD_Signal_norm"] = macd.macd_signal() / close_safe
             df["MACD_Diff_norm"] = macd.macd_diff() / close_safe
-
-            # ADX, MFI, CMF stasyoner indikatörleri
-            high = df[self.high_col]
-            low = df[self.low_col]
-            volume = df[self.volume_col].astype(float)
-
-            mfi_ind = ta.volume.MFIIndicator(
-                high=high, low=low, close=close, volume=volume, window=14
-            )
-            df["MFI_14"] = mfi_ind.money_flow_index()
-
-            adx_ind = ta.trend.ADXIndicator(high=high, low=low, close=close, window=14)
-            df["ADX_14"] = adx_ind.adx()
-
-            cmf_ind = ta.volume.ChaikinMoneyFlowIndicator(
-                high=high, low=low, close=close, volume=volume, window=20
-            )
-            df["CMF_20"] = cmf_ind.chaikin_money_flow()
 
         if self.feature_mode in {"legacy_price_features", "hybrid"}:
             df["MACD"] = macd.macd()
@@ -297,119 +268,53 @@ class FeaturePipeline:
             df["MACD_Diff"] = macd.macd_diff()
         return df
 
-    # ── Makro Birleştirme ─────────────────────────────────────────────────────
-    def _add_volume_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        close = df[self.close_col]
-        high = df[self.high_col]
-        low = df[self.low_col]
-        volume = df[self.volume_col].astype(float)
-        volume_sum_20 = volume.rolling(20).sum().replace(0, np.nan)
-
-        direction = np.sign(close.diff()).fillna(0.0)
-        obv_flow = direction * volume
-        df["OBV_Norm_20"] = obv_flow.rolling(20).sum() / volume_sum_20
-
-        typical_price = (high + low + close) / 3.0
-        vwap_20 = (typical_price * volume).rolling(20).sum() / volume_sum_20
-        df["VWAP_20_rel"] = close / vwap_20.replace(0, np.nan) - 1.0
-        return df
-
     def _add_lag_features(self, df: pd.DataFrame) -> pd.DataFrame:
         if self.lag_feature_count <= 0:
             return df
-        log_ret = (
-            df["Log_Return"]
-            if "Log_Return" in df.columns
-            else np.log(df[self.close_col] / df[self.close_col].shift(1))
-        )
+        close = df[self.close_col]
+        log_ret = np.log(close / close.shift(1))
         for i in range(1, self.lag_feature_count + 1):
             df[f"LogRet_Lag_{i}"] = log_ret.shift(i)
         return df
 
-    # ── Sprint 7 (2026-05-25) Plan A7.1 — Takvim Feature'lari ────────────────
-    def _load_fomc_dates(self) -> np.ndarray:
-        """FOMC takvimini lazy cache'le. CSV yoksa bos dizi."""
-        if self._fomc_dates_cache is not None:
-            return self._fomc_dates_cache
-        path = self.fomc_calendar_path or _DEFAULT_FOMC_CSV
-        try:
-            if not os.path.exists(path):
-                self._fomc_dates_cache = np.array([], dtype="datetime64[ns]")
-                return self._fomc_dates_cache
-            raw = pd.read_csv(path)
-            dates = pd.to_datetime(raw["Date"], errors="coerce").dropna()
-            self._fomc_dates_cache = np.sort(dates.values.astype("datetime64[ns]"))
-        except Exception:
-            self._fomc_dates_cache = np.array([], dtype="datetime64[ns]")
-        return self._fomc_dates_cache
-
+    # ── Takvim Feature'lari ───────────────────────────────────────────────────
     def _add_calendar_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Date sutununa dayali stasyoner takvim feature'lari.
+        Date sutununa dayali stasyoner takvim feature'i.
 
-        Uretilen sutunlar:
-          - day_of_week (0=Pazartesi ... 4=Cuma)
-          - day_of_month (1..31)
-          - days_to_month_end (>= 0)
-          - days_to_quarter_end (>= 0)
-          - is_quarter_end_week (0/1) — quarter sonuna <= 5 takvim gunu
-          - days_to_next_fomc (>= 0; bulunamazsa _FOMC_LARGE_GAP_DAYS)
+        Uretilen sutun: day_of_week (0=Pazartesi ... 4=Cuma).
+        day_of_month / days_to_month_end / days_to_quarter_end /
+        is_quarter_end_week / days_to_next_fomc kaldirildi (IC denetimi: gurultu).
         """
         if "Date" not in df.columns:
             return df
         dates = pd.to_datetime(df["Date"], errors="coerce")
         df["day_of_week"] = dates.dt.dayofweek.astype("Int64").astype(float)
-        df["day_of_month"] = dates.dt.day.astype("Int64").astype(float)
-
-        month_end = dates + pd.offsets.MonthEnd(0)
-        df["days_to_month_end"] = (month_end - dates).dt.days.astype("Int64").astype(float)
-
-        quarter_end = dates + pd.offsets.QuarterEnd(0)
-        days_to_qe = (quarter_end - dates).dt.days
-        df["days_to_quarter_end"] = days_to_qe.astype("Int64").astype(float)
-        df["is_quarter_end_week"] = (days_to_qe <= 5).astype(int).astype(float)
-
-        # FOMC: her satir icin sonraki tarihin gun farki.
-        fomc = self._load_fomc_dates()
-        if fomc.size == 0:
-            df["days_to_next_fomc"] = float(_FOMC_LARGE_GAP_DAYS)
-        else:
-            d_ns = dates.values.astype("datetime64[ns]")
-            idx = np.searchsorted(fomc, d_ns, side="left")
-            out = np.full(len(d_ns), _FOMC_LARGE_GAP_DAYS, dtype=float)
-            valid = idx < fomc.size
-            if valid.any():
-                next_d = fomc[idx[valid]]
-                delta = (next_d - d_ns[valid]).astype("timedelta64[D]").astype(int)
-                out[valid] = delta.astype(float)
-            df["days_to_next_fomc"] = out
         return df
 
     # ── Sprint 5 (2026-05-25) Plan A5.1 ──────────────────────────────────────
     def recompute_close_dependent(self, frame: pd.DataFrame) -> pd.DataFrame:
         """
         Recursive forecast sonrasi close sutunundan turetilen tum teknik
-        gostergeleri yeniden hesaplar. Macro/sector/lag sutunlari KORUNUR
-        (lag_features Sprint 5 oncesi pattern'i takip eder; macro Sprint 5
-        A5.2'de ayri MacroForwardProjector ile guncellenir).
+        gostergeleri yeniden hesaplar. Macro/lag sutunlari KORUNUR
+        (lag _append_recursive_row'da ele alinir; macro Sprint 5 A5.2'de ayri
+        MacroForwardProjector ile guncellenir; cross-sectional momentum
+        ``recompute_momentum_features`` ile makro projeksiyondan SONRA tazelenir).
 
         Mevcut feature_mode'a uygun (stationary/legacy/hybrid) tum
         close-bagimli sutunlari tekrar uretir:
-          - Return / Log_Return
-          - SMA_*_rel / EMA_*_rel (+ legacy SMA/EMA mutlak)
-          - Market_Regime_SMA200
-          - RollStd_*_norm / BB_Width_* / NATR_14 (+ legacy abs)
-          - RSI_14 / MACD_norm / MACD_Signal_norm / MACD_Diff_norm
-            (+ legacy MACD/MACD_Signal/MACD_Diff)
-          - MFI_14 / ADX_14 / CMF_20
-          - OBV_Norm_20 / VWAP_20_rel
+          - Return
+          - SMA_{7,21,50}_rel (+ legacy SMA/EMA mutlak)
+          - Market_Regime_SMA200 (model ozelligi degil; sinyal kapisi girdisi)
+          - RollStd_*_norm / NATR_14 (+ legacy abs)
+          - RSI_14 / MACD_Diff_norm (+ legacy MACD/MACD_Signal/MACD_Diff)
 
         Args:
             frame: En son recursive satir eklenmiş DataFrame.
 
         Returns:
             Ayni DataFrame, close-bagimli sutunlari yeniden hesaplanmis.
-            Macro + sector + lag + diger ek sutunlar dokunulmaz.
+            Macro + lag + diger ek sutunlar dokunulmaz.
         """
         out = frame.copy()
         # Sirali zincir — orjinal engineer_features sirasini koru.
@@ -418,23 +323,41 @@ class FeaturePipeline:
         out = self._add_market_regime(out)
         out = self._add_volatility(out)
         out = self._add_momentum_indicators(out)
-        out = self._add_volume_features(out)
         return out
 
-    def _merge_macro(
-        self,
-        df: pd.DataFrame,
-        macro_df: pd.DataFrame,
-        symbol: Optional[str] = None,
-        sector_mapping: Optional[SectorMapping | dict] = None,
-    ) -> pd.DataFrame:
+    def recompute_momentum_features(self, frame: pd.DataFrame) -> pd.DataFrame:
+        """Recursive adim sonrasi momentum_60d / market_momentum_60d / relative_to_market_60d'yi tazeler.
+
+        Makro projeksiyondan (BIST100_Return -> 0) SONRA cagrilmali. Frame'de
+        ``momentum_60d`` yoksa (momentum uretilmemisse) dokunmaz.
+        """
+        if "momentum_60d" not in frame.columns:
+            return frame
+        out = frame.copy()
+        if "market_momentum_60d" in out.columns and "BIST100_Return" in out.columns:
+            # Gecmis satirlarin piyasa momentumu makro takviminde (tarihe gore) hesaplandi
+            # ve KORUNUR; yalniz yeni (sentetik) son satir, projekte BIST100_Return ile
+            # tazelenir. (Satir-bazli yeniden hesap eksik gunlu hissede kayik pencere olur.)
+            history = out["market_momentum_60d"].copy()
+            out = self._add_cross_sectional_momentum(out.drop(columns=["market_momentum_60d"]))
+            fresh_last = out["market_momentum_60d"].iloc[-1]
+            out["market_momentum_60d"] = history
+            if pd.notna(fresh_last):
+                out.loc[out.index[-1], "market_momentum_60d"] = fresh_last
+            out["relative_to_market_60d"] = out["momentum_60d"] - out["market_momentum_60d"]
+            return out
+        return self._add_cross_sectional_momentum(out)
+
+    # ── Makro Birleştirme ─────────────────────────────────────────────────────
+    def _merge_macro(self, df: pd.DataFrame, macro_df: pd.DataFrame) -> pd.DataFrame:
         """
         Makro DataFrame'i hisse DataFrame'iyle tarihe göre birleştirir.
         Eksik günler forward-fill ile doldurulur.
 
         Ek özellikler:
           Relative_Strength = hisse Return − BIST100_Return
-          Sector_Relative_Strength = hisse Return − sektörel getiri (veya BIST100 fallback)
+          momentum_60d / market_momentum_60d / relative_to_market_60d
+        (Sector_Relative_Strength ve sektor momentumu kaldirildi.)
         """
         # Date sütunu normalize
         df_dates = pd.to_datetime(df["Date"]).dt.normalize()
@@ -444,6 +367,13 @@ class FeaturePipeline:
         macro_cp = macro_df.copy()
         df["Date"] = df_dates
         macro_cp["Date"] = macro_dates
+
+        # Piyasa 60g momentumu MAKRO TAKVIMINDE hesaplanir (hisse satirlarinda degil):
+        # eksik gunu olan hissede satir-bazli rolling(60) kayik pencere uretirdi; boylece
+        # ayni tarihte tum hisseler icin ayni deger olur. Seviye kolonu gibi ffill edilir.
+        if self.enable_cross_sectional_momentum and "BIST100_Return" in macro_cp.columns:
+            macro_cp = macro_cp.sort_values("Date").reset_index(drop=True)
+            macro_cp["market_momentum_60d"] = self._market_momentum(macro_cp["BIST100_Return"])
 
         # Sol birleşim: hisse veri setinin tarih kümesini koru
         merged = pd.merge(df, macro_cp, on="Date", how="left")
@@ -489,57 +419,9 @@ class FeaturePipeline:
                 "BIST100_Return"
             ].fillna(0)
 
-        # Sektörel Göreli Güç
-        if "Return" in merged.columns:
-            sector_report = self._sector_mapping_dict(symbol, sector_mapping)
-            sector_col = sector_return_column(sector_report.get("sector_index"))
-            if sector_col in merged.columns:
-                merged["Sector_Relative_Strength"] = merged["Return"].fillna(0) - merged[
-                    sector_col
-                ].fillna(0)
-                self.sector_mapping_report = {
-                    **sector_report,
-                    "feature_created": True,
-                    "feature_column": "Sector_Relative_Strength",
-                    "return_column": sector_col,
-                }
-            elif "BIST100_Return" in merged.columns:
-                merged["Sector_Relative_Strength"] = merged["Return"].fillna(0) - merged[
-                    "BIST100_Return"
-                ].fillna(0)
-                self.sector_mapping_report = {
-                    **sector_report,
-                    "sector_index": DEFAULT_SECTOR_INDEX,
-                    "status": "fallback",
-                    "reason": "sector_return_missing",
-                    "feature_created": True,
-                    "feature_column": "Sector_Relative_Strength",
-                    "return_column": "BIST100_Return",
-                    "requested_return_column": sector_col,
-                }
-            else:
-                self.sector_mapping_report = {
-                    **sector_report,
-                    "status": "skipped",
-                    "reason": "bist100_return_missing",
-                    "feature_created": False,
-                    "requested_return_column": sector_col,
-                }
-
-        # Sprint 7 (2026-05-25) A7.2 — Cross-sectional momentum.
-        # Hisse 60g momentumu vs sektor / BIST100. Sadece veri varsa eklenir;
-        # eksikse sessiz atla (NaN sonrasi dropna train icin sorun olmasin).
+        # Sprint 7 A7.2 — Cross-sectional momentum (hisse 60g vs BIST100).
         if self.enable_cross_sectional_momentum:
-            merged = self._add_cross_sectional_momentum(
-                merged,
-                sector_return_col=(
-                    sector_return_column(
-                        self._sector_mapping_dict(symbol, sector_mapping).get(
-                            "sector_index"
-                        )
-                    )
-                ),
-            )
+            merged = self._add_cross_sectional_momentum(merged)
 
         # Drop non-stationary features if they exist
         for col in ["BIST100_Norm", "USDTRY_MA7"]:
@@ -548,20 +430,16 @@ class FeaturePipeline:
 
         return merged
 
-    def _add_cross_sectional_momentum(
-        self,
-        df: pd.DataFrame,
-        sector_return_col: Optional[str] = None,
-    ) -> pd.DataFrame:
+    def _add_cross_sectional_momentum(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Hisse 60g momentumu vs sektor + BIST100 goreli momentum sutunlari.
+        Hisse 60g momentumu + BIST100 goreli momentum sutunlari.
 
         Sutunlar:
           - momentum_60d            (hisse Close.pct_change(60))
-          - sector_momentum_60d     (sektor index Return'unden cumprod, varsa)
           - market_momentum_60d     (BIST100_Return cumprod, varsa)
-          - relative_momentum_60d   (hisse - sektor; ikisi de varsa)
           - relative_to_market_60d  (hisse - market; ikisi de varsa)
+        (sector_momentum_60d / relative_momentum_60d kaldirildi: sektor endeksi
+        serileri hic ulasmiyor, BIST100 kopyasi uretiyordu.)
         """
         out = df
         close = out.get(self.close_col)
@@ -571,54 +449,18 @@ class FeaturePipeline:
 
         out["momentum_60d"] = close.pct_change(lookback)
 
-        def _cum_from_returns(ret_series: pd.Series) -> pd.Series:
-            log_ret = np.log1p(ret_series.fillna(0.0))
-            roll_sum = log_ret.rolling(lookback).sum()
-            return np.expm1(roll_sum)
-
         if "BIST100_Return" in out.columns:
-            out["market_momentum_60d"] = _cum_from_returns(out["BIST100_Return"])
+            if "market_momentum_60d" not in out.columns:
+                # Makro takviminde onceden hesaplanmamis (dogrudan cagri): satir-bazli yedek.
+                out["market_momentum_60d"] = self._market_momentum(out["BIST100_Return"])
             out["relative_to_market_60d"] = (
                 out["momentum_60d"] - out["market_momentum_60d"]
             )
 
-        if (
-            sector_return_col
-            and sector_return_col in out.columns
-            and sector_return_col != "BIST100_Return"
-        ):
-            out["sector_momentum_60d"] = _cum_from_returns(out[sector_return_col])
-            out["relative_momentum_60d"] = (
-                out["momentum_60d"] - out["sector_momentum_60d"]
-            )
-        elif "BIST100_Return" in out.columns:
-            # Sektor index yok → fallback BIST100; ayri ad ile.
-            out["sector_momentum_60d"] = out["market_momentum_60d"]
-            out["relative_momentum_60d"] = out["relative_to_market_60d"]
-
         return out
 
     @staticmethod
-    def _sector_mapping_dict(
-        symbol: Optional[str],
-        sector_mapping: Optional[SectorMapping | dict],
-    ) -> dict:
-        if isinstance(sector_mapping, SectorMapping):
-            return sector_mapping.to_dict()
-        if isinstance(sector_mapping, dict):
-            defaults = FeaturePipeline._default_sector_mapping(symbol)
-            defaults.update(dict(sector_mapping))
-            return defaults
-        return FeaturePipeline._default_sector_mapping(symbol)
-
-    @staticmethod
-    def _default_sector_mapping(symbol: Optional[str]) -> dict:
-        return {
-            "symbol": "" if symbol is None else str(symbol).split(".")[0].upper(),
-            "sector_index": DEFAULT_SECTOR_INDEX,
-            "sector": None,
-            "status": "fallback",
-            "reason": "mapping_not_provided",
-            "source": "fallback",
-            "universe_file": None,
-        }
+    def _market_momentum(bist100_return: pd.Series) -> pd.Series:
+        """BIST100 getirilerinin 60 satirlik kumulatif getirisi (log-toplam -> expm1)."""
+        log_ret = np.log1p(bist100_return.fillna(0.0))
+        return np.expm1(log_ret.rolling(_MOMENTUM_LOOKBACK_DAYS).sum())

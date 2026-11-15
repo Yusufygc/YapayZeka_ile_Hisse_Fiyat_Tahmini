@@ -37,6 +37,7 @@ from src.data.market_providers import (  # noqa: F401  (YFinanceProvider geriye 
     DEFAULT_BACKOFF_S,
     DEFAULT_CHUNK_SIZE,
     DEFAULT_MAX_RETRIES,
+    DEFAULT_REFRESH_DEADLINE_S,
     MarketDataProvider,
     YFinanceProvider,
     download_with_retries,
@@ -45,8 +46,8 @@ from src.data.session_clock import latest_completed_session, now_istanbul
 from src.data.updater_frames import (
     _OVERLAP_DAYS,
     _OVERLAP_TOLERANCE,
+    _csv_date_format,
     _find_column,
-    _infer_date_format,
     _max_overlap_deviation,
     _parse_date_series,
     _parse_last_date,
@@ -202,8 +203,13 @@ class DataUpdater:
         backoff_s: float = DEFAULT_BACKOFF_S,
         sleep: Callable[[float], None] = time.sleep,
         lock_timeout: float = DEFAULT_LOCK_TIMEOUT_S,
+        deadline_s: float | None = DEFAULT_REFRESH_DEADLINE_S,
+        clock: Callable[[], float] = time.monotonic,
     ) -> dict[str, DataUpdateResult]:
         """Toplu guncelleme: ``targets`` = [(csv_path, sembol)]. Etkileşimsizdir.
+
+        ``deadline_s``: tum indirme asamasi icin duvar-saati siniri (None = sinirsiz). Asilirsa
+        kalan semboller ``failed`` ("deadline_exceeded") olur; mevcut CSV'ler korunur, kosu surer.
 
         Guncel olanlar indirilmez; gerisi baslangic tarihine gore siralanip ``chunk_size``'lik
         gruplar halinde ``yf.download(tickers=[...])`` ile indirilir, bos/basarisiz ticker'lar
@@ -219,6 +225,7 @@ class DataUpdater:
             else:
                 plans.append(plan)
         plans.sort(key=lambda p: p.start)
+        deadline = None if deadline_s is None else clock() + deadline_s
         step = max(1, chunk_size)
         for i in range(0, len(plans), step):
             group = plans[i:i + step]
@@ -226,6 +233,7 @@ class DataUpdater:
                 provider, [p.ticker for p in group],
                 start=group[0].start, end=max(p.end for p in group),
                 chunk_size=step, max_retries=max_retries, backoff_s=backoff_s, sleep=sleep,
+                deadline=deadline, clock=clock,
             )
             for plan in group:
                 frame = frames.get(plan.ticker)
@@ -280,7 +288,7 @@ class DataUpdater:
             return _result("up_to_date", latest_before)
 
         rows_all = _prepare_provider_rows(new_data, df_raw.columns, date_col, plan.completed)
-        date_fmt = _infer_date_format(str(df_raw[date_col].iloc[-1]))
+        date_fmt = _csv_date_format()
 
         # Overlap dogrulamasi (Adj Close varsa o, yoksa Close karsilastirilir).
         compare_col = _find_column(

@@ -15,7 +15,13 @@ import pandas as pd
 from src.api.observability import log_event
 from src.data.data_updater import DataUpdater
 from src.features.macro_pipeline import MacroPipeline
+from src.forecasting.artifacts import (
+    ArtifactFeaturesOutdatedError,
+    MODEL_NO_LONGER_SUPPORTED_REASON,
+    ModelNoLongerSupportedError,
+)
 from src.forecasting.bist_calendar import default_calendar_path, ensure_bist_calendar
+from src.pipeline.model_scope import is_removed_model
 
 
 @dataclass(frozen=True)
@@ -174,6 +180,7 @@ class DataRefreshService:
             Yenileme sonucunu özetleyen dict.
         """
         data_file = self.data_file_for(symbol)
+        removed = None if best_model is None else best_model.get("model_name")
         calendar_path = default_calendar_path(self.project_root)
         try:
             ensure_bist_calendar(calendar_path, years_back=5, years_forward=1)
@@ -195,6 +202,19 @@ class DataRefreshService:
                 "data_update_failed",
                 str(update_payload.get("error") or "Data update failed"),
                 {"symbol": symbol, "data_update": update_payload},
+            )
+        if is_removed_model(removed):
+            # Silinmis model: piyasa verisi YINE de guncellenir (taze veri), sonra
+            # yapisal "yeniden egit" sonucu doner.
+            raise DataRefreshError(
+                MODEL_NO_LONGER_SUPPORTED_REASON,
+                f"{symbol} icin '{removed}' modeli artik desteklenmiyor; yeniden egitin (retrain).",
+                {
+                    "symbol": symbol,
+                    "model_name": str(removed),
+                    "action": "retrain",
+                    "data_update": update_payload,
+                },
             )
         latest = read_latest_market_row(data_file)
 
@@ -236,6 +256,32 @@ class DataRefreshService:
                     auto_update_interactive=False,
                 )
                 forecast_run_id = forecast.run_id
+            except ModelNoLongerSupportedError as exc:
+                # Silinmis model (LSTM/Prophet/ARIMA/...): yapisal "yeniden egit" sonucu.
+                raise DataRefreshError(
+                    exc.reason,
+                    str(exc),
+                    {
+                        "symbol": symbol,
+                        "data_update": update_payload,
+                        "latest_date": latest.date,
+                        "model_name": exc.model_name,
+                        "action": "retrain",
+                    },
+                ) from exc
+            except ArtifactFeaturesOutdatedError as exc:
+                # Eski ozellik setli artifact: yapisal "yeniden egit" sonucu.
+                raise DataRefreshError(
+                    exc.reason,
+                    str(exc),
+                    {
+                        "symbol": symbol,
+                        "data_update": update_payload,
+                        "latest_date": latest.date,
+                        "model_name": exc.model_name,
+                        "action": "retrain",
+                    },
+                ) from exc
             except Exception as exc:
                 raise DataRefreshError(
                     "forecast_generation_failed",

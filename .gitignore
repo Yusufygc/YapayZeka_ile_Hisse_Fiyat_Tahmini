@@ -36,6 +36,7 @@ kalinanYer1.md
 /data/stock_models.db
 # E2 pooled-model serving DB (gecelik batch uretir, runtime artifact)
 /data/serving_pool.db
+/data/nightly_status.json
 # SQLite WAL/SHM journal dosyaları (tüm .db türleri)
 *.db-wal
 *.db-shm

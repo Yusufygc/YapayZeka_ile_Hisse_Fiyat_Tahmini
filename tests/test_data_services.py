@@ -34,7 +34,6 @@ def _manager(tmp_path, *, val_cfg: ValidationConfig | None = None,
         data_cfg=DataConfig(
             data_file=os.path.join(str(tmp_path), "TEST.csv"),
             use_macro=False,
-            time_steps=3,
             prune_correlated_features=False,
             target_horizon=target_horizon,
         ),
@@ -142,7 +141,7 @@ def test_walk_forward_split_excludes_final_holdout_from_selection(monkeypatch, t
         wf_test_size=4,
         wf_max_train_size=20,
         # wf_embargo_size None/0/negatif birakilirsa _resolve_wf_embargo_size
-        # max(200, time_steps)=200'e cikar; bu fixture'da (40 satir)
+        # max(200, sequence)=200'e cikar; bu fixture'da (40 satir)
         # min_required=222>40 olur ve holdout ayrilamaz. Test holdout-exclusion
         # davranisini olcer (embargo'yu degil) ve walk_forward_splits zaten
         # monkeypatch'li (embargo_context 2 satir), bu yuzden embargo'yu 2'ye
@@ -225,7 +224,7 @@ def test_prepare_tensors_horizon_aligns_x_and_target(tmp_path):
     np.testing.assert_allclose(tensors["prev_close_test"], test_close[:-5])
     assert list(tensors["dates_prediction"]) == list(df.iloc[25:]["Date"].iloc[:-5])
     assert list(tensors["dates_test"]) == list(df.iloc[25:]["Date"].iloc[5:])
-    assert list(tensors["dates_train"]) == list(df.iloc[:25]["Date"].iloc[5:])
+    assert "dates_train" not in tensors  # date-aware (Prophet) plumbing kaldirildi
 
 
 # --------------------------------------------------------------------------- #
@@ -234,7 +233,7 @@ def test_prepare_tensors_horizon_aligns_x_and_target(tmp_path):
 
 
 class _StubFeaturePipeline:
-    """macro_df doluysa makro ozellik (Rate_Level) ekleyen sahte FeaturePipeline."""
+    """macro_df doluysa makro ozellik (USDTRY_Return) ekleyen sahte FeaturePipeline."""
 
     def __init__(self, *args, **kwargs) -> None:
         self.feature_names = []
@@ -243,11 +242,11 @@ class _StubFeaturePipeline:
         self.sector_mapping_report = {}
 
     def engineer_features(self, raw_df, macro_df=None, symbol=None,
-                          sector_mapping=None, prune_fit_tail=0):
+                          prune_fit_tail=0):
         out = raw_df.copy()
         if macro_df is not None and not macro_df.empty:
-            out["Rate_Level"] = 0.0
-            self.feature_names = ["Feature_A", "Rate_Level"]
+            out["USDTRY_Return"] = 0.0
+            self.feature_names = ["Feature_A", "USDTRY_Return"]
         else:
             self.feature_names = ["Feature_A"]
         return out
@@ -258,7 +257,6 @@ def _macro_manager(tmp_path) -> DataManager:
         data_cfg=DataConfig(
             data_file=os.path.join(str(tmp_path), "TEST.csv"),
             use_macro=True,
-            time_steps=3,
             prune_correlated_features=False,
         ),
         val_cfg=ValidationConfig(),
@@ -283,10 +281,10 @@ def test_degraded_macro_frame_not_cached(tmp_path, monkeypatch):
     manager = _macro_manager(tmp_path)
     svc = manager.data_ingestion_service
 
-    svc._engineer_features_cached(_frame(30), pd.DataFrame(), {})
+    svc._engineer_features_cached(_frame(30), pd.DataFrame())
 
     assert "Feature_A" in manager.feature_names
-    assert "Rate_Level" not in manager.feature_names
+    assert "USDTRY_Return" not in manager.feature_names
     assert _cache_pkls(tmp_path) == []  # degraded -> cache yok
 
 
@@ -311,11 +309,11 @@ def test_macro_frame_cached_and_poisoned_entry_self_heals(tmp_path, monkeypatch)
         "sector_mapping_report": {},
     })
 
-    macro_df = pd.DataFrame({"Date": raw["Date"], "Rate_Level": 0.0})
-    svc._engineer_features_cached(raw, macro_df, {})
+    macro_df = pd.DataFrame({"Date": raw["Date"], "USDTRY_Return": 0.0})
+    svc._engineer_features_cached(raw, macro_df)
 
     # Stale kayit yerine makrolu frame uretildi + cache'e yazildi.
-    assert "Rate_Level" in manager.feature_names
+    assert "USDTRY_Return" in manager.feature_names
     assert len(_cache_pkls(tmp_path)) == 1
 
 

@@ -285,16 +285,21 @@ class LeakageGuardTests(unittest.TestCase):
         self.assertAlmostEqual(result["trades"]["Net_Return"].iloc[0], curve["Equity"].iloc[1] - 1.0)
 
     def test_macro_release_lag_shifts_monthly_features(self):
-        raw = pd.DataFrame({
-            "Date": pd.to_datetime(["2024-01-01", "2024-02-01"]),
-            "INTEREST_RATE": [10.0, 12.0],
-        })
-        mp = MacroPipeline(rate_release_lag_days=3, cpi_release_lag_days=15)
-        feats = mp._engineer_monthly_rate(raw)
-        feats["Date"] = feats["Date"] + pd.to_timedelta(mp.rate_release_lag_days, unit="D")
+        # Faiz artik feature degil; yayim kurali risk-free serisinde korunur:
+        # ay damgasi -> ay sonu + lag_days.
+        from src.features import macro_transforms
 
-        self.assertEqual(feats["Date"].iloc[0], pd.Timestamp("2024-01-04"))
-        self.assertEqual(feats["Rate_Change"].iloc[1], 2.0)
+        feats = pd.DataFrame({
+            "Date": pd.to_datetime(["2024-01-01", "2024-02-01"]),
+            "Rate_Level": [10.0, 12.0],
+        })
+        lagged = macro_transforms.lag_monthly_features(
+            feats, lag_days=3, raw_date_column="Rate_Raw_Date"
+        )
+
+        self.assertEqual(lagged["Date"].iloc[0], pd.Timestamp("2024-02-03"))
+        self.assertEqual(lagged["Date"].iloc[1], pd.Timestamp("2024-03-03"))
+        self.assertEqual(lagged["Rate_Raw_Date"].iloc[0], pd.Timestamp("2024-01-01"))
 
     def test_evds_interest_rate_fetch_normalizes_json_response(self):
         class FakeResponse:

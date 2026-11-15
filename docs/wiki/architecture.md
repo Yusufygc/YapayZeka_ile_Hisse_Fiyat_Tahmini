@@ -2,7 +2,7 @@
 title: Architecture
 type: concept
 status: active
-last_updated: 2026-06-14
+last_updated: 2026-11-16
 owner: llm
 source_count: 14
 ---
@@ -209,8 +209,9 @@ tests because they own persistence, leakage, or user-facing output contracts.
 | Data processing | pandas, numpy |
 | Technical indicators | ta |
 | Classical ML | scikit-learn, xgboost, optional lightgbm |
-| Statistical models | statsmodels, optional Prophet |
-| Deep learning | TensorFlow/Keras for LSTM |
+| Statistical models | Yok (2026-11-16: statsmodels, Prophet kaldırıldı) |
+| Deep learning | Yok (2026-11-16: TensorFlow/Keras kaldırıldı). PyTorch yalnız Kol-B `TorchMLPModel` ensemble bacağı için |
+| Removed deps (2026-11-16) | tensorflow, prophet, statsmodels, protobuf, pandas-datareader (`requirements.txt`'ten silindi) |
 | HPO | Optuna with SQLite warm-start behavior |
 | Explainability | SHAP where supported, project-level XAI reports |
 | Backtesting | Custom engine in `src/backtesting/` |
@@ -314,3 +315,8 @@ all-models runs in `model_result_exporter` (2026-06-02 fix).
 - WF OOS girdileri `EvaluationState.wf_backtest_inputs` içinde tutulur; final holdout artifact
   sidecar'ı interval kalibrasyonunu buradan üretir.
 - SQLite bağlantıları `src/database/connection.ClosingConnection` ile `with` sonunda kapanır.
+- **Gece işi sağlamlaştırma (2026-11-16):** `src/serving/run_status.py` her kosu başında ve
+  her fazda `data/nightly_status.json` yazar (atomik; kosu normal bitmezse `completed: false`
+  kalır). Bayat-pay kapısı: başarısız+bayat sembol oranı `--max-stale-fraction` (varsayılan
+  0.20) üstündeyse skorlama atlanır, çıkış kodu 3, son iyi PeerStore koşusu korunur. Ayrıntı:
+  [Persistence and API](persistence-and-api.md#nightly-automation-2026-11-16).

@@ -2,6 +2,8 @@
 """Faz 4 — CLI tak-çıkar yardımcıları + resolve_candidates."""
 from __future__ import annotations
 
+import pytest
+
 from src.cli._model_filters import (
     expand_filters,
     list_models_table,
@@ -13,15 +15,15 @@ from src.pipeline.model_scope import resolve_candidates
 
 def test_expand_filters_by_category():
     names = expand_filters(category="tree")
-    assert "Random Forest" in names
+    assert "LightGBM Return" in names
     assert "XGBoost" in names
     # linear_shrinkage tree değil — orada olmamalı
     assert "Ridge Return" not in names
 
 
 def test_expand_filters_multi_category():
-    names = expand_filters(category="tree,linear_decomp")
-    assert {"Random Forest", "DLinear"}.issubset(names)
+    names = expand_filters(category="tree,linear_shrinkage")
+    assert {"XGBoost", "Ridge Return"}.issubset(names)
 
 
 def test_expand_filters_by_role_benchmark():
@@ -35,10 +37,9 @@ def test_expand_filters_empty_returns_empty():
 
 
 def test_resolve_selected_combines_enable_and_category():
-    out = resolve_selected(enable="Random Forest", category="linear_decomp")
-    assert "Random Forest" in out
-    assert "DLinear" in out
-    assert "NLinear" in out
+    out = resolve_selected(enable="XGBoost", category="linear_shrinkage")
+    assert "XGBoost" in out
+    assert "Ridge Return" in out
 
 
 def test_resolve_selected_returns_none_when_no_input():
@@ -46,17 +47,17 @@ def test_resolve_selected_returns_none_when_no_input():
 
 
 def test_resolve_disabled():
-    assert resolve_disabled(disable="XGBoost, NLinear") == ["XGBoost", "NLinear"]
+    assert resolve_disabled(disable="XGBoost, LightGBM Return") == ["XGBoost", "LightGBM Return"]
     assert resolve_disabled(disable=None) == []
 
 
 def test_resolve_candidates_filters_disabled():
     result = resolve_candidates(
-        selected=["Random Forest", "XGBoost", "DLinear"],
+        selected=["LightGBM Return", "XGBoost", "Ridge Return"],
         disabled=["XGBoost"],
     )
-    assert "Random Forest" in result
-    assert "DLinear" in result
+    assert "LightGBM Return" in result
+    assert "Ridge Return" in result
     assert "XGBoost" not in result
 
 
@@ -76,24 +77,34 @@ def test_resolve_candidates_disabled_overrides_default():
 
 def test_resolve_candidates_require_available_drops_missing_deps():
     """require_available=True ile optional dep eksik modeller düşer."""
-    # Tüm candidate kümesinden LSTM (tensorflow gerektirir) optional.
     result = resolve_candidates(
-        selected=["DLinear", "NLinear", "Random Forest", "XGBoost", "LSTM", "LSTM Lite"],
+        selected=["Ridge Return", "XGBoost"],
         disabled=[],
         require_available=True,
     )
-    # En azından DLinear/NLinear core dep olmadan kalmalı.
-    assert {"DLinear", "NLinear"}.issubset(result)
+    assert {"Ridge Return", "XGBoost"}.issubset(result)
+
+
+def test_resolve_candidates_rejects_removed_models():
+    """Silinmis modeller (LSTM vb.) artik sessizce dusmez: acik ValueError (2026-11-16)."""
+    with pytest.raises(ValueError, match="LSTM"):
+        resolve_candidates(
+            selected=["Ridge Return", "ElasticNet Return", "Random Forest", "XGBoost", "LSTM"],
+            disabled=[],
+            require_available=True,
+        )
 
 
 def test_list_models_table_contains_all_models():
     out = list_models_table()
     for required in (
-        "Random Forest", "DLinear", "NLinear", "Ridge Return",
-        "ElasticNet Return", "Naive Zero Return", "XGBoost",
-        "LightGBM Return", "ARIMA", "LSTM", "LSTM Lite", "Prophet",
+        "Ridge Return",
+        "Naive Zero Return", "XGBoost",
+        "LightGBM Return",
     ):
         assert required in out, f"{required} listede yok"
+    for removed in ("DLinear", "NLinear", "ARIMA", "LSTM", "Prophet", "ElasticNet Return", "Random Forest"):
+        assert removed not in out, f"{removed} listede olmamali"
     # Başlıklar görünmeli.
     for header in ("Name", "Category", "Role", "Avail", "Requires"):
         assert header in out
@@ -112,11 +123,8 @@ def test_modelconfig_new_fields_default():
     assert cfg.disabled_models == []
     assert cfg.require_available is False
     assert cfg.ensemble_eligibility_overrides == {}
-    lstm_lite = cfg.model_settings["deep_learning"]["lstm_lite"]
-    assert cfg.model_settings["deep_learning"]["lstm_lite_min_sequence_samples"] == 252
-    assert lstm_lite["units"] == 32
-    assert lstm_lite["dense_units"] == 16
-    assert lstm_lite["tune_on_fit"] is False
+    for removed_key in ("deep_learning", "arima", "prophet"):
+        assert removed_key not in cfg.model_settings
 
 
 def test_modelconfig_accepts_disabled_and_require_available():

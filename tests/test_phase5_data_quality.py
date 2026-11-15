@@ -13,17 +13,16 @@ from src.xai.feature_dictionary import feature_group, feature_group_label, featu
 
 class Phase5DataQualityTests(unittest.TestCase):
     def test_feature_group_taxonomy_matches_phase5_groups(self):
-        self.assertEqual(feature_group("SMA_14_rel"), "technical")
+        self.assertEqual(feature_group("SMA_21_rel"), "technical")
         self.assertEqual(feature_group("USDTRY_Return"), "macro")
         self.assertEqual(feature_group("BIST100_Return"), "market_relative")
         self.assertEqual(feature_group("RollStd_14_norm"), "volatility")
-        self.assertEqual(feature_group("LogRet_Lag_3"), "lag")
-        self.assertEqual(feature_group("OBV_Norm_20"), "volume")
-        self.assertEqual(feature_group("VWAP_20_rel"), "volume")
+        self.assertEqual(feature_group("LogRet_Lag_1"), "lag")
         self.assertEqual(feature_group("Market_Regime_SMA200"), "regime")
-        self.assertEqual(feature_group("EURTRY_Return"), "macro")
-        self.assertEqual(feature_group("VIX_Change"), "macro")
-        self.assertEqual(feature_group("XUSIN_Return"), "market_relative")
+        self.assertEqual(feature_group("momentum_60d"), "technical")
+        self.assertEqual(feature_group("market_momentum_60d"), "market_relative")
+        self.assertEqual(feature_group("relative_to_market_60d"), "market_relative")
+        self.assertEqual(feature_group("day_of_week"), "calendar")
 
     def test_feature_group_product_labels_and_reasons(self):
         self.assertEqual(feature_group_label("macro"), "Makro ekonomik sinyaller")
@@ -32,7 +31,7 @@ class Phase5DataQualityTests(unittest.TestCase):
         peer_reason = feature_group_reason("technical", "yukari", context="peer")
         self.assertIn("akran siralamasini yukari", peer_reason)
 
-    def test_feature_pipeline_adds_volume_and_lag_features(self):
+    def test_feature_pipeline_adds_lag_features_and_drops_volume_features(self):
         try:
             from src.features.feature_pipeline import FeaturePipeline
             import ta as _ta_module
@@ -56,14 +55,19 @@ class Phase5DataQualityTests(unittest.TestCase):
         fp = FeaturePipeline(lag_feature_count=5)
         engineered = fp.engineer_features(df)
 
-        self.assertIn("OBV_Norm_20", engineered.columns)
-        self.assertIn("VWAP_20_rel", engineered.columns)
+        # OBV/VWAP IC denetimiyle kaldirildi.
+        self.assertNotIn("OBV_Norm_20", engineered.columns)
+        self.assertNotIn("VWAP_20_rel", engineered.columns)
         self.assertIn("LogRet_Lag_5", engineered.columns)
-        self.assertFalse(
-            engineered[["OBV_Norm_20", "VWAP_20_rel", "LogRet_Lag_5"]].isna().any().any()
-        )
-        self.assertEqual(fp.feature_groups["OBV_Norm_20"], "volume")
+        self.assertFalse(engineered[["LogRet_Lag_5"]].isna().any().any())
         self.assertEqual(fp.feature_groups["LogRet_Lag_5"], "lag")
+
+        # Varsayilan lag sayisi 1'dir.
+        default_fp = FeaturePipeline()
+        self.assertEqual(default_fp.lag_feature_count, 1)
+        default_out = default_fp.engineer_features(df)
+        self.assertIn("LogRet_Lag_1", default_out.columns)
+        self.assertNotIn("LogRet_Lag_2", default_out.columns)
 
     def test_correlation_pruning_keeps_lowest_average_correlation_feature(self):
         try:
@@ -168,7 +172,6 @@ class Phase5DataQualityTests(unittest.TestCase):
         dm = DataManager(
             data_file="data/DUMMY.csv",
             test_ratio=0.2,
-            time_steps=2,
             models_dir="outputs/_test_phase5_data_quality",
             use_macro=False,
             clip_shift_warning_threshold_pct=1.0,
@@ -315,7 +318,6 @@ class Phase5DataQualityTests(unittest.TestCase):
         dm = DataManager(
             data_file="data/TEST.csv",
             test_ratio=0.2,
-            time_steps=2,
             models_dir="outputs/_test_phase5_data_quality",
             use_macro=False,
             universe_file="outputs/_test_phase5_data_quality/missing_universe.csv",

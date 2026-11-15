@@ -7,27 +7,12 @@ import pandas as pd
 
 from src.backtesting.metrics import summarize_backtest
 from src.database.stock_model_db import compute_composite_score
-from src.evaluation.financial_metrics import compute_financial_metrics, compute_quantile_metrics
+from src.evaluation.financial_metrics import compute_financial_metrics
 from src.evaluation.evaluator import enrich_with_benchmark_metrics
 from _eval_helpers import make_eval_services
 
 
 class ReportingMetricsTests(unittest.TestCase):
-    def test_quantile_metrics_include_coverage_and_winkler(self):
-        y_true = np.array([10.0, 11.0, 12.0])
-        q_preds = np.array([
-            [9.0, 10.0, 11.0],
-            [10.0, 11.0, 12.0],
-            [11.0, 12.0, 13.0],
-        ])
-
-        metrics = compute_quantile_metrics(y_true, q_preds)
-
-        self.assertIn("Pinball_Loss", metrics)
-        self.assertIn("P10_P90_Coverage", metrics)
-        self.assertIn("Winkler_Score", metrics)
-        self.assertGreaterEqual(metrics["P10_P90_Coverage"], 0.0)
-
     def test_benchmark_ineligible_model_is_not_report_leader(self):
         metrics = {
             "Naive Zero Return": {
@@ -200,43 +185,11 @@ class ReportingMetricsTests(unittest.TestCase):
 
         svc.prediction._add_single_split_ensembles()
 
-        self.assertIn("Ensemble Equal Weight", svc.state.predictions)
         self.assertIn("Ensemble Inverse RMSE", svc.state.predictions)
-        self.assertIn("Ensemble Equal Weight", svc.state.single_backtest_inputs)
-        np.testing.assert_allclose(svc.state.predictions["Ensemble Equal Weight"], np.array([9.5, 10.5, 11.5]))
-
-    def test_single_split_seq_attention_ensemble(self):
-        svc = make_eval_services()
-        svc.ctx.ensemble_enabled = True
-        svc.state.ensemble_weights = {}
-        svc.state.y_true_aligned = np.array([10.0, 11.0, 12.0])
-        svc.state.prev_close_aligned = np.array([9.5, 10.5, 11.5])
-        svc.state.predictions = {
-            "LSTM": np.array([10.0, 11.0, 12.0]),
-            "AttentionLSTM v2": np.array([9.0, 10.0, 11.0]),
-        }
-        svc.state.prediction_targets = {
-            "LSTM": np.array([0.01, 0.02, 0.03]),
-            "AttentionLSTM v2": np.array([0.00, 0.01, 0.02]),
-        }
-        svc.state.single_backtest_inputs = {
-            "LSTM": {
-                "dates": pd.date_range("2024-01-01", periods=3),
-                "prediction_dates": pd.date_range("2024-01-01", periods=3),
-                "y_true_price": np.array([10.0, 11.0, 12.0]),
-                "pred_price": np.array([10.0, 11.0, 12.0]),
-                "prev_close": np.array([9.5, 10.5, 11.5]),
-                "pred_target": np.array([0.01, 0.02, 0.03]),
-                "y_true_target": np.array([0.01, 0.02, 0.03]),
-            }
-        }
-
-        svc.prediction._add_single_split_ensembles()
-
-        self.assertIn("Ensemble Seq-Attention Equal", svc.state.predictions)
-        self.assertIn("Ensemble Seq-Attention Inverse RMSE", svc.state.predictions)
-        self.assertIn("Ensemble Seq-Attention Equal", svc.state.single_backtest_inputs)
-        np.testing.assert_allclose(svc.state.predictions["Ensemble Seq-Attention Equal"], np.array([9.5, 10.5, 11.5]))
+        self.assertIn("Ensemble Inverse RMSE", svc.state.single_backtest_inputs)
+        # Yalnizca tek ensemble varyanti uretilir.
+        produced = {name for name in svc.state.predictions if name.startswith("Ensemble ")}
+        self.assertEqual(produced, {"Ensemble Inverse RMSE"})
 
 
 if __name__ == "__main__":

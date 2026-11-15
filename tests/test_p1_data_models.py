@@ -3,12 +3,12 @@
 
 1. Ham OHLCV seviyeleri tek-sembol modellerinin X'ine girmez.
 2. WF embargo varsayilani `target_horizon + 5`; explicit embargo < h reddedilir;
-   ilk test sequence'i tam `time_steps` baglam alir.
+   embargo yalnizca etiket ufkuna baglidir.
 3. ExecutionConfig maliyet varsayilanlari BIST gercegine hizali (sifir degil).
 4. DataUpdater: overlap'li indirme; split/temettu sonrasi tam yeniden indirme.
 5. data_loader: Close=Adj_Close iken O/H/L ayni faktorle olceklenir.
 6. LightGBM bagging gercekten aktif (subsample_freq).
-7. LSTM Lite Optuna HPO seed'li.
+7. (kaldirildi: LSTM Lite silindi)
 8. Varsayilan uretim adaylari: XGBoost + Ridge Return + LightGBM Return.
 
 Ag erisimi yok: indirici sahte provider ile enjekte edilir.
@@ -47,12 +47,11 @@ def _ohlcv_frame(n: int = 60) -> pd.DataFrame:
     })
 
 
-def _manager(tmp_path, *, val_cfg=None, target_horizon=1, time_steps=3) -> DataManager:
+def _manager(tmp_path, *, val_cfg=None, target_horizon=1) -> DataManager:
     return DataManager(
         data_cfg=DataConfig(
             data_file=os.path.join(str(tmp_path), "TEST.csv"),
             use_macro=False,
-            time_steps=time_steps,
             prune_correlated_features=False,
             target_horizon=target_horizon,
         ),
@@ -90,19 +89,19 @@ def test_model_feature_names_drop_raw_levels():
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("h", [1, 5, 10])
 def test_default_embargo_is_horizon_plus_five(h):
-    assert _resolve_wf_embargo_size(None, 60, target_horizon=h) == h + 5
-    assert _resolve_wf_embargo_size(0, 60, target_horizon=h) == h + 5
+    assert _resolve_wf_embargo_size(None, target_horizon=h) == h + 5
+    assert _resolve_wf_embargo_size(0, target_horizon=h) == h + 5
 
 
 def test_default_embargo_no_longer_200():
-    assert _resolve_wf_embargo_size(None, 30) == 6  # h=1 -> 6, SMA200 tamponu degil
+    assert _resolve_wf_embargo_size(None) == 6  # h=1 -> 6, SMA200 tamponu degil
 
 
 def test_explicit_embargo_below_horizon_raises():
     with pytest.raises(ValueError):
-        _resolve_wf_embargo_size(3, 60, target_horizon=5)
-    assert _resolve_wf_embargo_size(5, 60, target_horizon=5) == 5
-    assert _resolve_wf_embargo_size(50, 60, target_horizon=5) == 50
+        _resolve_wf_embargo_size(3, target_horizon=5)
+    assert _resolve_wf_embargo_size(5, target_horizon=5) == 5
+    assert _resolve_wf_embargo_size(50, target_horizon=5) == 50
 
 
 def test_split_data_uses_horizon_aware_default_embargo(tmp_path):
@@ -130,35 +129,6 @@ def test_split_data_rejects_explicit_embargo_below_horizon(tmp_path):
         manager = _manager(tmp_path, val_cfg=val_cfg, target_horizon=5)
         manager.df = _ohlcv_frame(150)
         manager.split_data("walk_forward")
-
-
-def test_first_test_sequence_has_full_time_steps_context(tmp_path):
-    """Kucuk embargo (h+5) ile bile ilk test sequence'i gercek gecmis baglamini tasir."""
-    ts = 12
-    val_cfg = ValidationConfig(
-        wf_n_splits=2, wf_min_train_size=40, wf_test_size=10,
-        wf_max_train_size=None, wf_embargo_size=None, final_holdout_size=0,
-    )
-    manager = _manager(tmp_path, val_cfg=val_cfg, target_horizon=1, time_steps=ts)
-    df = _ohlcv_frame(150)
-    manager.df = df
-    manager.split_data("walk_forward")
-    split = manager.wf_splits[-1]
-    assert split["embargo_size"] == 6 < ts  # embargo, time_steps'ten kucuk
-
-    tensors = manager.prepare_tensors(
-        split["train"], split["test"], context_df=split["embargo_context"]
-    )
-
-    h = 1
-    assert tensors["X_test_seq"].shape[0] == len(split["test"]) - h
-    assert tensors["X_test_seq"].shape[1] == ts
-    # ilk dizinin ilk ts-1 satiri = test baslangicindan hemen onceki gercek satirlar
-    feats = ["Feat_A", "Feat_B"]
-    ts0 = split["test_start"]
-    expected_raw = df[feats].iloc[ts0 - (ts - 1): ts0 + 1].to_numpy()
-    expected = tensors["scaler_X"].transform(expected_raw)
-    np.testing.assert_allclose(tensors["X_test_seq"][0], expected, atol=1e-6)
 
 
 # --------------------------------------------------------------------------- #
@@ -315,48 +285,11 @@ def test_lightgbm_bagging_is_active():
 
 
 # --------------------------------------------------------------------------- #
-#  7) LSTM Lite HPO seed                                                       #
-# --------------------------------------------------------------------------- #
-def test_lstm_lite_optuna_study_is_seeded(monkeypatch):
-    import optuna
-
-    from src.models.lstm_lite_model import LSTMLiteModel
-
-    seen = {}
-
-    class _Sampler:
-        def __init__(self, *args, **kwargs):
-            seen["sampler_kwargs"] = kwargs
-
-    class _Study:
-        best_params: dict = {}
-        best_value = 0.0
-
-        def optimize(self, *args, **kwargs):
-            return None
-
-    def _create_study(*args, **kwargs):
-        seen["study_kwargs"] = kwargs
-        return _Study()
-
-    monkeypatch.setattr(optuna.samplers, "TPESampler", _Sampler)
-    monkeypatch.setattr(optuna, "create_study", _create_study)
-
-    model = LSTMLiteModel(tune_on_fit=True, tune_n_trials=1)
-    x = np.zeros((8, 3, 2))
-    y = np.zeros((8, 1))
-    model._tune_hyperparameters(x, y, x, y, (3, 2))
-
-    assert isinstance(seen["sampler_kwargs"].get("seed"), int)
-    assert isinstance(seen["study_kwargs"]["sampler"], _Sampler)
-
-
-# --------------------------------------------------------------------------- #
 #  8) Varsayilan uretim adaylari                                               #
 # --------------------------------------------------------------------------- #
 def test_default_candidate_set_is_production_safe():
     from src.pipeline.model_scope import default_candidate_models
 
     assert set(default_candidate_models()) == {"XGBoost", "Ridge Return", "LightGBM Return"}
-    for research_only in ("LSTM", "DLinear", "NLinear"):
-        assert research_only not in default_candidate_models()
+    for removed in ("LSTM", "DLinear", "NLinear", "Prophet", "ARIMA"):
+        assert removed not in default_candidate_models()

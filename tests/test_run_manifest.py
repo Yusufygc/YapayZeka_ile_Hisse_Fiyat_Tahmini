@@ -69,7 +69,7 @@ def _make_minimal_orchestrator(tmp_dir: str):
     model_cfg.require_available = False
     model_cfg.ensemble_enabled = False
     model_cfg.ensemble_eligibility_overrides = {}
-    model_cfg.model_settings = {"prophet": {"use_regressors": False}}
+    model_cfg.model_settings = {}
 
     cfg = MagicMock()
     cfg.data = data_cfg
@@ -124,10 +124,9 @@ def _make_minimal_orchestrator(tmp_dir: str):
     pipeline.window_candidates = [3, 5, 7, 10, None]
     pipeline.min_history_days = 252
     pipeline.new_listing_min_days = 60
-    pipeline.use_prophet_macro_regressors = False
     pipeline.ensemble_enabled = False
     pipeline.universe_file = None
-    pipeline.model_config = {"prophet": {"use_regressors": False}}
+    pipeline.model_config = {}
     pipeline._cfg = cfg
     pipeline.stock_symbol = "TEST"
     pipeline.project_root = tmp_dir

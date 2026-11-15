@@ -11,7 +11,7 @@ from sklearn.linear_model import Ridge
 
 from src.xai.background import XAIBackgroundProvider
 from src.xai.explainer import XAIExplainer
-from src.xai.strategies import SequenceContributionStrategy, TabularContributionStrategy
+from src.xai.strategies import TabularContributionStrategy
 
 
 def test_tree_strategy_uses_shap_when_available():
@@ -77,31 +77,13 @@ def test_lime_unavailable_does_not_break(monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", guarded_import)
-    strategy = SequenceContributionStrategy(["f0", "f1"], max_rows=2)
+    strategy = TabularContributionStrategy(["f0", "f1"], max_rows=2)
 
-    contribs, method, approximate = strategy.lime_sequence_local_contributions(object(), np.ones((2, 3, 2)))
+    contribs, method, approximate = strategy.lime_tabular_contributions(object(), np.ones((2, 2)))
 
     assert method == "lime_unavailable"
     assert approximate is True
     assert contribs.shape == (0, 2)
-
-
-def test_sequence_feature_lag_contributions_emit_heatmap_rows():
-    class _SeqModel:
-        def predict(self, X):
-            return np.asarray(X)[:, -1, 0] * 0.5 + np.asarray(X)[:, -2, 1] * -0.2
-
-    X = np.arange(24, dtype=float).reshape(4, 3, 2)
-    background = XAIBackgroundProvider.from_arrays(X_train_seq=X)
-    strategy = SequenceContributionStrategy(["f0", "f1"], max_rows=4, background_provider=background)
-
-    contribs, heatmap, method, approximate = strategy.feature_lag_contributions(_SeqModel(), X)
-
-    assert method == "sequence_feature_lag_permutation"
-    assert approximate is True
-    assert contribs.shape == (1, 2)
-    assert heatmap
-    assert {"Feature", "Lag", "Contribution", "Importance", "Method", "Approximate"} <= set(heatmap[0])
 
 
 def test_background_provider_uses_train_median_for_permutation_mask():

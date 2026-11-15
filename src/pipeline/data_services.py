@@ -14,12 +14,12 @@ import pandas as pd
 from src.data.data_loader import load_data
 from src.data.data_updater import DataUpdater
 from src.data.panel_columns import PIPELINE_RAW_COLS
-from src.data.preprocessor import create_sequences, scale_data
+from src.data.preprocessor import scale_data
 from src.features.feature_cache import FeatureCache
 from src.features.feature_pipeline import FeaturePipeline
 from src.features.macro_pipeline import MacroPipeline
 from src.features.pooled_feature_cache import frame_content_hash
-from src.features.sector_mapping import resolve_sector_mapping
+from src.features.sector_mapping import SECTOR_FEATURES_DISABLED_REPORT, resolve_sector_mapping
 from src.pipeline.config import DataConfig, ValidationConfig
 from src.utils.data_splitter import (
     TimeSeriesSplitter,
@@ -30,6 +30,11 @@ from src.utils.data_splitter import (
 # Model girdisi OLMAYAN kolonlar: ham OHLCV seviyeleri (durağan degil; fiyat/hacim
 # seviyesi ezberi) + tarih/hedef kolonlari. Panel yolunun ortak sabiti + `Adj_Close`.
 _NON_MODEL_FEATURE_COLS: frozenset[str] = frozenset(PIPELINE_RAW_COLS | {"Adj_Close"})
+
+# Makro veriye bagimli (MacroPipeline'in kendi kolonlari disindaki) turetilmis ozellikler.
+_MACRO_DERIVED_FEATURES: frozenset[str] = frozenset(
+    {"Relative_Strength", "market_momentum_60d", "relative_to_market_60d"}
+)
 
 
 def _is_auto_embargo(val_cfg) -> bool:
@@ -119,13 +124,20 @@ class DataIngestionService:
         if self.ctx.data_cfg.use_macro:
             macro_df = self.fetch_macro(raw_df)
 
+        # Sektor ETIKETI (universe) metadata icin cozulur; sektor-endeksi FEATURE'lari
+        # kaldirildi (IC denetimi 2026-11) -> rapor durumu "disabled", feature_created False.
         sector_mapping = resolve_sector_mapping(
             self.ctx.stock_symbol, self.ctx.universe_file
         )
-        self.state.sector_mapping_report = sector_mapping.to_dict()
+        mapping_dict = sector_mapping.to_dict()
+        self.state.sector_mapping_report = {
+            **mapping_dict,
+            "mapping_status": mapping_dict.get("status"),
+            **SECTOR_FEATURES_DISABLED_REPORT,
+        }
 
         # Teknik + makro özellikler (cache destekli)
-        self._engineer_features_cached(raw_df, macro_df, sector_mapping)
+        self._engineer_features_cached(raw_df, macro_df)
 
         self.state.survivorship_bias_report = (
             self.quality_service.check_survivorship_bias()
@@ -134,7 +146,7 @@ class DataIngestionService:
         self._print_ingestion_summary(macro_df)
         self.refresh_dataset_metadata()
 
-    def _engineer_features_cached(self, raw_df, macro_df, sector_mapping) -> None:
+    def _engineer_features_cached(self, raw_df, macro_df) -> None:
         """Teknik + makro özellikleri üretir (FeatureCache destekli) ve self.df,
         feature_names/groups/pruning/sector raporlarını doldurur.
 
@@ -190,7 +202,6 @@ class DataIngestionService:
             raw_df,
             macro_df=macro_df,
             symbol=self.ctx.stock_symbol,
-            sector_mapping=sector_mapping,
             prune_fit_tail=prune_fit_tail,
         )
         self.state.feature_names = model_feature_names(feature_pipeline.feature_names)
@@ -199,7 +210,12 @@ class DataIngestionService:
             if k in set(self.state.feature_names)
         }
         self.state.feature_pruning_report = feature_pipeline.pruning_report
-        self.state.sector_mapping_report = feature_pipeline.sector_mapping_report
+        # Sektor raporu ingest()'te universe etiketi + "disabled" durumuyla kuruldu;
+        # FeaturePipeline raporu yalniz durum anahtarlarini dogrular.
+        self.state.sector_mapping_report = {
+            **self.state.sector_mapping_report,
+            **feature_pipeline.sector_mapping_report,
+        }
         if macro_expected and not macro_available:
             # Makro istendi fakat alinamadi: degraded (makro-yoksun) frame'i cache'leme.
             # Aksi halde gecici bir makro cekim hatasi cache'i zehirler ve sonraki
@@ -222,17 +238,15 @@ class DataIngestionService:
         """feature_names icinde en az bir makro ozellik var mi? (cache self-heal icin)."""
         if not feature_names:
             return False
-        # 'Rate_Level' is the central interest rate feature; if it is missing,
-        # the macro cache is considered degraded/poisoned.
-        return "Rate_Level" in feature_names
+        # 'USDTRY_Return' makro matrisin merkezi ozelligidir; yoksa makro cache'i
+        # degraded/zehirli sayilir (kurate sette faiz/CPI feature'i yok).
+        return "USDTRY_Return" in feature_names
 
     def _print_ingestion_summary(self, macro_df) -> None:
         """Veri boyutu, teknik/makro özellik sayıları, kurumsal aksiyon, pruning
         ve eğitim penceresi özetini yazdırır (yan etkisiz, yalnız print)."""
-        has_rel_str = "Relative_Strength" in self.state.feature_names
-        has_sec_str = "Sector_Relative_Strength" in self.state.feature_names
-        macro_base = len(MacroPipeline.macro_feature_names(include_rates=True))
-        macro_count = macro_base + (1 if has_rel_str else 0) + (1 if has_sec_str else 0)
+        macro_derived = set(MacroPipeline.macro_feature_names()) | _MACRO_DERIVED_FEATURES
+        macro_count = sum(1 for n in self.state.feature_names if n in macro_derived)
         tech_count = len(self.state.feature_names) - (
             macro_count
             if self.ctx.data_cfg.use_macro and macro_df is not None and not macro_df.empty
@@ -246,8 +260,7 @@ class DataIngestionService:
                 f"  Makro özellikler : {macro_count}  "
                 f"(USDTRY_Return, USDTRY_Volatility7, "
                 f"BIST100_Return, BIST100_MA7, "
-                f"Rate_Level, Rate_Change, CPI_YoY, CPI_MoM, Real_Rate, "
-                f"Relative_Strength, Sector_Relative_Strength)"
+                f"Relative_Strength, market_momentum_60d, relative_to_market_60d)"
             )
         print(f"  Toplam özellik   : {len(self.state.feature_names)}")
         if self.state.corporate_action_report.get("warning"):
@@ -361,7 +374,6 @@ class DataIngestionService:
             mp = MacroPipeline(
                 cache_dir=self.ctx.macro_cache_dir,
                 rate_release_lag_days=self.ctx.data_cfg.macro_rate_lag_days,
-                cpi_release_lag_days=self.ctx.data_cfg.macro_cpi_lag_days,
             )
             macro_df = mp.get_macro_features(start_date=start, end_date=end)
 
@@ -391,7 +403,6 @@ class DataIngestionService:
             "execution_lag": "Signals generated after close t are applied to the aligned next realized bar.",
             "macro_release_lag": {
                 "rate_days": self.ctx.data_cfg.macro_rate_lag_days,
-                "cpi_days": self.ctx.data_cfg.macro_cpi_lag_days,
             },
             "validation_config": self.ctx.validation_config,
             "date_range": f"{date_start}:{date_end}",
@@ -489,7 +500,6 @@ class TensorPreparationService:
         self,
         train_df: pd.DataFrame,
         test_df: pd.DataFrame,
-        context_df: pd.DataFrame | None = None,
     ) -> dict:
         """
         Train/test DataFrame'lerini model eğitimine uygun tensörlere çevirir.
@@ -499,8 +509,7 @@ class TensorPreparationService:
           X[t] = t gününün sonunda bilinen özellikler
           y[t] = t+1 gününün log-getirisi
 
-        Böylece aynı gün bilgisinden aynı gün hedef üretilmez. Tree ve sequence
-        modeller aynı tahmin problemi üzerinde çalışır.
+        Böylece aynı gün bilgisinden aynı gün hedef üretilmez.
         """
         # Ham Open/High/Low/Volume (+Adj_Close) seviyeleri X'e GIRMEZ: durağan degil.
         # state.feature_names ayni filtreyle uretilir (XAI/artifact tutarliligi).
@@ -513,7 +522,6 @@ class TensorPreparationService:
 
         train_close = train_df["Close"].values.astype(float)
         test_close = test_df["Close"].values.astype(float)
-        context_df = context_df.copy() if context_df is not None and not context_df.empty else None
 
         h = self._target_horizon()
         if len(train_df) < h + 1 or len(test_df) < h + 1:
@@ -547,32 +555,6 @@ class TensorPreparationService:
         )
         self.record_scaling_report(train_df, test_df, scaler_X)
 
-        X_train_seq, y_train_seq = create_sequences(
-            X_train_s, y_train_s, time_steps=self.ctx.data_cfg.time_steps
-        )
-
-        # İlk test örneği için son time_steps-1 train günü + ilk test günü kullanılır.
-        prefix_len = max(0, self.ctx.data_cfg.time_steps - 1)
-        if context_df is not None and prefix_len > 0:
-            prefix_source = pd.concat([train_df.tail(prefix_len), context_df], ignore_index=True)
-            X_prefix_raw = prefix_source[features].tail(prefix_len).values
-            X_prefix_s = scaler_X.transform(X_prefix_raw)
-            clip_report = getattr(scaler_X, "clip_report_", {}) or {}
-            if clip_report.get("clip_low") is not None and clip_report.get("clip_high") is not None:
-                X_prefix_s = np.clip(X_prefix_s, clip_report["clip_low"], clip_report["clip_high"])
-            y_prefix_s = np.zeros((len(X_prefix_s), 1), dtype=float)
-        else:
-            X_prefix_s = (
-                X_train_s[-prefix_len:] if prefix_len else np.empty((0, X_train_s.shape[1]))
-            )
-            y_prefix_s = y_train_s[-prefix_len:] if prefix_len else np.empty((0, 1))
-
-        X_test_input = np.vstack((X_prefix_s, X_test_s))
-        y_test_input = np.vstack((y_prefix_s, y_test_s))
-        X_test_seq, y_test_seq = create_sequences(
-            X_test_input, y_test_input, time_steps=self.ctx.data_cfg.time_steps
-        )
-
         return {
             "X_train": X_train,
             "y_train": y_train,
@@ -582,21 +564,15 @@ class TensorPreparationService:
             "y_train_s": y_train_s,
             "X_test_s": X_test_s,
             "y_test_s": y_test_s,
-            "X_train_seq": X_train_seq,
-            "y_train_seq": y_train_seq,
-            "X_test_seq": X_test_seq,
-            "y_test_seq": y_test_seq,
             "scaler_X": scaler_X,
             "scaler_y": scaler_y,
             "clip_report": getattr(scaler_X, "clip_report_", {}),
             "features": list(features),
-            "context_rows": 0 if context_df is None else len(context_df),
             "original_y_test_aligned": test_close[h:],
             "prev_close_test": test_prev_close,
             "market_regime_test": market_regime_test,
             "train_close_last": float(train_close[-1]),
             "target_mode": self.ctx.data_cfg.target_mode,
-            "dates_train": train_df["Date"].iloc[h:] if "Date" in train_df.columns else None,
             "dates_prediction": test_df["Date"].iloc[:-h] if "Date" in test_df.columns else None,
             "dates_test": test_df["Date"].iloc[h:] if "Date" in test_df.columns else None,
         }
@@ -697,7 +673,6 @@ class ValidationSplitService:
                 getattr(self.ctx.val_cfg, "wf_embargo_size", None)
                 if _is_auto_embargo(self.ctx.val_cfg)
                 else self.ctx.validation_config["wf_embargo_size"],
-                self.ctx.data_cfg.time_steps,
                 h,
             )
             wf_source_df = self.state.df
@@ -749,7 +724,7 @@ class ValidationSplitService:
                     f"feature sonrasi satir={len(wf_source_df)}, "
                     f"tek split icin gereken minimum={required_for_one}. "
                     "Makro/feature dropna kaynakli veri kaybi veya cok buyuk "
-                    "wf_min_train_size/time_steps ayarlarini kontrol edin."
+                    "wf_min_train_size ayarini kontrol edin."
                 )
             print(
                 "  [INFO] Walk-Forward splitleri olusturuldu "

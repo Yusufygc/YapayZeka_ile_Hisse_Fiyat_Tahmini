@@ -55,11 +55,10 @@ class TrainingTab(QWidget):
         vbox_preset.addWidget(QLabel("Model Paketi (Preset):", self))
         self.cmb_preset = QComboBox(self)
         self.cmb_preset.addItems([
-            "Hızlı (XGBoost + LSTM)",
+            "Hızlı (XGBoost)",
             "Ağaç Tabanlı Modeller",
-            "Yalnızca Derin Öğrenme",
+            "Lineer Baselines",
             "Modern Baselines",
-            "Yalnızca Prophet",
             "Tüm Modeller"
         ])
         self.cmb_preset.setFixedWidth(200)
@@ -130,7 +129,7 @@ class TrainingTab(QWidget):
 
         # Preset eşleştirme
         preset_idx = self.cmb_preset.currentIndex()
-        # "Hızlı (XGBoost + LSTM)", "Ağaç Tabanlı", "Derin Öğrenme", "Baselines", "Prophet", "Tüm"
+        # "Hızlı (XGBoost)", "Ağaç Tabanlı", "Lineer Baselines", "Modern Baselines", "Tüm"
         # batch.py parametreleri model seçimi için:
         # --disabled-models veya default candidate_models.
         # Bizim batch.py'da model preset argümanı yoksa, modelleri direkt --disabled-models ile filtreleyebiliriz
@@ -160,19 +159,17 @@ class TrainingTab(QWidget):
         # parser.add_argument("--require-available", action="store_true")
         # batch.py specific model listesi yerine --disabled-models ile çalışabiliyor.
         # interactive presets mantığına göre disabled edilecek modelleri belirleyelim:
-        all_models = ["XGBoost", "Random Forest", "LightGBM Return", "LSTM", "LSTM Lite", "AttentionLSTM v2", "Prophet", "Ridge Return", "ElasticNet Return", "DLinear", "NLinear"]
+        all_models = ["XGBoost", "LightGBM Return", "Ridge Return"]
         disabled = []
 
-        if preset_idx == 0:  # Hızlı (XGBoost + LSTM)
-            disabled = [m for m in all_models if m not in ["XGBoost", "LSTM"]]
+        if preset_idx == 0:  # Hızlı (XGBoost)
+            disabled = [m for m in all_models if m not in ["XGBoost"]]
         elif preset_idx == 1:  # Ağaç Tabanlı
-            disabled = [m for m in all_models if m not in ["XGBoost", "Random Forest", "LightGBM Return"]]
-        elif preset_idx == 2:  # Derin Öğrenme
-            disabled = [m for m in all_models if m not in ["LSTM", "LSTM Lite", "AttentionLSTM v2"]]
+            disabled = [m for m in all_models if m not in ["XGBoost", "LightGBM Return"]]
+        elif preset_idx == 2:  # Lineer Baselines
+            disabled = [m for m in all_models if m not in ["Ridge Return"]]
         elif preset_idx == 3:  # Modern Baselines
-            disabled = [m for m in all_models if m not in ["Ridge Return", "ElasticNet Return", "LightGBM Return", "DLinear", "NLinear"]]
-        elif preset_idx == 4:  # Prophet
-            disabled = [m for m in all_models if m != "Prophet"]
+            disabled = [m for m in all_models if m not in ["Ridge Return", "LightGBM Return"]]
 
         if disabled:
             args.extend(["--disabled-models", ",".join(disabled)])

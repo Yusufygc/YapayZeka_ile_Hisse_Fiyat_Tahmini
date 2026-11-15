@@ -33,14 +33,8 @@ module = [
     "optuna.*",
     "xgboost.*",
     "lightgbm.*",
-    "tensorflow.*",
-    "keras.*",
     "torch.*",
     "sklearn.*",
     "yfinance.*",
-    "pandas_datareader.*",
-    "pmdarima.*",
-    "prophet.*",
-    "statsmodels.*",
 ]
 ignore_missing_imports = true

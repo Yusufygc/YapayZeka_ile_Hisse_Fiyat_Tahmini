@@ -79,47 +79,6 @@ def _real_import_available(name: str) -> bool:
         return False
 
 
-def _stub_tensorflow() -> None:
-    _tf = _stub("tensorflow")
-    _keras = _stub("tensorflow.keras")
-    _tf.keras = _keras
-    for submodule in [
-        "tensorflow.keras.models",
-        "tensorflow.keras.layers",
-        "tensorflow.keras.callbacks",
-        "tensorflow.keras.optimizers",
-        "tensorflow.keras.regularizers",
-        "tensorflow.keras.backend",
-        "tensorflow.keras.utils",
-    ]:
-        module = _stub(submodule)
-        setattr(_keras, submodule.split("tensorflow.keras.")[-1], module)
-
-    models = sys.modules["tensorflow.keras.models"]
-    for symbol in ("Sequential", "Model", "load_model"):
-        setattr(models, symbol, MagicMock)
-
-    layers = sys.modules["tensorflow.keras.layers"]
-    for symbol in (
-        "LSTM",
-        "Dense",
-        "Dropout",
-        "Bidirectional",
-        "Input",
-        "Permute",
-        "Multiply",
-        "Flatten",
-        "RepeatVector",
-        "Lambda",
-        "Layer",
-    ):
-        setattr(layers, symbol, MagicMock)
-
-    callbacks = sys.modules["tensorflow.keras.callbacks"]
-    for symbol in ("EarlyStopping", "ReduceLROnPlateau"):
-        setattr(callbacks, symbol, MagicMock)
-
-
 def _stub_ta() -> None:
     ta_module = _stub("ta")
     for submodule in ("ta.momentum", "ta.trend", "ta.volatility", "ta.volume", "ta.others"):
@@ -136,11 +95,6 @@ def _stub_xgboost() -> None:
 def _stub_lightgbm() -> None:
     module = _stub("lightgbm")
     setattr(module, "LGBMRegressor", MagicMock)
-
-
-def _stub_prophet() -> None:
-    module = _stub("prophet")
-    setattr(module, "Prophet", MagicMock)
 
 
 def _stub_sklearn() -> None:
@@ -168,12 +122,10 @@ def _stub_optuna() -> None:
 
 def _install_optional_dependency_stubs() -> None:
     optional_modules = {
-        "tensorflow": _stub_tensorflow,
         "yfinance": lambda: _stub("yfinance"),
         "xgboost": _stub_xgboost,
         "ta": _stub_ta,
         "lightgbm": _stub_lightgbm,
-        "prophet": _stub_prophet,
         "optuna": _stub_optuna,
         # Sprint 4 (2026-05-25): joblib eklenmesi -> data_services/preprocessor
         # ic chain testlerde import olabilsin (Sprint 0+1+2+3 pattern uyumu).

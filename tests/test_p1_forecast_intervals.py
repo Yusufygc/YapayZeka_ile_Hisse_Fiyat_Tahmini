@@ -2,8 +2,8 @@
 """P1 deep-audit (2026-11): forecast interval / recursive roll-forward regression tests.
 
 Kapsam:
-  1. Quantile-model bantlari model-agnostik kalibrasyondan (B2/C) gecer;
-     modelin kendi bandi yalnizca ``raw_model_quantiles`` teshis metadatasi.
+  1. Yayinlanan band model-agnostik kalibrasyondan (B2/C) gecer; kalibrasyon yoksa
+     band yayinlanmaz. (Model-quantile yolu kaldirildi: hicbir model quantile uretmiyor.)
   2. ``cqr`` modu reddedilir; ``adaptive_conformal_update`` kaldirildi;
      ``coverage_guarantee`` payload'da.
   3. Sentetik recursive satir: Low <= Close <= High, Volume = trailing medyan,
@@ -70,15 +70,12 @@ class _IdentityScaler:
 
 
 class _QuantilePredictor:
-    """Quantile destekli modelin predictor'u: median 0.01, ham band cok dar/farkli."""
+    """Sabit medyan (0.01) ureten predictor; band tamamen kalibrasyondan gelir."""
 
     MEDIAN = 0.01
 
     def predict(self, model_name, model, context):
         return self.MEDIAN
-
-    def predict_quantiles_target(self, model_name, model, context):
-        return {0.1: -0.001, 0.5: self.MEDIAN, 0.9: 0.021}
 
 
 def _rec_context(calibration, *, pref="residual_b2"):
@@ -96,7 +93,6 @@ def _rec_context(calibration, *, pref="residual_b2"):
         "feature_frame": frame,
         "last_close": 100.0,
         "last_observed_date": frame["Date"].iloc[-1],
-        "time_steps": 5,
         "interval_calibration": calibration,
         "interval_method_pref": pref,
         "forecast_warnings": ["projected_exogenous_features"],
@@ -132,13 +128,8 @@ def test_quantile_model_band_equals_calibrated_residual_path():
     assert p["p50_close"] == pytest.approx(100.0 * (1.0 + 0.01))
     assert p["p10_close"] == pytest.approx(100.0 * (1.0 + 0.01 - half))
     assert p["p90_close"] == pytest.approx(100.0 * (1.0 + 0.01 + half))
-    # Modelin ham bandi (-0.001/0.021) YAYINLANAN band degil.
-    assert p["p10_close"] != pytest.approx(100.0 * (1.0 - 0.001))
-    # Ham model quantile'lari yalniz teshis olarak saklanir.
-    raw = p["raw_model_quantiles"]
-    assert raw["quantile_close"]["p10"] == pytest.approx(100.0 * (1.0 - 0.001))
-    assert raw["quantile_close"]["p90"] == pytest.approx(100.0 * (1.0 + 0.021))
-    assert "quantile_close" not in p  # top-level uncalibrated band kalmadi
+    assert "raw_model_quantiles" not in p  # model-quantile teshis yolu kaldirildi
+    assert "quantile_close" not in p
 
 
 def test_quantile_model_band_widens_with_horizon():
@@ -167,7 +158,7 @@ def test_quantile_model_without_calibration_publishes_no_uncalibrated_band():
     p = pts[0]
     assert "p10_close" not in p and "p90_close" not in p
     assert p.get("interval_method") is None
-    assert p["raw_model_quantiles"]["quantile_close"]["p90"] == pytest.approx(102.1)
+    assert "raw_model_quantiles" not in p
 
 
 # --------------------------------------------------------------------------
@@ -394,9 +385,9 @@ def _macro_frame(n=60):
             "Log_Return": rng.normal(0, 0.01, n),
             "USDTRY_Return": rng.normal(0.002, 0.01, n),
             "BIST_XUSIN_Return": rng.normal(0, 0.01, n),  # whitelist'te yok -> sonek ile yakalanir
-            "Rate_Change": rng.normal(0, 0.1, n),
+            "Foo_Change": rng.normal(0, 0.1, n),  # genel *_Change soneki ile yakalanir
             "USDTRY": 30.0 + np.cumsum(rng.normal(0.01, 0.05, n)),
-            "VIX": 18.0 + rng.normal(0, 2, n),
+            "BIST100_MA7": 0.01 + rng.normal(0, 0.005, n),
         }
     )
 
@@ -405,11 +396,11 @@ def test_projection_zero_for_return_and_change_last_value_for_levels():
     df = _macro_frame()
     out = MacroForwardProjector().project_last_row(df)
     last = out.index[-1]
-    for col in ("USDTRY_Return", "BIST_XUSIN_Return", "Rate_Change"):
+    for col in ("USDTRY_Return", "BIST_XUSIN_Return", "Foo_Change"):
         assert out.at[last, col] == 0.0, col
     # Seviye: random walk -> son GOZLENEN (history, son satir haric) deger.
     assert out.at[last, "USDTRY"] == pytest.approx(df["USDTRY"].iloc[-2])
-    assert out.at[last, "VIX"] == pytest.approx(df["VIX"].iloc[-2])
+    assert out.at[last, "BIST100_MA7"] == pytest.approx(df["BIST100_MA7"].iloc[-2])
     # Hissenin kendi getirileri makro degildir -> dokunulmaz.
     assert out.at[last, "Return"] == pytest.approx(df["Return"].iloc[-1])
     assert out.at[last, "Log_Return"] == pytest.approx(df["Log_Return"].iloc[-1])

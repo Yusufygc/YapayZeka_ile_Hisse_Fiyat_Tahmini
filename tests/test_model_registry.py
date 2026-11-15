@@ -69,8 +69,7 @@ def test_discovery_populates_core_models():
     ensure_loaded()
     names = {s.name for s in all_specs()}
     # Optional dep gerektirmeyen core modeller mutlaka var olmalı.
-    for required in ("Random Forest", "Ridge Return", "ElasticNet Return",
-                      "DLinear", "NLinear",
+    for required in ("XGBoost", "Ridge Return", "LightGBM Return",
                       "Naive Last Value", "Naive Zero Return", "Naive Drift"):
         assert required in names, f"{required} registry'de yok; mevcut: {sorted(names)}"
 
@@ -88,15 +87,16 @@ def test_filter_by_role():
 def test_filter_by_category():
     ensure_loaded()
     tree_names = {s.name for s in all_specs(category="tree")}
-    # En azından RF orada olmalı.
-    assert "Random Forest" in tree_names
+    assert {"XGBoost", "LightGBM Return"} <= tree_names
+    assert "Random Forest" not in tree_names
 
 
 def test_filter_ensemble_only_excludes_benchmarks():
     ensure_loaded()
     eligible = {s.name for s in all_specs(ensemble_only=True)}
     assert "Naive Zero Return" not in eligible
-    assert "Random Forest" in eligible
+    assert "XGBoost" in eligible
+    assert "Random Forest" not in eligible
 
 
 def test_filter_target_mode():

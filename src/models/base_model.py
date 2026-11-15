@@ -2,7 +2,7 @@
 """
 base_model.py — Soyut Temel Model Sınıfı
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Tüm tahmin modellerinin (Prophet, XGBoost, LSTM) uygulaması gereken
+Tüm tahmin modellerinin (naive, XGBoost, Ridge, ...) uygulaması gereken
 ortak arayüzü tanımlar: train, predict, save, load.
 """
 

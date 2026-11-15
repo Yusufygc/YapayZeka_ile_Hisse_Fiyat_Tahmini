@@ -41,7 +41,6 @@ class XAIReportWriter:
         daily_reasons = payload.get("daily_reasons")
         signal_reasons = payload.get("signal_reasons")
         trade_explanations = payload.get("trade_explanations")
-        sequence_heatmap = payload.get("sequence_heatmap")
         summary_md = str(payload.get("summary_md", ""))
 
         if isinstance(top_reasons, pd.DataFrame) and not top_reasons.empty:
@@ -84,13 +83,6 @@ class XAIReportWriter:
                 write_csv_and_aligned_view(
                     trade_explanations,
                     os.path.join(self.output_dir, f"xai_trade_explanations_{suffix}.csv"),
-                )
-
-        if isinstance(sequence_heatmap, pd.DataFrame) and not sequence_heatmap.empty:
-            if self.write_tables:
-                write_csv_and_aligned_view(
-                    sequence_heatmap,
-                    os.path.join(self.output_dir, f"xai_sequence_heatmap_{suffix}.csv"),
                 )
 
         if self.write_markdown:

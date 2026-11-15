@@ -3,7 +3,7 @@
 
 `outputs/{SYMBOL}/latest/` artık run dizininin tam kopyası DEĞİLDİR. Yalnızca
 küçük raporlar (json/csv/png/md/...) kopyalanır ve `LATEST_RUN.json` işaretçisi
-yazılır. Büyük model artefaktları (`.pkl`, `.keras`, ...) işaretçinin gösterdiği
+yazılır. Büyük model artefaktları (`.pkl`, ...) işaretçinin gösterdiği
 `runs/{RUN_ID}/` altında kalır; okuyucular `resolve_latest_artifact` ile çözer.
 """
 from __future__ import annotations

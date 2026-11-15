@@ -2,7 +2,7 @@
 title: Validation and Backtesting
 type: concept
 status: active
-last_updated: 2026-11-10
+last_updated: 2026-11-16
 owner: llm
 source_count: 9
 ---
@@ -23,11 +23,12 @@ research paths.
 
 - `wf_n_splits = 12`, `wf_test_size = 21`, `wf_max_train_size = 756`,
   `wf_window_type = "sliding"` → ~252 OOS trading days (~1 year coverage).
-- `wf_embargo_size = None` is auto-resolved to `max(200, time_steps)` at
-  runtime (`_resolve_wf_embargo_size` in `src/pipeline/data_manager.py`). This
-  prevents `Market_Regime_SMA200` and similar 200-bar rolling features from
-  leaking train data into the test slice.
-
+- `wf_embargo_size = None` is auto-resolved to `target_horizon + 5` (h+5) at
+  runtime (`_resolve_wf_embargo_size` in `src/utils/data_splitter.py`). Embargo
+  yalnızca etiket ufkuna bağlıdır (2026-11-16; önceki `max(200, time_steps)`
+  kuralı kaldırıldı, `time_steps` artık yok). Embargo yalnız etiket örtüşmesine karşıdır;
+  `Market_Regime_SMA200` gibi geriye bakan pencereler (200 bar) yalnız geçmiş veriyi
+  kullandığı için uzun embargo gerektirmez ve sızıntı yaratmaz.
 Flow:
 
 1. Generate chronological folds.
@@ -66,6 +67,11 @@ The minimum-invasive Sprint 0 fix flags the leakage scope as
 proper train-tail validation-slice fix is scheduled for Sprint 4 (probabilistic
 forecasting + multi-horizon target work introduces the slice naturally).
 
+**2026-11-16 bug düzeltmesi:** Single-split yolu naive tahminleri
+`scaler_y.inverse_transform` ile İKİ KEZ dönüştürüyordu (Naive Zero Return,
+eğitim ortalamasını tahmin ediyordu). `_predict_target_space` ile düzeltildi;
+walk-forward ve holdout yolları zaten doğruydu.
+
 ## PurgedKFold and CPCV (Sprint 3 — 2026-05-25)
 
 Opt-in validators that augment walk-forward by tightening leakage control
@@ -79,7 +85,8 @@ of train; rolling features see test data). PurgedKFold:
 
 - Folds are produced in chronological order — no shuffle.
 - `purge_window` train samples around each test fold are dropped (default
-  recommendation `max(rolling_feature_window, time_steps)` ≈ `max(200, time_steps)`).
+  recommendation `max(rolling_feature_window, time_steps)`, tarihsel; `time_steps`
+  kaldırıldı, güncel embargo kuralı Walk-Forward bölümünde).
 - `embargo` additional train samples after the test fold are dropped
   (overlapping label leakage for `h>1` forward-return targets).
 
@@ -168,7 +175,8 @@ Core prediction metrics include:
 - Sharpe-like financial metrics (Sharpe / Sortino / Deflated Sharpe / Calmar)
 - Benchmark-relative fields such as RMSE vs benchmark
 
-Quantile-capable models can also produce interval/quantile metrics.
+Quantile-capable models: 2026-11-16 itibarıyla per-symbol kayıtta yok. Aralıklar
+model-agnostik kalibrasyondan gelir (bkz. Olasılıksal Forward Interval bölümü).
 
 ### Metric Priority for Advisory (Sprint 1 — 2026-05-25)
 

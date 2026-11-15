@@ -10,7 +10,7 @@ Motivasyon:
 Cache anahtari (MD5):
   kod parmak izi (code_fingerprint.py: feature/macro pipeline kaynaklari + pandas/numpy/ta surumu) +
   data_file absolutepath + mtime + feature_mode + use_macro +
-  macro_rate_lag_days + macro_cpi_lag_days + prune_correlated_features +
+  macro_rate_lag_days + prune_correlated_features +
   correlation_threshold + lag_feature_count + training_window_years
 
 Cache formati:
@@ -52,7 +52,7 @@ class FeatureCache:
             cache.put(key, df, meta)
     """
 
-    _VERSION = "4"  # Bump to invalidate all existing cache entries. v4: makro yayim gecikmesi ay sonuna gore, ABD seansi 1 gun gecikmeli.
+    _VERSION = "6"  # Bump to invalidate all existing cache entries. v6: market_momentum_60d makro takviminde (tarihe gore) hesaplanir. v5: kurate 19-ozellik seti (IC denetimi 2026-11); makro yalniz USDTRY/BIST100.
 
     def __init__(self, cache_dir: str, ttl_hours: float = 24.0) -> None:
         self.cache_dir = cache_dir
@@ -72,7 +72,7 @@ class FeatureCache:
         data_file : str
             CSV/veri dosyasinin yolu (mutlak hale cevirilir).
         data_cfg  : DataConfig veya benzer nesneler; su alanlari okunur:
-            feature_mode, use_macro, macro_rate_lag_days, macro_cpi_lag_days,
+            feature_mode, use_macro, macro_rate_lag_days,
             prune_correlated_features, correlation_threshold, lag_feature_count,
             training_window_years
         """
@@ -92,12 +92,11 @@ class FeatureCache:
             "feature_mode": getattr(data_cfg, "feature_mode", "stationary_features"),
             "use_macro": bool(getattr(data_cfg, "use_macro", True)),
             "macro_rate_lag_days": int(getattr(data_cfg, "macro_rate_lag_days", 1)),
-            "macro_cpi_lag_days": int(getattr(data_cfg, "macro_cpi_lag_days", 5)),
             "prune_correlated_features": bool(
                 getattr(data_cfg, "prune_correlated_features", False)
             ),
             "correlation_threshold": float(getattr(data_cfg, "correlation_threshold", 0.98)),
-            "lag_feature_count": int(getattr(data_cfg, "lag_feature_count", 5)),
+            "lag_feature_count": int(getattr(data_cfg, "lag_feature_count", 1)),
             "training_window_years": (
                 int(data_cfg.training_window_years)
                 if getattr(data_cfg, "training_window_years", None) is not None

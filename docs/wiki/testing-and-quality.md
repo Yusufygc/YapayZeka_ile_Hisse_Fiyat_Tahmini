@@ -2,7 +2,7 @@
 title: Testing and Quality
 type: concept
 status: active
-last_updated: 2026-11-10
+last_updated: 2026-11-16
 owner: llm
 source_count: 6
 ---
@@ -45,7 +45,9 @@ python -m pytest tests/test_forecasting.py -v
 | `test_macro_cache_schema.py` | Macro cache schema behavior |
 | `test_run_id_naming.py` | Run id naming contracts |
 | `test_run_leaderboard.py` | Run-level final-holdout leaderboard, completeness, benchmark-clone, and reliability classification |
-| `test_prediction_date_aware.py` | Date-aware prediction routing for Prophet and Prophet-ML/DL Hybrid paths |
+| `test_curated_feature_set.py` | (2026-11-16) Kürate 19 özellik kümesinin tam eşitliği; |Spearman| > 0.95 çifti yok |
+| `test_removed_models_legacy_rows.py` | (2026-11-16) Silinmiş model satırlarının okunması ve `ModelNoLongerSupportedError` |
+(`test_prediction_date_aware.py` 2026-11-16 itibarıyla yoktur; Prophet yolu kaldırıldı.)
 | `test_signal_research.py` | Dry-run signal research universe and policy matrix helpers |
 | `test_xai_routing.py` | XAI output routing for validation modes |
 | `test_stock_model_db_repositories.py` | StockModelDB repository composition, schema idempotency, forecast idempotency/resolution |
@@ -197,7 +199,7 @@ diagnostic (`long_history`, `mid_history`, `short_history`, `missing_data`,
 Focused command:
 
 ```powershell
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_run_leaderboard.py tests\test_run_manifest.py tests\test_operational_hardening.py tests\test_prediction_date_aware.py tests\test_signal_research.py tests\test_prophet_hybrid.py tests\test_forecast_workflows.py -q
+& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_run_leaderboard.py tests\test_run_manifest.py tests\test_operational_hardening.py tests\test_signal_research.py tests\test_forecast_workflows.py -q
 & 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m src.cli.run_leaderboard --symbol ARDYZ --format json
 & 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m src.cli.signal_research check-universe --symbols ARDYZ --format json
 & 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m src.cli.signal_research ensure-data --symbols KCHOL,EREGL --format json
@@ -243,20 +245,20 @@ This writes `graphify-out/graph.json`, `graphify-out/graph.html`, and
 `requirements.txt` includes:
 
 - pandas, numpy, scikit-learn
-- xgboost, optional lightgbm
-- prophet
-- tensorflow
-- torch
+- xgboost, lightgbm
+- torch (yalnız Kol-B `TorchMLPModel`)
 - ta
 - matplotlib
 - joblib
 - optuna
 - yfinance
 - requests
-- pandas-datareader
 - pandas-market-calendars
-- statsmodels
 - shap
+- pyarrow (Kol-B Parquet önbellek/temiz depo), duckdb (salt-okunur analiz)
+
+2026-11-16 itibarıyla tensorflow, prophet, statsmodels, protobuf ve pandas-datareader
+kaldırıldı.
 
 FastAPI, uvicorn, torch, pydantic, httpx, lime, filelock and pytest are listed
 in `requirements.txt` (2026-11-10). Install with

@@ -11,7 +11,7 @@ rejected_rows, quarantined_days, ozellik onbellegi sayaclari, uyari loglari) top
 dondurur, ana surec bunlari sirali sembol dongusunde sekansiyel yolun yapacagi gibi birlestirir.
 
 Hafif import: bu modulun ust seviyesi yalniz stdlib + pandas; `pooled_loader` (FeaturePipeline,
-ta, pyarrow) isci fonksiyonu icinde tembel yuklenir. tensorflow/torch/sklearn YUKLENMEZ.
+ta, pyarrow) isci fonksiyonu icinde tembel yuklenir. torch/sklearn YUKLENMEZ.
 """
 from __future__ import annotations
 

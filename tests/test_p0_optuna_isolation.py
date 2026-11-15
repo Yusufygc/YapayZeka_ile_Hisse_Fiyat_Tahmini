@@ -72,20 +72,6 @@ def test_default_tuning_uses_in_memory_study_no_reuse(create_study_spy):
     assert len(studies[1].trials) == n_trials
 
 
-def test_random_forest_default_tuning_no_reuse(create_study_spy):
-    from src.models.random_forest_model import RandomForestModel
-
-    calls, studies = create_study_spy
-    n_trials = 2
-    for seed in (3, 4):
-        X, y = _synthetic(seed)
-        RandomForestModel().tune_and_train(X, y, n_trials=n_trials, n_splits=2)
-
-    for kw in calls:
-        assert kw.get("storage") is None
-    assert len(studies[1].trials) == n_trials
-
-
 def test_default_path_does_not_touch_persistent_db(create_study_spy):
     from src.models.xgboost_model import XGBoostModel
 
@@ -96,16 +82,11 @@ def test_default_path_does_not_touch_persistent_db(create_study_spy):
 
 
 def test_storage_without_study_name_raises(tmp_path):
-    from src.models.random_forest_model import RandomForestModel
     from src.models.xgboost_model import XGBoostModel
 
     X, y = _synthetic(6)
     with pytest.raises(ValueError):
         XGBoostModel().tune_and_train(
-            X, y, n_trials=1, n_splits=2, study_storage=f"sqlite:///{(tmp_path / 'x.db').as_posix()}"
-        )
-    with pytest.raises(ValueError):
-        RandomForestModel().tune_and_train(
             X, y, n_trials=1, n_splits=2, study_storage=f"sqlite:///{(tmp_path / 'x.db').as_posix()}"
         )
 
@@ -135,7 +116,7 @@ def test_tuned_tree_models_study_name_unique_per_run():
         def tune_and_train(self, X, y, **kw):
             seen.append((kw["study_name"], kw["study_storage"]))
 
-    fake_trainer = SimpleNamespace(XGBoostModel=_FakeModel, RandomForestModel=_FakeModel)
+    fake_trainer = SimpleNamespace(XGBoostModel=_FakeModel)
 
     def _run(run_id):
         ctx = SimpleNamespace(

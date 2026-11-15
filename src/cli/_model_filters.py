@@ -4,8 +4,8 @@
 Kullanım örnekleri:
 
     python -m src.cli.forecast --list-models
-    python -m src.cli.batch --enable "Random Forest,DLinear" --strict-deps
-    python -m src.cli.batch --disable XGBoost,NLinear
+    python -m src.cli.batch --enable "XGBoost,Ridge Return" --strict-deps
+    python -m src.cli.batch --disable XGBoost,"LightGBM Return"
     python -m src.cli.batch --category tree,linear_decomp --role candidate
 
 Bayraklar bağımsızdır, kombinasyon serbesttir:
@@ -51,7 +51,7 @@ def add_model_filter_args(parser: argparse.ArgumentParser) -> None:
         "--category",
         type=str,
         default=None,
-        help="Virgülle ayrılmış kategoriler: tree, linear_shrinkage, linear_decomp, seq, stat, benchmark.",
+        help="Virgülle ayrılmış kategoriler: tree, linear_shrinkage, benchmark.",
     )
     g.add_argument(
         "--role",

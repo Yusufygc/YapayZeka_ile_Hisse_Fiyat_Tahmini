@@ -2,172 +2,30 @@
 """Model construction helpers used by ``ModelTrainer``.
 
 Faz 3: spec helper'ları (`benchmark_specs`, `linear_baseline_specs`,
-`boosting_baseline_specs`, `sequence_baseline_specs`) ve set sabitleri
-(`TREE_MODELS`, `SEQ_MODELS`, `BENCHMARK_MODEL_SET`, `ALL_MODELS`) registry
-üzerinden türetilir. Modül-seviyesi `__getattr__` sayesinde eski isimler
-import edilebilir; dinamik değerler ensure_loaded() üzerinden çözülür.
+`boosting_baseline_specs`) ve set sabitleri (`TREE_MODELS`,
+`BENCHMARK_MODEL_SET`, `ALL_MODELS`) registry üzerinden türetilir.
+Modül-seviyesi `__getattr__` sayesinde eski isimler import edilebilir;
+dinamik değerler ensure_loaded() üzerinden çözülür.
 
-`make_arima`, `make_lstm`, `make_prophet`, `build_deep_config`,
-`arima_config` helper'ları korunur — `ModelTrainer` ve `ForecastRunner`
-bu yardımcılarla dedike workflow çağırır.
+Sequence/deep-learning, Prophet ve ARIMA modelleri kaldirildi; per-symbol yol
+yalnizca tabular modelleri ve naive benchmark'lari icerir.
 """
 
 from __future__ import annotations
 
 from typing import Callable
 
-from src.models.arima_model import ARIMAModel
-from src.models.attention_lstm_v2_model import AttentionLSTMV2Model
-from src.models.lstm_lite_model import LSTMLiteModel
-from src.models.lstm_model import AttentionLSTMModel
-from src.models.random_forest_model import RandomForestModel
 from src.models.xgboost_model import XGBoostModel
 
-# Faz 3: TREE_MODELS / SEQ_MODELS / BENCHMARK_MODEL_SET / ALL_MODELS artık
+# Faz 3: TREE_MODELS / BENCHMARK_MODEL_SET / ALL_MODELS artık
 # `__getattr__` ile registry'den çözülür (aşağıda). Eski sabitler bu modülde
 # tanımlı değil — `from src.pipeline.model_factory import TREE_MODELS` hâlâ
 # çalışır (PEP 562).
 
-OPTIONAL_MODELS = ["Random Forest", "LightGBM Return"]
-LEGACY_MODELS = ["ARIMA", "Prophet"]
+OPTIONAL_MODELS = ["LightGBM Return"]
 
 # Hangi registry kategorileri "tree-family" (scaled tabular) sayılır.
 _TREE_CATEGORIES: frozenset[str] = frozenset({"tree", "linear_shrinkage"})
-# Hangi registry kategorileri "sequence-family" sayılır.
-_SEQ_CATEGORIES: frozenset[str] = frozenset({"seq", "linear_decomp"})
-
-
-def build_deep_config(config: dict) -> dict:
-    default = {
-        "min_sequence_samples": 64,
-        "validation_ratio": 0.1,
-        "min_validation_samples": 32,
-        "lstm": {
-            "epochs_single": 80,
-            "epochs_wf": 50,
-            "epochs_final": 50,
-            "patience": 15,
-            "lr_patience": 5,
-            "dropout": 0.2,
-            "batch_size": 32,
-        },
-        "lstm_lite_min_sequence_samples": 252,
-        "lstm_lite": {
-            "units": 32,
-            "dense_units": 16,
-            "dropout": 0.25,
-            "learning_rate": 0.0003,
-            "epochs_single": 80,
-            "epochs_wf": 50,
-            "epochs_final": 50,
-            "patience": 12,
-            "lr_patience": 4,
-            "batch_size": 32,
-            "tune_on_fit": False,
-            "tune_n_trials": 12,
-        },
-        "attention_lstm_v2_min_sequence_samples": 252,
-        "attention_lstm_v2": {
-            "units_1": 64,
-            "units_2": 32,
-            "dense_units": 32,
-            "dropout": 0.30,
-            "learning_rate": 0.0005,
-            "loss": "huber",
-            "epochs_single": 80,
-            "epochs_wf": 50,
-            "epochs_final": 50,
-            "patience": 12,
-            "lr_patience": 4,
-            "batch_size": 32,
-            "tune_on_fit": False,
-            "tune_n_trials": 12,
-        },
-    }
-    merged = dict(default)
-    merged.update({key: value for key, value in config.items() if key not in {"lstm", "lstm_lite"}})
-    for section in ("lstm", "lstm_lite", "attention_lstm_v2"):
-        section_cfg = dict(default[section])
-        section_cfg.update(config.get(section, {}))
-        merged[section] = section_cfg
-    return merged
-
-
-def arima_config(model_config: dict) -> dict:
-    return model_config.get("arima", {})
-
-
-def make_prophet(model_config: dict, feature_names: list):
-    from src.models.prophet_model import ProphetModel  # optional dependency
-
-    cfg = model_config.get("prophet", {})
-    return ProphetModel(
-        yearly_seasonality=True,
-        weekly_seasonality=True,
-        use_regressors=bool(cfg.get("use_regressors", False)),
-        regressor_names=cfg.get("regressor_names"),
-        feature_names=feature_names,
-    )
-
-
-def make_arima(model_config: dict) -> ARIMAModel:
-    cfg = arima_config(model_config)
-    return ARIMAModel(
-        order=tuple(cfg.get("order", (1, 0, 0))),
-        auto_order=bool(cfg.get("auto_order", False)),
-        candidate_orders=[tuple(order) for order in cfg.get("candidate_orders", [])] or None,
-    )
-
-
-def make_lstm(deep_config: dict, stage: str) -> AttentionLSTMModel:
-    cfg = deep_config["lstm"]
-    return AttentionLSTMModel(
-        epochs=int(cfg.get(f"epochs_{stage}", cfg.get("epochs_single", 80))),
-        patience=int(cfg.get("patience", 15)),
-        dropout_rate=float(cfg.get("dropout", 0.2)),
-        batch_size=int(cfg.get("batch_size", 32)),
-        lr_patience=int(cfg.get("lr_patience", 5)),
-        validation_ratio=float(deep_config.get("validation_ratio", 0.1)),
-        min_val_samples=int(deep_config.get("min_validation_samples", 32)),
-    )
-
-
-def make_lstm_lite(deep_config: dict, stage: str) -> LSTMLiteModel:
-    cfg = deep_config["lstm_lite"]
-    return LSTMLiteModel(
-        units=int(cfg.get("units", 32)),
-        dense_units=int(cfg.get("dense_units", 16)),
-        epochs=int(cfg.get(f"epochs_{stage}", cfg.get("epochs_single", 80))),
-        patience=int(cfg.get("patience", 12)),
-        dropout_rate=float(cfg.get("dropout", 0.25)),
-        batch_size=int(cfg.get("batch_size", 32)),
-        learning_rate=float(cfg.get("learning_rate", 0.0003)),
-        lr_patience=int(cfg.get("lr_patience", 4)),
-        validation_ratio=float(deep_config.get("validation_ratio", 0.1)),
-        min_val_samples=int(deep_config.get("min_validation_samples", 32)),
-        tune_on_fit=bool(cfg.get("tune_on_fit", False)),
-        tune_n_trials=int(cfg.get("tune_n_trials", 12)),
-    )
-
-
-def make_attention_lstm_v2(deep_config: dict, stage: str) -> AttentionLSTMV2Model:
-    cfg = deep_config["attention_lstm_v2"]
-    return AttentionLSTMV2Model(
-        units_1=int(cfg.get("units_1", 64)),
-        units_2=int(cfg.get("units_2", 32)),
-        dense_units=int(cfg.get("dense_units", 32)),
-        epochs=int(cfg.get(f"epochs_{stage}", cfg.get("epochs_single", 80))),
-        patience=int(cfg.get("patience", 12)),
-        dropout_rate=float(cfg.get("dropout", 0.30)),
-        batch_size=int(cfg.get("batch_size", 32)),
-        learning_rate=float(cfg.get("learning_rate", 0.0005)),
-        lr_patience=int(cfg.get("lr_patience", 4)),
-        validation_ratio=float(deep_config.get("validation_ratio", 0.1)),
-        min_val_samples=int(deep_config.get("min_validation_samples", 32)),
-        tune_on_fit=bool(cfg.get("tune_on_fit", False)),
-        tune_n_trials=int(cfg.get("tune_n_trials", 12)),
-        loss=str(cfg.get("loss", "huber")),
-    )
 
 
 # --- Spec helper'ları (Faz 3 — registry-derived) ------------------------
@@ -204,7 +62,7 @@ def benchmark_specs(target_mode: str):
 
 
 def linear_baseline_specs():
-    """Lineer shrinkage modelleri (Ridge, ElasticNet)."""
+    """Lineer shrinkage modelleri (Ridge)."""
     from src.pipeline.model_registry import all_specs
 
     return [
@@ -217,7 +75,7 @@ def boosting_baseline_specs():
     """LightGBM ailesi — tree kategorisinin boosting alt-kümesi.
 
     Mevcut tasarımda yalnızca `LightGBM Return` boosting baseline'ı olarak
-    raporlanır; XGBoost / Random Forest ayrı (tuned) yolda çalışır.
+    raporlanır; XGBoost ayrı (tuned) yolda çalışır.
     """
     from src.pipeline.model_registry import get_spec, has_spec
 
@@ -226,29 +84,12 @@ def boosting_baseline_specs():
     return []
 
 
-def sequence_baseline_specs():
-    """DLinear + NLinear (linear_decomp kategorisi)."""
-    from src.pipeline.model_registry import all_specs
-
-    # Tarihi sıralama: DLinear önce, NLinear sonra.
-    by_name = {s.name: s for s in all_specs(category="linear_decomp")}
-    ordered = []
-    for name in ("DLinear", "NLinear"):
-        if name in by_name:
-            ordered.append((name, by_name[name].factory))
-    # Beklenmedik plug-in linear_decomp modelleri sonuna eklenir.
-    for name, spec in by_name.items():
-        if name not in ("DLinear", "NLinear"):
-            ordered.append((name, spec.factory))
-    return ordered
-
-
 def model_class_for_name(model_name: str, model_config: dict, target_mode: str):
     """Registry-proxy (Faz 2).
 
     Davranış:
-      * Tree/linear/sequence/naive modeller için sıfır-arg ``cls()`` çağrılabilir.
-      * ARIMA için config-aware factory ``arima`` alt-sözlüğünü unpack eder.
+      * Tree/linear/naive modeller için sıfır-arg ``cls()`` çağrılabilir.
+      * ``needs_config_keys`` tanimli modeller icin config alt-sozlukleri unpack edilir.
       * Bilinmeyen model adında ``KeyError`` (orijinal mesaj).
       * `target_modes` desteklemeyen modeller yine ``KeyError`` döndürür.
     """
@@ -275,12 +116,6 @@ def _tree_model_set() -> set[str]:
     return {s.name for s in all_specs() if s.category in _TREE_CATEGORIES}
 
 
-def _seq_model_set() -> set[str]:
-    from src.pipeline.model_registry import all_specs
-
-    return {s.name for s in all_specs() if s.category in _SEQ_CATEGORIES}
-
-
 def _benchmark_model_set() -> set[str]:
     from src.pipeline.model_registry import all_specs
 
@@ -295,7 +130,6 @@ def _all_models_list() -> list[str]:
 
 _DYNAMIC_NAMES = {
     "TREE_MODELS": _tree_model_set,
-    "SEQ_MODELS": _seq_model_set,
     "BENCHMARK_MODEL_SET": _benchmark_model_set,
     "ALL_MODELS": _all_models_list,
 }

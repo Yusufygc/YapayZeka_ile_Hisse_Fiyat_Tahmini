@@ -33,13 +33,6 @@ def _make_synthetic_macro(n=100):
             "BIST100_MA7": rng.normal(0, 0.02, size=n),
             "USDTRY_Return": rng.normal(0.001, 0.005, size=n),
             "USDTRY_Volatility7": rng.uniform(0.001, 0.01, size=n),
-            "XBANK_Return": rng.normal(0.0006, 0.012, size=n),
-            "XUSIN_Return": rng.normal(0.0004, 0.008, size=n),
-            "Rate_Level": np.full(n, 8.5),
-            "Rate_Change": np.zeros(n),
-            "CPI_YoY": np.full(n, 50.0),
-            "CPI_MoM": np.full(n, 2.5),
-            "Real_Rate": np.full(n, -41.5),
         }
     )
 
@@ -60,17 +53,23 @@ class TestFeatureImprovements(unittest.TestCase):
         pipeline = FeaturePipeline(prune_correlated_features=False)
         df_features = pipeline.engineer_features(df_ohlcv)
 
-        # Check new indicators
-        self.assertIn("NATR_14", df_features.columns)
-        self.assertIn("MFI_14", df_features.columns)
-        self.assertIn("ADX_14", df_features.columns)
-        self.assertIn("CMF_20", df_features.columns)
+        # Kurate sette kalan gostergeler
+        for col in ("NATR_14", "RSI_14", "MACD_Diff_norm", "SMA_7_rel", "SMA_21_rel", "SMA_50_rel"):
+            self.assertIn(col, df_features.columns)
+            self.assertFalse(df_features[col].isna().any())
 
-        # Check no NaN values
-        self.assertFalse(df_features["NATR_14"].isna().any())
-        self.assertFalse(df_features["MFI_14"].isna().any())
-        self.assertFalse(df_features["ADX_14"].isna().any())
-        self.assertFalse(df_features["CMF_20"].isna().any())
+        # IC denetimi: tam/yakin kopya veya gurultu ozellikler uretilmez
+        for col in (
+            "MFI_14", "ADX_14", "CMF_20", "OBV_Norm_20", "VWAP_20_rel",
+            "BB_Width_14", "BB_Width_21", "MACD_norm", "MACD_Signal_norm",
+            "EMA_7_rel", "EMA_14_rel", "EMA_21_rel", "EMA_50_rel", "SMA_14_rel",
+            "Log_Return",
+        ):
+            self.assertNotIn(col, df_features.columns)
+
+        # Market_Regime_SMA200: sinyal kapisi girdisi olarak frame'de kalir ama OZELLIK DEGIL
+        self.assertIn("Market_Regime_SMA200", df_features.columns)
+        self.assertNotIn("Market_Regime_SMA200", pipeline.feature_names)
 
     def test_non_stationary_features_absent(self):
         df_ohlcv = _make_synthetic_ohlcv(100)
@@ -86,9 +85,23 @@ class TestFeatureImprovements(unittest.TestCase):
         self.assertNotIn("BIST100_Norm", df_features.columns)
         self.assertNotIn("USDTRY_MA7", df_features.columns)
 
-    def test_sector_relative_strength_calculation(self):
+    def test_sector_features_are_removed_and_report_is_disabled(self):
         df_ohlcv = _make_synthetic_ohlcv(150)
         macro_df = _make_synthetic_macro(150)
+        # Sektor endeksi serisi makro frame'de olsa bile sektor feature'i uretilmez.
+        macro_df["XBANK_Return"] = 0.001
+
+        pipeline = FeaturePipeline()
+        df_features = pipeline.engineer_features(df_ohlcv, macro_df=macro_df, symbol="AKBNK")
+
+        for col in ("Sector_Relative_Strength", "sector_momentum_60d", "relative_momentum_60d"):
+            self.assertNotIn(col, df_features.columns)
+            self.assertNotIn(col, pipeline.feature_names)
+        report = pipeline.sector_mapping_report
+        self.assertEqual(report["status"], "disabled")
+        self.assertFalse(report["feature_created"])
+
+    def test_sector_label_resolver_still_works(self):
         from tempfile import TemporaryDirectory
 
         with TemporaryDirectory() as tmp:
@@ -97,67 +110,17 @@ class TestFeatureImprovements(unittest.TestCase):
                 universe_path,
                 [["AKBNK", "2015-01-01", "", "Active", "test", "Bank", "XBANK", ""]],
             )
-            pipeline = FeaturePipeline()
             mapping = resolve_sector_mapping("AKBNK", universe_path)
-            df_akbnk = pipeline.engineer_features(
-                df_ohlcv,
-                macro_df=macro_df,
-                symbol="AKBNK",
-                sector_mapping=mapping,
-            )
-            self.assertIn("Sector_Relative_Strength", df_akbnk.columns)
+        self.assertEqual(mapping.sector, "Bank")
+        self.assertEqual(mapping.status, "matched")
 
-            row = df_akbnk.iloc[10]
-            expected_diff = row["Return"] - row["XBANK_Return"]
-            self.assertAlmostEqual(row["Sector_Relative_Strength"], expected_diff)
-            self.assertEqual(pipeline.sector_mapping_report["status"], "matched")
-
-        # Default/other -> BIST100 fallback
-        pipeline = FeaturePipeline()
-        df_default = pipeline.engineer_features(df_ohlcv, macro_df=macro_df, symbol="SASA")
-        self.assertIn("Sector_Relative_Strength", df_default.columns)
-        row_def = df_default.iloc[10]
-        expected_diff_def = row_def["Return"] - row_def["BIST100_Return"]
-        self.assertAlmostEqual(row_def["Sector_Relative_Strength"], expected_diff_def)
-        self.assertEqual(pipeline.sector_mapping_report["reason"], "mapping_not_provided")
-
-    def test_sector_relative_strength_fallback(self):
+    def test_relative_strength_still_created_with_macro(self):
         df_ohlcv = _make_synthetic_ohlcv(150)
         macro_df = _make_synthetic_macro(150)
-
-        # Remove XBANK_Return to trigger fallback
-        if "XBANK_Return" in macro_df.columns:
-            macro_df = macro_df.drop(columns=["XBANK_Return"])
-
         pipeline = FeaturePipeline()
-
-        # AKBNK -> XBANK (missing) -> Fallback to BIST100_Return
-        df_akbnk = pipeline.engineer_features(
-            df_ohlcv,
-            macro_df=macro_df,
-            symbol="AKBNK",
-            sector_mapping={"symbol": "AKBNK", "sector_index": "XBANK"},
-        )
-        self.assertIn("Sector_Relative_Strength", df_akbnk.columns)
-
-        row = df_akbnk.iloc[10]
-        expected_diff = row["Return"] - row["BIST100_Return"]
-        self.assertAlmostEqual(row["Sector_Relative_Strength"], expected_diff)
-        self.assertEqual(pipeline.sector_mapping_report["reason"], "sector_return_missing")
-
-    def test_sector_relative_strength_skips_when_bist100_missing(self):
-        df_ohlcv = _make_synthetic_ohlcv(150)
-        macro_df = _make_synthetic_macro(150).drop(columns=["BIST100_Return"])
-
-        pipeline = FeaturePipeline()
-        df_features = pipeline.engineer_features(
-            df_ohlcv,
-            macro_df=macro_df,
-            symbol="UNKNOWN",
-        )
-
-        self.assertNotIn("Sector_Relative_Strength", df_features.columns)
-        self.assertEqual(pipeline.sector_mapping_report["reason"], "bist100_return_missing")
+        df_features = pipeline.engineer_features(df_ohlcv, macro_df=macro_df, symbol="SASA")
+        row = df_features.iloc[10]
+        self.assertAlmostEqual(row["Relative_Strength"], row["Return"] - row["BIST100_Return"])
 
     def test_feature_cache_key_changes_when_universe_changes(self):
         from tempfile import TemporaryDirectory
@@ -169,10 +132,9 @@ class TestFeatureImprovements(unittest.TestCase):
                 feature_mode="stationary_features",
                 use_macro=True,
                 macro_rate_lag_days=1,
-                macro_cpi_lag_days=15,
                 prune_correlated_features=False,
                 correlation_threshold=0.88,
-                lag_feature_count=5,
+                lag_feature_count=1,
                 training_window_years=5,
                 universe_file=str(universe_path),
             )

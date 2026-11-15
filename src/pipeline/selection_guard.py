@@ -16,6 +16,10 @@ EligibilityStatus = Literal[
 MIN_TRADES_DEFAULT = 6
 # Diebold-Mariano tek-tarafli anlamlilik esigi (src.evaluation.scoring.DM_ALPHA ile ayni).
 DM_ALPHA_DEFAULT = 0.10
+# LEGACY: "Cash-Gated" / "Seq-Attention Inverse RMSE" yeni kosularda uretilmez
+# (model_scope.REMOVED_MODELS). Isimler yalnizca eski satirlarin okunmasi/best_models
+# yeniden insasi icin tutulur; silmek DB'yi degistirirdi (eski satirlar dusurulurdu).
+# Okuma/forecast yolu bu satirlari "model no longer supported, retrain" ile reddeder.
 PRODUCTION_ENSEMBLE_METHODS = {"Inverse RMSE", "Cash-Gated", "Seq-Attention Inverse RMSE"}
 
 

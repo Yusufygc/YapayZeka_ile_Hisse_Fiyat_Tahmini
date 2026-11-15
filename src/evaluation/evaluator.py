@@ -19,12 +19,8 @@ except Exception:  # pragma: no cover - plotting is skipped in minimal/headless 
 from src.utils.reporting_utils import route_output_path
 
 _BASELINE_CANDIDATES = (
-    "ARIMA",
     "Ridge Return",
-    "ElasticNet Return",
     "LightGBM Return",
-    "DLinear",
-    "NLinear",
     "Naive Zero Return",
     "Naive Drift",
     "Naive Last Value",
@@ -195,43 +191,3 @@ def plot_comparison(
     plt.savefig(save_path, dpi=150)
     plt.close()
     print(f"[OK] Karsilastirma grafigi kaydedildi -> {save_path}")
-
-
-def plot_prediction_interval(
-    y_true: np.ndarray,
-    median_pred: np.ndarray,
-    lower_pred: np.ndarray,
-    upper_pred: np.ndarray,
-    save_path: str,
-    title: str = "Tahmin Araligi",
-) -> None:
-    """
-    Plot lower/upper quantile bands for a single model.
-    """
-    if plt is None:
-        print("[WARN] matplotlib yok; tahmin araligi grafigi atlandi.")
-        return
-    save_path = route_output_path(save_path)
-    plt.figure(figsize=(16, 7))
-    x_axis = np.arange(len(y_true))
-    plt.plot(x_axis, y_true, label="Gercek Fiyat", color="black", linewidth=2.0, alpha=0.9)
-    plt.plot(x_axis, median_pred, label="P50 Tahmin", color="#c0392b", linewidth=1.8, alpha=0.9)
-    plt.fill_between(
-        x_axis,
-        lower_pred,
-        upper_pred,
-        color="#f5b7b1",
-        alpha=0.35,
-        label="P10-P90 Bandi",
-    )
-    plt.title(title, fontsize=14, fontweight="bold")
-    plt.xlabel("Test Seti Indeksi")
-    plt.ylabel("Kapanis Fiyati")
-    plt.legend(fontsize=11)
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    plt.savefig(save_path, dpi=150)
-    plt.close()
-    print(f"[OK] Tahmin araligi grafigi kaydedildi -> {save_path}")

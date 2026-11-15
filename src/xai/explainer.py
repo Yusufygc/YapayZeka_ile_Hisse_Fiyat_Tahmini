@@ -14,16 +14,14 @@ from src.xai.background import XAIBackgroundProvider
 from src.xai.feature_dictionary import describe_feature, feature_group
 from src.xai.narrative import contribution_sentence, model_summary_sentence
 from src.xai.strategies import (
-    SequenceContributionStrategy,
     TabularContributionStrategy,
     compute_feature_stability_scores,
 )
 
 
-TREE_MODELS = {"XGBoost", "Random Forest", "LightGBM Return"}
-LINEAR_MODELS = {"Ridge Return", "ElasticNet Return"}
-SEQ_MODELS = {"LSTM", "LSTM Lite", "AttentionLSTM", "AttentionLSTM v2", "DLinear", "NLinear"}
-BASELINE_MODELS = {"Naive Last Value", "Naive Zero Return", "Naive Drift", "ARIMA", "Prophet"}
+TREE_MODELS = {"XGBoost", "LightGBM Return"}
+LINEAR_MODELS = {"Ridge Return"}
+BASELINE_MODELS = {"Naive Last Value", "Naive Zero Return", "Naive Drift"}
 
 
 class XAIExplainer:
@@ -41,15 +39,9 @@ class XAIExplainer:
         self.max_rows = max_rows
         self.top_k = top_k
         self.tabular_strategy = TabularContributionStrategy(feature_names, max_rows=max_rows)
-        self.sequence_strategy = SequenceContributionStrategy(feature_names, max_rows=max_rows)
 
     def _set_background(self, background: XAIBackgroundProvider) -> None:
         self.tabular_strategy = TabularContributionStrategy(
-            self.feature_names,
-            max_rows=self.max_rows,
-            background_provider=background,
-        )
-        self.sequence_strategy = SequenceContributionStrategy(
             self.feature_names,
             max_rows=self.max_rows,
             background_provider=background,
@@ -62,17 +54,13 @@ class XAIExplainer:
         predictions: Dict[str, np.ndarray],
         prediction_targets: Dict[str, np.ndarray],
         y_true_aligned: np.ndarray,
-        quantile_predictions: Dict[str, np.ndarray] | None = None,
     ) -> Dict[str, pd.DataFrame | str]:
         top_rows: List[Dict[str, Any]] = []
         daily_rows: List[Dict[str, Any]] = []
-        heatmap_rows: List[Dict[str, Any]] = []
         summary_blocks: List[str] = [self._summary_header("latest")]
 
-        quantile_predictions = quantile_predictions or {}
         background = XAIBackgroundProvider.from_arrays(
             X_train=tensors.get("X_train_s"),
-            X_train_seq=tensors.get("X_train_seq"),
         )
         self._set_background(background)
 
@@ -88,11 +76,6 @@ class XAIExplainer:
                     model_top, model_daily = self._explain_linear_model(
                         model_name, model, tensors, predictions, prediction_targets, y_true_aligned
                     )
-                elif model_name in {"LSTM", "LSTM Lite", "AttentionLSTM", "AttentionLSTM v2"}:
-                    model_top, model_daily, model_heatmap = self._explain_sequence_permutation(
-                        model_name, model, tensors, predictions, prediction_targets, y_true_aligned
-                    )
-                    heatmap_rows.extend(model_heatmap)
                 else:
                     model_top, model_daily = self._explain_rule_based(
                         model_name, model, tensors, predictions, prediction_targets, y_true_aligned
@@ -107,7 +90,6 @@ class XAIExplainer:
         payload: Dict[str, Any] = {
             "top_reasons":  pd.DataFrame(top_rows),
             "daily_reasons": pd.DataFrame(daily_rows),
-            "sequence_heatmap": pd.DataFrame(heatmap_rows),
             "summary_md":   "\n\n".join(summary_blocks),
             "background_scope": background.scope,
             "run_id": self.dataset_metadata.get("run_id"),
@@ -127,7 +109,6 @@ class XAIExplainer:
         daily_rows: List[Dict[str, Any]] = []
         signal_rows: List[Dict[str, Any]] = []
         trade_rows: List[Dict[str, Any]] = []
-        heatmap_rows: List[Dict[str, Any]] = []
         summary = [self._summary_header("wf")]
         wf_backtest_inputs = wf_backtest_inputs or {}
         backtest_results = backtest_results or {}
@@ -143,7 +124,7 @@ class XAIExplainer:
             sentence = model_summary_sentence(model_name, latest_target, latest_pred, latest_true)
             records = wf_xai_records.get(model_name, [])
             if records:
-                model_top, model_daily, model_heatmap, fold_importances = self._rows_from_wf_records(
+                model_top, model_daily, fold_importances = self._rows_from_wf_records(
                     model_name=model_name,
                     records=records,
                     fallback_dates=payload.get("dates"),
@@ -154,7 +135,6 @@ class XAIExplainer:
                 if model_top or model_daily:
                     rows.extend(model_top)
                     daily_rows.extend(model_daily)
-                    heatmap_rows.extend(model_heatmap)
                     fold_importances_by_model[model_name] = fold_importances
                     summary.append(
                         f"## {model_name}\n\n"
@@ -189,7 +169,6 @@ class XAIExplainer:
             "daily_reasons": pd.DataFrame(daily_rows),
             "signal_reasons": pd.DataFrame(signal_rows),
             "trade_explanations": pd.DataFrame(trade_rows),
-            "sequence_heatmap": pd.DataFrame(heatmap_rows),
             "summary_md": "\n\n".join(summary),
             "feature_stability_top": self._merge_stability(fold_importances_by_model),
             "background_scope": self._background_scope_from_records(wf_xai_records),
@@ -407,37 +386,6 @@ class XAIExplainer:
         contribs, method, _approximate = self.tabular_strategy.lime_tabular_contributions(estimator, X)
         return contribs, method
 
-    def _lime_sequence_local_contributions(self, model: Any, X_seq: np.ndarray) -> Tuple[np.ndarray, str]:
-        contribs, method, _approximate = self.sequence_strategy.lime_sequence_local_contributions(model, X_seq)
-        return contribs, method
-
-    def _explain_sequence_permutation(
-        self,
-        model_name: str,
-        model: Any,
-        tensors: Dict[str, Any],
-        predictions: Dict[str, np.ndarray],
-        prediction_targets: Dict[str, np.ndarray],
-        y_true_aligned: np.ndarray,
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
-        X_seq = self._align_rows(np.asarray(tensors["X_test_seq"], dtype=float), len(predictions[model_name]))
-        contribs, heatmap, method, approximate = self.sequence_strategy.feature_lag_contributions(model, X_seq)
-        top_rows, daily_rows = self._rows_from_contributions(
-            model_name,
-            contribs,
-            np.asarray(predictions[model_name])[-1:],
-            np.asarray(prediction_targets.get(model_name, []))[-1:],
-            np.asarray(y_true_aligned)[-1:],
-            method,
-            approximate=approximate,
-            dates=self._align_rows(np.asarray(tensors.get("dates_test", [])), len(predictions[model_name]))[-1:],
-        )
-        for row in heatmap:
-            row["Model"] = model_name
-            row["Readable_Feature"] = describe_feature(str(row.get("Feature", "")))
-            row["Feature_Group"] = feature_group(str(row.get("Feature", "")))
-        return top_rows, daily_rows, heatmap
-
     def _explain_rule_based(
         self,
         model_name: str,
@@ -459,12 +407,9 @@ class XAIExplainer:
         elif model_name == "Naive Drift":
             feature = "Historical_Drift"
             reason = "Bu baseline eğitim dönemindeki ortalama getirinin devam edeceğini varsayar."
-        elif model_name == "ARIMA":
-            feature = "Historical_Autocorrelation"
-            reason = "ARIMA son dönem tarihsel hareket yapısını kullanarak tahmin üretir."
         else:
-            feature = "Prophet_Trend_Seasonality"
-            reason = "Prophet tarihsel trend ve takvimsel tekrar eden hareketleri kullanarak tahmin üretir."
+            feature = "Rule_Based_Assumption"
+            reason = "Bu model kural tabanli bir referans davranisi kullanir."
 
         summary = model_summary_sentence(model_name, pred_target, pred_price, actual)
         full_reason = f"{summary} {reason}"
@@ -559,13 +504,12 @@ class XAIExplainer:
         fallback_pred_target: np.ndarray,
         fallback_pred_price: np.ndarray,
         fallback_true: np.ndarray,
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, float]]]:
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, float]]]:
         all_contribs: List[np.ndarray] = []
         all_dates: List[Any] = []
         all_pred_target: List[float] = []
         all_pred_price: List[float] = []
         all_true: List[float] = []
-        heatmap_rows: List[Dict[str, Any]] = []
         fold_importances: List[Dict[str, float]] = []
         method = "walk_forward_attribution"
         approximate = False
@@ -585,16 +529,8 @@ class XAIExplainer:
             fold_imp = record.get("fold_importance")
             if isinstance(fold_imp, dict):
                 fold_importances.append({str(k): float(v) for k, v in fold_imp.items()})
-            for row in record.get("sequence_heatmap", []) or []:
-                if isinstance(row, dict):
-                    heatmap_row = dict(row)
-                    heatmap_row["Model"] = model_name
-                    heatmap_row.setdefault("Fold", record.get("fold"))
-                    heatmap_row.setdefault("Readable_Feature", describe_feature(str(row.get("Feature", ""))))
-                    heatmap_row.setdefault("Feature_Group", feature_group(str(row.get("Feature", ""))))
-                    heatmap_rows.append(heatmap_row)
         if not all_contribs:
-            return [], [], heatmap_rows, fold_importances
+            return [], [], fold_importances
         contribs_all = np.vstack(all_contribs)
         dates = all_dates or list(np.asarray(fallback_dates).ravel()[-len(contribs_all):])
         pred_target = all_pred_target or list(np.asarray(fallback_pred_target).ravel()[-len(contribs_all):])
@@ -611,7 +547,7 @@ class XAIExplainer:
             dates=dates,
             background_scope=background_scope,
         )
-        return top_rows, daily_rows, heatmap_rows, fold_importances
+        return top_rows, daily_rows, fold_importances
 
     def _merge_stability(self, fold_importances_by_model: Dict[str, List[Dict[str, float]]]) -> Dict[str, float]:
         merged: Dict[str, float] = {}

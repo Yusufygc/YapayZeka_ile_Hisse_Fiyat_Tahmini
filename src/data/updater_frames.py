@@ -7,6 +7,9 @@ from typing import Any
 
 import pandas as pd
 
+from src.data.dates import parse_dates
+
+ISO_DATE_FORMAT = "%Y-%m-%d"
 _OVERLAP_DAYS = 7
 _OVERLAP_TOLERANCE = 0.005  # |yeni/eski - 1| > %0.5 -> yeniden olcekleme suphesi
 
@@ -63,20 +66,15 @@ def _find_column(columns: Any, candidates: list[str]) -> str | None:
 
 
 def _parse_date_series(values: pd.Series) -> pd.Series:
-    """Tarih kolonunu ayristirir (yil-ilk ise dayfirst=False, degilse True); NaT'ler atilir."""
+    """Tarih kolonunu DEGER BAZINDA ayristirir (ISO ve dd/mm/yyyy ayni kolonda olabilir); NaT atilir.
+
+    Ortak ``src.data.dates.parse_dates`` kullanilir: kolonun ilk degerine bakip tum kolon icin
+    ``dayfirst`` secmek ISO ile baslayip dd/mm ile devam eden dosyalari bozuyordu.
+    """
     vals_clean = values.dropna()
     if vals_clean.empty:
         return pd.Series([], dtype="datetime64[ns]")
-    sample = str(vals_clean.iloc[0]).strip()
-    is_year_first = False
-    for separator in ["-", "/", "."]:
-        if separator in sample:
-            parts = sample.split(separator)
-            if parts and len(parts[0]) == 4:
-                is_year_first = True
-                break
-    parsed = pd.to_datetime(vals_clean, errors="coerce", dayfirst=not is_year_first)
-    return parsed.dropna()
+    return parse_dates(vals_clean, errors="coerce").dropna()
 
 
 def _parse_last_date(values: pd.Series) -> pd.Timestamp:
@@ -133,12 +131,10 @@ def _map_to_existing_schema(new_data: pd.DataFrame, existing_columns: Any, date_
     return result
 
 
-def _infer_date_format(sample: str) -> str:
-    sample = sample.strip()
-    if "-" in sample:
-        return "%Y-%m-%d" if len(sample.split("-")[0]) == 4 else "%d-%m-%Y"
-    if "/" in sample:
-        return "%Y/%m/%d" if len(sample.split("/")[0]) == 4 else "%d/%m/%Y"
-    if "." in sample:
-        return "%Y.%m.%d" if len(sample.split(".")[0]) == 4 else "%d.%m.%Y"
-    return "%Y-%m-%d"
+def _csv_date_format() -> str:
+    """CSV'ye yazilan tarih bicimi: HER ZAMAN ISO ``YYYY-MM-DD`` (mevcut dosya dd/mm olsa bile).
+
+    Okuyucular (``src.data.dates.parse_dates``) deger bazinda ayristirdigi icin karisik dosya guvenlidir;
+    bicimi son satira bakip taklit etmek dd/mm dosyalarini surekli kopyaliyordu.
+    """
+    return ISO_DATE_FORMAT

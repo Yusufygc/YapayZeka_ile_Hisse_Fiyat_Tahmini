@@ -31,11 +31,11 @@ class ModelSpec:
     Attributes
     ----------
     name : str
-        Pipeline-wide kanonik model adı (örn. "Random Forest").
+        Pipeline-wide kanonik model adı (örn. "XGBoost").
     factory : Callable
         ``factory(**kwargs) -> BaseModel`` örneği üreten çağrılabilir.
     category : str
-        ``"tree" | "linear_decomp" | "linear_shrinkage" | "seq" | "stat" | "benchmark"``.
+        ``"tree" | "linear_shrinkage" | "benchmark"``.
     role : str
         ``"candidate" | "benchmark" | "legacy"``.
     ensemble_eligible : bool
@@ -45,7 +45,7 @@ class ModelSpec:
     target_modes : tuple[str, ...]
         Desteklenen target semantiği.
     needs_config_keys : tuple[str, ...]
-        ``model_config`` dict'inden okunacak alt-sözlük adları (örn. ``("lstm",)``).
+        ``model_config`` dict'inden okunacak alt-sözlük adları (örn. ``("xgboost",)``).
     description : str
         Kısa açıklama; ``--list-models`` çıktısında kullanılır.
     """

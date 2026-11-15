@@ -25,16 +25,9 @@ _ALL_MODELS = model_factory.ALL_MODELS
 # sınırlı ek değer sunar; yalnızca karşılaştırma amacıyla kullanılır
 _OPTIONAL_MODELS = model_factory.OPTIONAL_MODELS
 
-# Üretim kullanımı önerilmez (literatür temelli):
-#   ARIMA  — X_train'i yok sayar, yalnızca y_train kullanır (Fama 1970/1991)
-#   Prophet — walk-forward desteği yok; yalnızca single-split (Taylor & Letham 2018)
-_LEGACY_MODELS = model_factory.LEGACY_MODELS
-
 _BENCHMARK_MODELS = model_factory.BENCHMARK_MODEL_SET
 _TREE_MODELS = model_factory.TREE_MODELS
-_SEQ_MODELS = model_factory.SEQ_MODELS
 XGBoostModel = model_factory.XGBoostModel
-RandomForestModel = model_factory.RandomForestModel
 
 
 @dataclass
@@ -48,7 +41,6 @@ class TrainingContext:
     dataset_hash: str = "N/A"
     dataset_metadata: dict = field(default_factory=dict)
     model_config: dict = field(default_factory=dict)
-    deep_config: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -67,19 +59,11 @@ class TrainingState:
 @dataclass
 class TrainingHelpers:
     model_class_for_name: Callable
-    make_prophet: Callable
-    make_arima: Callable
-    make_lstm: Callable
-    make_lstm_lite: Callable
-    make_attention_lstm_v2: Callable
-    has_min_sequences: Callable
-    wf_has_min_sequences: Callable
     skip: Callable
     wf_run: Callable
     baseline_specs: Callable
     linear_baseline_specs: Callable
     boosting_baseline_specs: Callable
-    sequence_baseline_specs: Callable
     dump_feature_importances: Callable
 
 
@@ -107,7 +91,6 @@ class ModelTrainer:
             dataset_hash=dataset_hash,
             dataset_metadata=dataset_metadata,
             model_config=model_config,
-            deep_config=self._build_deep_config(model_config.get("deep_learning", {})),
         )
         self.training_state = TrainingState()
         self._init_training_workflows()
@@ -115,19 +98,11 @@ class ModelTrainer:
     def _init_training_workflows(self) -> None:
         helpers = TrainingHelpers(
             model_class_for_name=self._model_class_for_name,
-            make_prophet=self._make_prophet,
-            make_arima=self._make_arima,
-            make_lstm=self._make_lstm,
-            make_lstm_lite=self._make_lstm_lite,
-            make_attention_lstm_v2=self._make_attention_lstm_v2,
-            has_min_sequences=self._has_min_sequences,
-            wf_has_min_sequences=self._wf_has_min_sequences,
             skip=self._skip,
             wf_run=self._wf_run,
             baseline_specs=self._baseline_specs,
             linear_baseline_specs=self._linear_baseline_specs,
             boosting_baseline_specs=self._boosting_baseline_specs,
-            sequence_baseline_specs=self._sequence_baseline_specs,
             dump_feature_importances=self._dump_feature_importances,
         )
         self.single_split_training_workflow = SingleSplitTrainingWorkflow(
@@ -139,51 +114,6 @@ class ModelTrainer:
         self.final_holdout_training_workflow = FinalHoldoutTrainingWorkflow(
             self.training_context, self.training_state, helpers
         )
-
-    @staticmethod
-    def _build_deep_config(config: dict) -> dict:
-        return model_factory.build_deep_config(config)
-
-    def _arima_config(self) -> dict:
-        return model_factory.arima_config(self.training_context.model_config)
-
-    def _make_prophet(self):
-        return model_factory.make_prophet(self.training_context.model_config, self.training_context.feature_names)
-
-    def _make_arima(self):
-        return model_factory.make_arima(self.training_context.model_config)
-
-    def _make_lstm(self, stage: str):
-        return model_factory.make_lstm(self.training_context.deep_config, stage)
-
-    def _make_lstm_lite(self, stage: str):
-        return model_factory.make_lstm_lite(self.training_context.deep_config, stage)
-
-    def _make_attention_lstm_v2(self, stage: str):
-        return model_factory.make_attention_lstm_v2(self.training_context.deep_config, stage)
-
-    def _min_sequence_samples_for(self, model_name: str) -> int:
-        if model_name == "AttentionLSTM v2":
-            return int(self.training_context.deep_config.get("attention_lstm_v2_min_sequence_samples", 252))
-        if model_name == "LSTM Lite":
-            return int(self.training_context.deep_config.get("lstm_lite_min_sequence_samples", 252))
-        return int(self.training_context.deep_config.get("min_sequence_samples", 64))
-
-    def _has_min_sequences(self, count: int, model_name: str, context: str) -> bool:
-        min_seq = self._min_sequence_samples_for(model_name)
-        if count < min_seq:
-            print(f"  [WARN] {model_name} atlandi: {context} sequence sayisi {count} < {min_seq}.")
-            return False
-        return True
-
-    def _wf_has_min_sequences(self, wf_splits: list, data_manager, model_name: str) -> bool:
-        min_seq = self._min_sequence_samples_for(model_name)
-        time_steps = getattr(data_manager, "time_steps", None) or data_manager.data_cfg.time_steps
-        min_fold_seq = min(max(0, len(split["train"]) - time_steps) for split in wf_splits) if wf_splits else 0
-        if min_fold_seq < min_seq:
-            print(f"  [WARN] {model_name} walk-forward atlandi: en kucuk fold sequence sayisi {min_fold_seq} < {min_seq}.")
-            return False
-        return True
 
     def _skip(self, name: str) -> bool:
         if name in _BENCHMARK_MODELS:
@@ -235,9 +165,6 @@ class ModelTrainer:
 
     def _boosting_baseline_specs(self):
         return model_factory.boosting_baseline_specs()
-
-    def _sequence_baseline_specs(self):
-        return model_factory.sequence_baseline_specs()
 
     def _model_class_for_name(self, model_name: str):
         target_mode = self.training_context.dataset_metadata.get("target_mode", "log_return")

@@ -94,9 +94,6 @@ class ForecastingPipeline:
         self.prune_correlated_features = d.prune_correlated_features
         self.correlation_threshold = d.correlation_threshold
         self.lag_feature_count = d.lag_feature_count
-        self.use_prophet_macro_regressors = m.model_settings.get("prophet", {}).get(
-            "use_regressors", True
-        )
         self.ensemble_enabled = m.ensemble_enabled
         self.universe_file = d.universe_file
         self.clip_shift_warning_threshold_pct = d.clip_shift_warning_threshold_pct
@@ -115,8 +112,6 @@ class ForecastingPipeline:
             )
 
         self.model_config = m.model_settings
-        self.model_config.setdefault("prophet", {})
-        self.model_config["prophet"].setdefault("use_regressors", self.use_prophet_macro_regressors)
 
     def _init_run_identity(self, m: ModelConfig) -> None:
         self.stock_symbol = os.path.splitext(os.path.basename(self.data_file))[0]
@@ -226,7 +221,7 @@ class ForecastingPipeline:
         print(f"  [INFO] Feature Mode: {self.feature_mode}")
         print(f"  [INFO] Scaling Mode: {self.scaling_mode}")
         print(
-            f"  [INFO] Macro Lag   : rate={self.macro_rate_lag_days}d, CPI={self.macro_cpi_lag_days}d"
+            f"  [INFO] Macro Lag   : rate={self.macro_rate_lag_days}d"
         )
         print(
             "  [INFO] WF Config   : "
@@ -249,13 +244,6 @@ class ForecastingPipeline:
             f"corr_prune={self.prune_correlated_features}, "
             f"corr_threshold={self.correlation_threshold}, "
             f"clip_warn={self.clip_shift_warning_threshold_pct}%"
-        )
-        deep_cfg = self.model_config.get("deep_learning", {})
-        print(
-            "  [INFO] Deep Config : "
-            f"min_seq={deep_cfg.get('min_sequence_samples')}, "
-            f"val_ratio={deep_cfg.get('validation_ratio')}, "
-            f"min_val={deep_cfg.get('min_validation_samples')}"
         )
 
     def _write_validation_and_quality_reports(self) -> None:
@@ -340,11 +328,6 @@ class ForecastingPipeline:
                 "benchmark_models": list(BENCHMARK_MODELS),
                 "registry_version": self.registry_version,
                 "xgboost_hpo": {"scope": "train_only_temporal_cv", "n_trials": 40, "n_splits": 3},
-                "random_forest_hpo": {
-                    "scope": "train_only_temporal_cv",
-                    "n_trials": 40,
-                    "n_splits": 3,
-                },
                 **self.model_config,
             },
         )

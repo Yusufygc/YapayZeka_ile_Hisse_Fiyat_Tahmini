@@ -240,7 +240,7 @@ def _read_rate_from_cache(
         raw_value = float(last_row[col])
 
         # Deger % birimiyle mi yoksa ondalik mi?
-        # MacroPipeline Rate_Level'i ondalik olarak saklar (ornegin 0.42).
+        # Cache ondalik (ornegin 0.42) ya da yuzde (ornegin 42.0) olabilir.
         # Eger > 1 ise yuzdelik olarak yorumla.
         if raw_value > 1.0:
             raw_value = raw_value / 100.0

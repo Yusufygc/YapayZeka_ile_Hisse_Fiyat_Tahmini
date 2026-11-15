@@ -119,7 +119,7 @@ class TestModelTrainerSmoke(unittest.TestCase):
             self.assertEqual(trainer.training_context.selected_models, set(_ALL_MODELS))
 
     def test_tree_hpo_storage_is_available_for_each_selected_tree_model(self):
-        """XGBoost olmadan Random Forest secilirse Optuna storage tanimsiz kalmamali."""
+        """Secilen tuned tree modeli (XGBoost) icin Optuna storage tanimsiz kalmamali."""
         from src.pipeline.model_trainer import ModelTrainer
 
         tensors = {
@@ -133,16 +133,14 @@ class TestModelTrainerSmoke(unittest.TestCase):
             def tune_and_train(self, X_train, y_train, **kwargs):
                 self.__class__.calls.append(kwargs)
 
-        for selected in (["Random Forest"], ["XGBoost"], ["XGBoost", "Random Forest"]):
+        for selected in (["XGBoost"], ["XGBoost", "Ridge Return"]):
             FakeTunedModel.calls = []
             tmpdir = os.path.join(os.getcwd(), "outputs", "_test_tree_hpo_storage")
             os.makedirs(tmpdir, exist_ok=True)
             with patch.object(ModelTrainer, "_baseline_specs", return_value=[]), \
                  patch.object(ModelTrainer, "_linear_baseline_specs", return_value=[]), \
                  patch.object(ModelTrainer, "_boosting_baseline_specs", return_value=[]), \
-                 patch.object(ModelTrainer, "_sequence_baseline_specs", return_value=[]), \
-                 patch("src.pipeline.model_trainer.XGBoostModel", FakeTunedModel), \
-                 patch("src.pipeline.model_trainer.RandomForestModel", FakeTunedModel):
+                 patch("src.pipeline.model_trainer.XGBoostModel", FakeTunedModel):
                 trainer = ModelTrainer(
                     stock_symbol="TEST",
                     feature_names=["f1", "f2"],
@@ -151,7 +149,7 @@ class TestModelTrainerSmoke(unittest.TestCase):
                 )
                 trainer.train_single_split(tensors)
 
-            self.assertEqual(len(FakeTunedModel.calls), len(selected))
+            self.assertEqual(len(FakeTunedModel.calls), 1)
             for call in FakeTunedModel.calls:
                 expected = os.path.abspath(
                     os.path.join(os.getcwd(), "data", "optuna", "optuna_studies_TEST.db")

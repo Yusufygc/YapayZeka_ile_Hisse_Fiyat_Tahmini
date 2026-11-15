@@ -15,7 +15,7 @@ from typing import Any, Dict, List
 import numpy as np
 
 from src.xai.background import XAIBackgroundProvider
-from src.xai.strategies import SequenceContributionStrategy, TabularContributionStrategy
+from src.xai.strategies import TabularContributionStrategy
 from src.evaluation.financial_metrics import (
     _annualized_sharpe,
     _price_to_simple_returns,
@@ -224,7 +224,6 @@ class WalkForwardValidator:
 
         train_df = split["train"]
         test_df = split["test"]
-        context_df = split.get("embargo_context")
 
         (
             X_train,
@@ -238,14 +237,11 @@ class WalkForwardValidator:
             prediction_dates_test,
             y_test_target,
             market_regime_test,
-        ) = self.preprocessor(train_df, test_df, context_df=context_df)
+        ) = self.preprocessor(train_df, test_df)
 
         model = self.model_initializer()
-        dates_train = train_df["Date"].values if "Date" in train_df.columns else None
-        model.train(X_train, y_train, dates_train=dates_train)
-
-        dates_test_raw = test_df["Date"].values if "Date" in test_df.columns else None
-        preds = model.predict(X_test, dates_test=dates_test_raw)
+        model.train(X_train, y_train)
+        preds = model.predict(X_test)
 
         inner = getattr(model, "model", model)
         fi = getattr(inner, "feature_importances_", None)
@@ -353,15 +349,6 @@ class WalkForwardValidator:
                     contribs, method, approximate = strategy.linear_contributions(estimator, X_test_arr)
                 else:
                     contribs, method, approximate = strategy.tree_contributions(estimator, X_test_arr)
-                heatmap: list[dict] = []
-            elif X_test_arr.ndim == 3:
-                background = XAIBackgroundProvider.from_arrays(X_train_seq=X_train_arr)
-                strategy = SequenceContributionStrategy(
-                    self.feature_names,
-                    max_rows=self.xai_max_rows,
-                    background_provider=background,
-                )
-                contribs, heatmap, method, approximate = strategy.feature_lag_contributions(model, X_test_arr)
             else:
                 return {}
             contribs = np.asarray(contribs, dtype=float)
@@ -377,8 +364,6 @@ class WalkForwardValidator:
                 feature: float(value)
                 for feature, value in zip(self.feature_names, np.mean(np.abs(contribs), axis=0))
             }
-            for row in heatmap:
-                row["Fold"] = fold_id
             return {
                 "fold": fold_id,
                 "method": method,
@@ -390,7 +375,6 @@ class WalkForwardValidator:
                 "pred_target": np.asarray(pred_target, dtype=float)[-min_len:].tolist(),
                 "pred_price": np.asarray(pred_price, dtype=float)[-min_len:].tolist(),
                 "y_true_price": np.asarray(y_true_price, dtype=float)[-min_len:].tolist(),
-                "sequence_heatmap": heatmap,
             }
         except Exception as exc:
             return {

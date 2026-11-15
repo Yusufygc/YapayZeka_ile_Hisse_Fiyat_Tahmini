@@ -66,11 +66,10 @@ def test_compressed_dump_loads_back_and_is_smaller(tmp_path):
 
 def test_model_save_methods_use_compression(tmp_path):
     import inspect
-    import src.models.random_forest_model as rf_mod
     import src.models.xgboost_model as xgb_mod
     import src.models.linear_model as lin_mod
 
-    for mod in (rf_mod, xgb_mod, lin_mod):
+    for mod in (xgb_mod, lin_mod):
         assert "compress=3" in inspect.getsource(mod)
 
 

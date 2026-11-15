@@ -35,12 +35,11 @@ AVAILABLE_MODELS = list(candidate_models())
 
 PRESETS = {
     "1": ("Tüm Modeller",            AVAILABLE_MODELS),
-    "2": ("Agac Tabanli",            ["XGBoost", "Random Forest", "LightGBM Return"]),
-    "3": ("Yalnızca Derin Öğrenme",  ["LSTM", "LSTM Lite", "AttentionLSTM v2"]),
-    "4": ("Hızlı (XGBoost + LSTM)",  ["XGBoost", "LSTM"]),
-    "5": ("Yalnızca Prophet",        ["Prophet"]),
-    "6": ("Modern Baseline",         ["Ridge Return", "ElasticNet Return", "LightGBM Return", "DLinear", "NLinear"]),
-    "7": ("Manuel Seçim",            None),
+    "2": ("Agac Tabanli",            ["XGBoost", "LightGBM Return"]),
+    "3": ("Lineer Baseline",         ["Ridge Return"]),
+    "4": ("Hızlı (XGBoost)",         ["XGBoost"]),
+    "5": ("Modern Baseline",         ["Ridge Return", "LightGBM Return"]),
+    "6": ("Manuel Seçim",            None),
 }
 
 # ─── Yardımcı Fonksiyonlar ────────────────────────────────────────────────────
@@ -214,7 +213,7 @@ def confirm(cfg: PipelineConfig) -> bool:
     print(f"  Scaling Mode : {cfg.data.scaling_mode}")
     print(f"  Signal Mode  : {cfg.execution.signal_mode}")
     print(f"  Quality Gate : {cfg.execution.signal_config.quality_gate_mode}")
-    print(f"  Macro Lag    : rate={cfg.data.macro_rate_lag_days}d, CPI={cfg.data.macro_cpi_lag_days}d")
+    print(f"  Macro Lag    : rate={cfg.data.macro_rate_lag_days}d")
     print(
         f"  WF Config    : splits={cfg.validation.wf_n_splits}, test={cfg.validation.wf_test_size}, "
         f"max_train={cfg.validation.wf_max_train_size}, type={cfg.validation.wf_window_type}, holdout={cfg.validation.final_holdout_size}"
@@ -226,10 +225,7 @@ def confirm(cfg: PipelineConfig) -> bool:
     )
     print(
         "  Model Config : "
-        f"min_seq={cfg.models.model_settings['deep_learning']['min_sequence_samples']}, "
-        f"lstm_lite_min_seq={cfg.models.model_settings['deep_learning'].get('lstm_lite_min_sequence_samples')}, "
-        f"val_ratio={cfg.models.model_settings['deep_learning']['validation_ratio']}, "
-        f"arima_auto={cfg.models.model_settings['arima']['auto_order']}"
+        f"gradient_boosting={cfg.models.model_settings.get('gradient_boosting', {})}"
     )
     print(
         "  Feature QC   : "

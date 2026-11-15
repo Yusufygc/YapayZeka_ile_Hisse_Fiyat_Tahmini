@@ -9,13 +9,13 @@ from typing import Tuple, List, Dict
 
 
 # P1 derin denetim (2026-11): WF embargo varsayilani `target_horizon + 5`.
-# Eski varsayilan `max(200, time_steps)` "SMA200 sizintisi" gerekcesiyle konmustu;
+# Eski varsayilan `max(200, sequence uzunlugu)` "SMA200 sizintisi" gerekcesiyle konmustu;
 # bu yanlis: ozellikler nedensel (causal) ve test penceresi etiketsiz baglam satirlari
 # (`embargo_context` + train kuyrugu) alir. Yalnizca ETIKET ortusmesi (ufuk h) sizdirir:
 # train son satirinin hedefi t+h kapanisini kullanir -> en az h satir tampon gerekir.
 # +5 guvenlik payi pooled CV'deki E=h+5 ile ayni.
 # Bu helper data_manager.py'dan buraya tasindi ki agir import zincirleri
-# (joblib, tensorflow vb.) olmayan test ortamlarinda da import edilebilsin.
+# (joblib vb.) olmayan test ortamlarinda da import edilebilsin.
 _AUTO_EMBARGO_BUFFER = 5
 # Kullanimdan kalkti (eski 200 tamponu). data_manager.py hala import ettigi icin
 # uyumluluk adina tutuluyor; embargo tabani artik target_horizon'dur.
@@ -34,11 +34,10 @@ def _validate_wf_embargo(embargo_size: int, target_horizon: int) -> int:
     return int(embargo_size)
 
 
-def _resolve_wf_embargo_size(raw_value, time_steps: int, target_horizon: int = 1) -> int:
+def _resolve_wf_embargo_size(raw_value, target_horizon: int = 1) -> int:
     """None/0/negatif/gecersiz -> auto `target_horizon + 5`; explicit deger < h -> ValueError.
 
-    ``time_steps`` artik embargoyu etkilemez (sequence baglami embargodan degil,
-    train kuyruğu + embargo satirlarindan gelir); imza geriye uyum icin korunur.
+    Embargo yalnizca etiket ufkuna (``target_horizon``) baglidir.
     """
     h = max(1, int(target_horizon or 1))
     auto = h + _AUTO_EMBARGO_BUFFER
@@ -156,9 +155,8 @@ class TimeSeriesSplitter:
                                     (örn. BIST hisseleri) systematic bias'ı önler.
             embargo_size   : train ile test arasindaki tampon (satir).
             target_horizon : verilirse ``embargo_size < target_horizon`` ValueError
-                             (etiket ortusmesi sizintisi).  Test penceresinin sequence
-                             baglami ``embargo_context`` (+ train kuyrugu) ile saglanir;
-                             context satirlari yalniz ozellik olarak kullanilir.
+                             (etiket ortusmesi sizintisi).  ``embargo_context`` embargo
+                             satirlarini raporlama icin tasir; modele girdi degildir.
         """
         if "Date" in df.columns:
             df = df.sort_values(by="Date").reset_index(drop=True)

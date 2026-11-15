@@ -29,7 +29,7 @@ BIST hisseleri, global piyasalar ile kıyaslandığında birkaç yapısal zorluk
 
 Bu pipeline aşağıdaki sorulara cevap verir:
 
-- Hangi model tipi (LSTM, XGBoost, Ridge, ARIMAâ€¦) belirli bir BIST hissesi için en iyi çalışır?
+- Hangi model tipi (XGBoost, Ridge, LightGBM, naive benchmark) belirli bir BIST hissesi için en iyi çalışır?
 - Model seçimi rastgele mi, yoksa istatistiksel olarak anlamlı mı?
 - Tahmin sinyalleri gerçek bir ticaret stratejisine dönüştürüldüğünde komisyon ve kayma maliyetleri dahil kârlı mı?
 - Hangi özellikler (teknik indikatörler, makro değişkenler) modele en çok katkı sağlıyor?
@@ -86,11 +86,13 @@ Pipelinedaki her adımın neden bu sırayla yapıldığı, veri sızıntısını
    └─ Sıfır hacimli satırlar düşürülür (işlem görmeyen günler)
 
 2. Özellik Mühendisliği
-   ├─ FeaturePipeline: 20+ teknik indikatör
-   │   (SMA, EMA, RSI, MACD, Bollinger Bantları, ATR, OBV, vb.)
-   └─ MacroPipeline: Makro bağlam özellikleri
-       (USD/TRY, EUR/TRY, BIST100, VIX, Altın, Brent, DXY, ABD 10Y Faiz,
-        TCMB Faiz, CPI — yfinance + FRED API)
+   ├─ FeaturePipeline: kürate 19 özellik (IC denetimi 2026-11)
+   │   (Return, SMA_7/21/50_rel, RollStd_14/21_norm, NATR_14, RSI_14, MACD_Diff_norm,
+   │    LogRet_Lag_1, day_of_week, Relative_Strength, momentum_60d, market_momentum_60d,
+   │    relative_to_market_60d)
+   └─ MacroPipeline: yalnızca USD/TRY + BIST100 (yfinance)
+       (USDTRY_Return, USDTRY_Volatility7, BIST100_Return, BIST100_MA7;
+        TCMB faiz cache'i yalnızca risk-free oran kaynağıdır, model özelliği değildir)
 
 3. Chronological Train/Test Split  â† DataSplitter
    └─ Kesinlikle zaman sırasına göre; karıştırma yok, sızıntı yok
@@ -99,24 +101,21 @@ Pipelinedaki her adımın neden bu sırayla yapıldığı, veri sızıntısını
    ├─ X: RobustScaler (aykırı değerlere dayanıklı)
    └─ y: StandardScaler + klipleme (log-getiri hedefi için)
 
-5. 3D Diziler Oluştur  â† LSTM/sequence modeller için
-   └─ [örnekler, TIME_STEPS=30, özellik_sayısı]
-
-6. Model Eğitimi
+5. Model Eğitimi
    ├─ Seçilen modeller eğitilir
    └─ Walk-forward: her fold bağımsız eğitim + tahmin döngüsü
 
-7. Ters Dönüşüm
+6. Ters Dönüşüm
    └─ Log-getiri tahminleri â†’ Fiyat tahminleri
 
-8. Değerlendirme
+7. Değerlendirme
    ├─ Yön Doğruluğu, RMSE, Sharpe yaklaşımı, Hit Rate
    ├─ Backtest: Sinyal â†’ Komisyon+Kayma â†’ P&L simülasyonu
    ├─ Monte Carlo Bootstrap (sinyalin şansa karşı anlamlılığı)
    └─ XAI: Özellik önemi + HTML raporu
 
-9. Kayıt
-   ├─ Model dosyası (.pkl / .keras / .pt)
+8. Kayıt
+   ├─ Model dosyası (.pkl / .pt)
    ├─ stock_models.db (SQLite)
    ├─ registry.json
    └─ CSV deney günlüğü
@@ -135,8 +134,6 @@ Tüm modeller `BaseModel` arayüzünden türer ve `train()`, `predict()`, `save(
 | `NaiveLastValueModel` | `naive_model.py` | Son gözlemlenen değeri tekrarlar. Minimum referans noktası. |
 | `NaiveZeroReturnModel` | `naive_model.py` | Her zaman sıfır getiri tahmin eder. "Hiç hareket olmayacak" hipotezi. |
 | `NaiveDriftModel` | `naive_model.py` | Lineer trend ekstrapolasyonu. Basit momentum testi. |
-| `ARIMAModel` | `arima_model.py` | Yapılandırılabilir (p,d,q) düzeni; auto_order desteği. |
-| `ProphetModel` | `prophet_model.py` | Meta Prophet; yalnızca kapanış fiyatı, regresör desteğiyle. |
 
 **Neden?** Baseline modeller olmadan, karmaşık modellerin gerçekten değer katıp katmadığını anlayamazsınız. RMSE sayısal olarak iyi görünse de eğer bir Naive model aynı sonucu veriyorsa, karmaşık modelin fazladan maliyeti (hesaplama, bakım) gereksizdir.
 
@@ -145,7 +142,6 @@ Tüm modeller `BaseModel` arayüzünden türer ve `train()`, `predict()`, `save(
 | Sınıf | Dosya | Açıklama |
 |---|---|---|
 | `XGBoostModel` | `xgboost_model.py` | Gradient boosting; Optuna HPO + SQLite warm-start |
-| `RandomForestModel` | `random_forest_model.py` | Bagging ensemble; Optuna HPO + SQLite warm-start |
 | `LightGBMReturnModel` | `gradient_boosting_model.py` | Opsiyonel; yoksa sessizce atlanır |
 
 ### Lineer / Regularize Modeller
@@ -153,33 +149,25 @@ Tüm modeller `BaseModel` arayüzünden türer ve `train()`, `predict()`, `save(
 | Sınıf | Dosya | Açıklama |
 |---|---|---|
 | `RidgeReturnModel` | `linear_model.py` | L2 cezası; log-getiri üzerinde |
-| `ElasticNetReturnModel` | `linear_model.py` | L1+L2 karışımı; seyrek özellik seçimi |
 
 **Neden?** Lineer modeller, tahmin alanının dışında kalan özellikler olduğunda sağlam kalır. Ayrıca "ne kadar doğrusal olmayan bir ilişki var?" sorusunun cevabını dolaylı olarak verir.
 
-### Derin Öğrenme Modelleri
+### Kaldırılan modeller
 
-| Sınıf | Dosya | Açıklama |
-|---|---|---|
-| `LSTMModel` / `AttentionLSTMModel` | `lstm_model.py` | Çift yönlü LSTM + dikkat mekanizması (Keras/TensorFlow) |
-
-**Neden LSTM'de `clipnorm=1.0`?** BIST verisi, yüksek volatilite dönemlerinde (seçimler, kur krizleri) ani gradient patlamalarına yol açabilir. `Adam(clipnorm=1.0)` ile gradients normalize edilerek eğitim kararsızlığı önlenir.
-
+LSTM, LSTM Lite, AttentionLSTM v2, DLinear, NLinear, Prophet, ARIMA, ElasticNet Return (Ridge kopyası) ve
+Random Forest (XGBoost/LightGBM kopyası) kaldırıldı (815 walk-forward deneyinde
+hiçbiri naive benchmark'ı geçemedi; derin modeller için fold başına 500-750 satır yetersiz). Eski DB satırları
+bu isimleri taşıyabilir; okunurlar, ancak bu modellerle forecast üretilmez ("model artık desteklenmiyor, yeniden eğitin").
+Ensemble varyantlarından yalnızca `Ensemble Inverse RMSE` kaldı; Equal Weight, Sharpe-Weighted, Risk-Parity,
+Hierarchical, Meta-Stacker ve Cash-Gated kaldırıldı (aynı "retrain" sonucu).
 
 ### Topluluk (Ensemble) Modelleri
 
 | Sınıf | Dosya | Açıklama |
 |---|---|---|
-| `EnsembleModel` | `ensemble.py` | L2 (Ridge) regresyonu kullanarak diğer modellerin tahminlerini birleştirir |
+| `EnsembleModel` | `ensemble.py` | Ağırlıklı ortalama; tek ağırlıklandırma: Inverse RMSE |
 
-**Neden Ensemble?** Tek bir modelin (örneğin XGBoost) iyi çalıştığı piyasa koşulları ile LSTM'in iyi çalıştığı koşullar farklı olabilir. `EnsembleModel`, alt modellerin geçmiş tahmin performanslarına göre (meta-öğrenme) dinamik ağırlıklar belirler. Tek bir modele bağımlı kalma riskini (model risk) azaltır ve getiriyi pürüzsüzleştirir.
-
-### Deneysel Sequence Baseline'ları
-
-| Sınıf | Dosya | Açıklama |
-|---|---|---|
-| `DLinearSequenceModel` | `linear_sequence_model.py` | 3D diziler üzerinde hafif lineer |
-| `NLinearSequenceModel` | `linear_sequence_model.py` | Normalize edilmiş lineer (son değer çıkarılır) |
+**Neden Ensemble?** Tek bir modelin (örneğin XGBoost) iyi çalıştığı piyasa koşulları ile Ridge'in iyi çalıştığı koşullar farklı olabilir. `EnsembleModel`, alt modellerin geçmiş tahmin performanslarına göre (meta-öğrenme) dinamik ağırlıklar belirler. Tek bir modele bağımlı kalma riskini (model risk) azaltır ve getiriyi pürüzsüzleştirir.
 
 ---
 
@@ -256,7 +244,7 @@ Bu proje, deneysel bir prototipten başlayarak altı faz boyunca sistematik olar
 
 **Yapılanlar:**
 - `DataSplitter`: Kronolojik bölünme garantisi; shuffle yok, stratified split yok.
-- `reproducibility.py`: Python, NumPy, TensorFlow ve PyTorch tohumları tek yerden ayarlanır.
+- `reproducibility.py`: Python, NumPy ve (yüklüyse) PyTorch tohumları tek yerden ayarlanır.
 
 **Bu işe ne yarar?** Aynı konfigürasyonu iki kez çalıştırdığınızda aynı sonucu alırsınız. Karşılaştırmalı analizler güvenilir olur.
 
@@ -265,10 +253,9 @@ Bu proje, deneysel bir prototipten başlayarak altı faz boyunca sistematik olar
 **Problem:** Proje başlangıçta yalnızca birkaç model destekliyordu. "Hangi model en iyi?" sorusuna yanıt verebilmek için geniş bir model ekosistemi gerekiyordu.
 
 **Yapılanlar:**
-- Lineer modeller eklendi: `RidgeReturnModel`, `ElasticNetReturnModel`
-- Deneysel sequence baseline'ları: `DLinearSequenceModel`, `NLinearSequenceModel`
+- Lineer modeller eklendi: `RidgeReturnModel` (`ElasticNetReturnModel` sonradan kaldırıldı)
 - Tüm modeller `BaseModel` arayüzüne bağlandı; herhangi bir model eklenebilir/çıkarılabilir.
-- Opsiyonel bağımlılıklar sessizce atlanır (LightGBM, Prophet, TF, PyTorch olmadığında pipeline çalışmaya devam eder).
+- Opsiyonel bağımlılıklar sessizce atlanır (LightGBM, PyTorch olmadığında pipeline çalışmaya devam eder).
 
 **Bu işe ne yarar?** Model seçimi veri güdümlü hale gelir. Hisse başına en iyi model otomatik olarak belirlenir.
 
@@ -289,20 +276,16 @@ Bu proje, deneysel bir prototipten başlayarak altı faz boyunca sistematik olar
 
 ### Faz 3 — ML Çekirdeği Güçlendirme
 
-**Problem:** Hiperparametre optimizasyonu her seferinde sıfırdan başlıyordu, LSTM gradientleri patlamalar yaşıyordu ve makro özellikler sınırlıydı.
+**Problem:** Hiperparametre optimizasyonu her seferinde sıfırdan başlıyordu ve makro özellikler sınırlıydı.
 
 **Yapılanlar:**
 
-**Optuna Warm-Start (XGBoost ve RandomForest):**
+**Optuna Warm-Start (XGBoost):**
 - Her hisse icin ayri SQLite Optuna veritabani (`data/optuna/optuna_studies_{SYMBOL}.db`)
 - `load_if_exists=True` ile önceki denemeler birikir; her çalışmada daha iyi başlangıç noktasından devam edilir.
 - **Neden?** XGBoost için 100 deneme standart olsa da gerçek projede zaman kısıtları vardır. Warm-start ile 10 deneme bile önceki 100 denemenin üzerine inşa eder.
 
-**LSTM Gradient Klipleme:**
-- `Adam(learning_rate=lr, clipnorm=1.0)` her iki LSTM varyantında da.
-- **Neden?** BIST'te TL değer kaybı dönemlerinde log-getiri serisi ani sıçramalar yapar. Bu sıçramalar gradient vektörünü patlatabilir ve eğitimi çöküşe uğratır.
-
-**Makro Özellik Genişletmesi:**
+**Makro Özellik Genişletmesi (TARİHSEL — 2026-11 IC denetiminde geri alındı; yalnızca USDTRY/BIST100 kaldı):**
 - Yeni tickers: EUR/TRY, VIX (korku endeksi), Altın (USD), Brent Petrol, DXY (USD Endeksi), ABD 10Y Getirisi
 - Türev özellikler: `EURTRY_Return`, `VIX_Level`, `VIX_Change`, `Gold_TRY_Return`, `Oil_USD_Return`, `DXY_Return`, `US10Y_Level`, `US10Y_Change`
 - **Neden?** BIST küresel risk iştahından yoğun şekilde etkilenir. VIX yükseldiğinde BIST genellikle düşer. DXY güçlendiğinde TL baskı altında kalır, bu da ihracatçı hisseler için önemlidir.
@@ -376,7 +359,7 @@ Bu proje, deneysel bir prototipten başlayarak altı faz boyunca sistematik olar
 ### Gereksinimler
 
 - Python 3.10+
-- (Opsiyonel) CUDA 12.8 uyumlu GPU (LSTM hızlandırma için)
+- (Opsiyonel) CUDA 12.8 uyumlu GPU (yalnızca havuzlu PyTorch yolu için)
 
 ### Temel Kurulum
 
@@ -439,7 +422,7 @@ python -m src.cli.batch \
 # Sadece belirli modeller:
 python -m src.cli.batch \
     --stocks TUPRS,EREGL \
-    --models XGBoost,Ridge,LSTM
+    --models XGBoost,Ridge
 
 # Kuru çalışma (veri kontrol et, pipeline çalıştırma):
 python -m src.cli.batch \
@@ -519,7 +502,6 @@ Tüm konfigürasyon `PipelineConfig` dataclass hiyerarşisi üzerinden yönetili
 |---|---|---|
 | `data_file` | — | Hisse CSV dosyası yolu |
 | `test_ratio` | `0.20` | Test seti oranı (kronolojik) |
-| `time_steps` | `30` | LSTM için dizi uzunluğu |
 | `target_mode` | `log_return` | Hedef: log-getiri (tercih) veya fiyat |
 | `feature_mode` | `stationary_features` | Özellik seti tipi |
 | `scaling_mode` | `robust_x_standard_y_clip` | Ölçekleme stratejisi |
@@ -562,7 +544,6 @@ Tüm konfigürasyon `PipelineConfig` dataclass hiyerarşisi üzerinden yönetili
 outputs/{SYMBOL}/
 ├── models/
 │   ├── xgboost_model.pkl
-│   ├── lstm_model.keras
 │   └── {model}_final_holdout_model.{ext}
 ├── xai/
 │   ├── xai_report_{model}.html
@@ -643,7 +624,7 @@ Sisteme kendi algoritmanızı (örneğin yeni bir PyTorch tabanlı Transformer v
 | Sorun | Neden ve Çözüm |
 |---|---|
 | **yfinance 429 Too Many Requests** | *Neden:* Çok fazla hisse verisi aynı anda istendi. *Çözüm:* `python -m src.cli.batch` içindeki `--workers` sayısını düşürün veya farklı bir IP adresi/VPN kullanın. |
-| **CUDA OOM (Out of Memory)** | *Neden:* LSTM eğitilirken ekran kartı belleği doldu. *Çözüm:* `PipelineConfig` altındaki `time_steps` değerini küçültün veya model batch size değerini azaltın. |
+| **CUDA OOM (Out of Memory)** | *Neden:* Havuzlu PyTorch eğitimi sırasında ekran kartı belleği doldu. *Çözüm:* Batch size değerini azaltın veya CPU'da çalıştırın. |
 | **Missing Macro Data (FRED/Yahoo)** | *Neden:* İnternet bağlantısı koptu veya API değişti. *Çözüm:* `src/data/data_updater.py`'yi tekrar çalıştırın; veriler önbellekten okunmak yerine sıfırdan indirilir. |
 | **SQLite database is locked** | *Neden:* Optuna warm-start kullanırken çok fazla worker aynı DB dosyasına yazmaya çalıştı. *Çözüm:* Worker sayısını düşürün (`--workers 2` veya `1`). |
 

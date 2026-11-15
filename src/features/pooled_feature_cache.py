@@ -12,7 +12,7 @@ Anahtar (sha256):
   _SCHEMA_VERSION (biçim degisikligi icin elle) + kod parmak izi (`code_fingerprint`:
   feature_pipeline ve transitif src bagimliliklari + pandas/numpy/ta surumu) +
   girdi cercevesinin tam icerigi (kolon adi, dtype, deger baytlari) + feature_mode +
-  enable_calendar_features (+ takvim aciksa FOMC csv icerigi) + sembol.
+  enable_calendar_features + sembol.
 
 Depolama: `{cache_dir}/{SEMBOL}.parquet`, sembol basina TEK girdi (uzerine yazilir ->
 dizin sembol sayisiyla sinirli, TTL gerekmez). Anahtar Parquet sema metadata'sinda.
@@ -41,7 +41,6 @@ logger = logging.getLogger(__name__)
 _SCHEMA_VERSION = "1"            # onbellek BICIMI degisirse elle artir (kod degisimi otomatik)
 _META_KEY = b"tsfl.feature_cache_key"
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")   # yol gecisi (path traversal) onlemi
-_FOMC_PATH = os.path.join("data", "meta", "fomc_calendar.csv")  # FeaturePipeline varsayilani
 _READ_ERRORS = (OSError, ValueError, KeyError, pa.ArrowException)
 
 
@@ -61,14 +60,6 @@ def frame_content_hash(df: pd.DataFrame) -> str:
         else:
             h.update(pd.util.hash_pandas_object(col, index=False).to_numpy().tobytes())
     return h.hexdigest()
-
-
-def _fomc_digest() -> str:
-    try:
-        with open(_FOMC_PATH, "rb") as fh:
-            return hashlib.sha256(fh.read().replace(b"\r\n", b"\n")).hexdigest()
-    except OSError:
-        return "missing"
 
 
 class PooledFeatureCache:
@@ -93,7 +84,6 @@ class PooledFeatureCache:
             "symbol": symbol,
             "feature_mode": feature_mode,
             "calendar": bool(enable_calendar_features),
-            "fomc": _fomc_digest() if enable_calendar_features else None,
             "content": frame_content_hash(frame),
         }
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()

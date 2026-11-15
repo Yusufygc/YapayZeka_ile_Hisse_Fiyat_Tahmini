@@ -13,13 +13,8 @@ from src.models.ensemble import EnsembleModel
 from src.pipeline.evaluation_services import EvaluationContext, EvaluationState, PredictionService
 
 MODELS = ("XGBoost", "Ridge Return", "LightGBM Return")
-WEIGHTED = (
-    "Ensemble Inverse RMSE",
-    "Ensemble Sharpe-Weighted",
-    "Ensemble Risk-Parity",
-    "Ensemble Meta-Stacker",
-    "Ensemble Cash-Gated",
-)
+# Tek ensemble varyanti kaldi; diger varyantlar model_scope.REMOVED_MODELS altinda.
+WEIGHTED = ("Ensemble Inverse RMSE",)
 N_PER_FOLD = 30
 FOLDS = (1, 2, 3)
 
@@ -97,10 +92,7 @@ def test_earlier_fold_y_true_does_change_later_fold_only():
 
 
 def _equal_blend(name, preds, pred_target):
-    """Beklenen esit-agirlik blend; Cash-Gated fiyati hedef-uzayi blend'inden turetilir."""
-    if name == "Ensemble Cash-Gated":
-        prev_close = _build()[3][MODELS[0]]["prev_close"]
-        return prev_close * np.exp(np.mean([pred_target[m] for m in MODELS], axis=0))
+    """Beklenen esit-agirlik blend."""
     return EnsembleModel().combine({m: preds[m] for m in MODELS})
 
 
@@ -130,10 +122,7 @@ def test_stored_final_weights_equal_all_folds_fit():
     base = {m: preds[m] for m in MODELS}
     expected = EnsembleModel.optimize_inverse_rmse(y_true, base)
     assert service.state.ensemble_weights["Ensemble Inverse RMSE"] == expected
-    y_t = inputs[MODELS[0]]["y_true_target"]
-    expected_sharpe = EnsembleModel.optimize_by_sharpe(y_t, pred_target)
-    assert service.state.ensemble_weights["Ensemble Sharpe-Weighted"] == expected_sharpe
-    assert service.state.ensemble_weights["Ensemble Cash-Gated"] == expected_sharpe
+    assert set(service.state.ensemble_weights) == {"Ensemble Inverse RMSE"}
 
 
 def test_weight_scope_recorded_as_expanding_prior_folds():
@@ -162,25 +151,9 @@ def test_ensemble_metrics_and_payloads_cover_all_oos_rows():
         assert len(inputs[name]["fold_ids"]) == n
 
 
-def test_seq_attention_sub_ensembles_follow_same_scheme():
-    models = ("LSTM", "LSTM Lite", "XGBoost")
-    names = ("Ensemble Seq-Attention Equal", "Ensemble Seq-Attention Inverse RMSE")
-    _, _, _, base, _, fold_ids, _ = _run(models=models)
-    _, _, _, pert, _, _, _ = _run(perturb_fold=3, models=models)
-    for name in names:
-        np.testing.assert_allclose(pert[name], base[name], rtol=0, atol=1e-12)
-    # fold 1 esit agirlik; fold 2 agirliklari yalnizca fold 1'den.
-    seq = {m: base[m] for m in models[:2]}
-    np.testing.assert_allclose(
-        _fold_slice(base[names[1]], fold_ids, 1),
-        _fold_slice(EnsembleModel().combine(seq), fold_ids, 1),
-        atol=1e-9,
-    )
-    _, _, y_true, _, _, _ = _build(models=models)
-    f1, f2 = fold_ids == 1, fold_ids == 2
-    w = EnsembleModel.optimize_inverse_rmse(y_true[f1], {m: seq[m][f1] for m in seq})
-    np.testing.assert_allclose(
-        _fold_slice(base[names[1]], fold_ids, 2),
-        EnsembleModel(w).combine({m: seq[m][f2] for m in seq}),
-        atol=1e-9,
-    )
+def test_only_inverse_rmse_ensemble_is_produced():
+    _, _, results, preds, inputs, _, _ = _run()
+    produced = {name for name in preds if name.startswith("Ensemble ")}
+    assert produced == {"Ensemble Inverse RMSE"}
+    assert {name for name in results if name.startswith("Ensemble ")} == produced
+

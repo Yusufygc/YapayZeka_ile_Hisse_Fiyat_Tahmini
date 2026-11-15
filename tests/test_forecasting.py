@@ -183,7 +183,7 @@ def test_forecast_runner_auto_enables_macro_when_artifact_requires_macro():
     with open(model_path, "wb") as handle:
         handle.write(b"model")
     with open(artifact_sidecar_paths(model_path)["metadata"], "w", encoding="utf-8") as handle:
-        json.dump({"feature_names": ["Feature", "Rate_Level", "CPI_YoY"]}, handle)
+        json.dump({"feature_names": ["Feature", "USDTRY_Return", "BIST100_Return"]}, handle)
 
     calendar_path = os.path.join(data_dir, "bist_calendar.csv")
     with open(calendar_path, "w", encoding="utf-8") as handle:

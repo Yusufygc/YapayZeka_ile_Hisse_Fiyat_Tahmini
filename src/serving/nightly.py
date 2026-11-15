@@ -15,12 +15,21 @@ Calistirma:
 `score_main()` yalniz skorlama (kapi/tazeleme yok) = eski e2_faz5 davranisi.
 Islem-gunu kapisi pandas-market-calendars (XIST); fail-open (takvim hatasi ->
 hafta-ici kontrolu).
+
+Gozlenebilirlik (2026-11): kosu `data/nightly_status.json` (``--db``'nin yaninda) yazar —
+baslangicta completed=false, yalniz normal bitiste completed=true; oldurulen kosu
+false kalir (`/health` -> serving_health.nightly_run_status). Tazeleme sonrasi
+basarisiz+bayat sembol orani ``--max-stale-fraction``'i asarsa SKORLAMA ATLANIR ve cikis
+kodu 3 doner: bayat veriyle saatlerce egitip son iyi PeerStore kosusunun uzerine
+dusuk-guven bir kosu yazmak yerine onceki iyi kosu korunur.
 """
 from __future__ import annotations
 
 import argparse
 import glob
+import logging
 import os
+import sys
 import time
 from datetime import date, datetime, timedelta
 from typing import Optional, Sequence
@@ -29,6 +38,8 @@ import pandas as pd
 
 from src.data.data_updater import DataUpdater
 from src.data.freshness import check_freshness, warn_if_stale
+from src.data.market_providers import DEFAULT_REFRESH_DEADLINE_S, abandoned_call_count
+from src.serving.run_status import NightlyRunStatus, status_path_for_db
 from src.serving.nightly_scoring import (
     assemble_peer_table,
     coverage_warnings,
@@ -45,6 +56,13 @@ _MARKET_CLOSE_HOUR = 19
 
 # Loader ile ayni: panel disi yardimci CSV'ler sembol degil.
 _EXCLUDE_STEMS = {"bist_universe", "advisory_history"}
+
+# Cikis kodlari: 0 basarili/bilincli atlama, 1 beklenmeyen hata, 3 tazeleme bayat orani asildi (skorlama atlandi).
+EXIT_STALE_REFRESH = 3
+# Tazeleme sonrasi (basarisiz + bayat) sembol orani bunu asarsa skorlama atlanir. Evrende birkac
+# gercek delist/halt sembol vardir; %20 bunlari tolere eder, kismi/oluk bir tazelemeyi (2026-08/09:
+# 585 sembolun ~%73'u bayat kaldi) kesin yakalar. 1.0 = kapi kapali.
+DEFAULT_MAX_STALE_FRACTION = 0.20
 
 
 def _log(m: str) -> None:
@@ -92,12 +110,18 @@ def _universe_symbols(data_dir: str) -> list[str]:
 
 
 def refresh_universe(data_dir: str, *, sleep_s: float = 0.0,
-                     limit: int = 0, progress_every: int = 50) -> dict:
+                     limit: int = 0, progress_every: int = 50,
+                     stale_business_days: int = 5,
+                     deadline_s: Optional[float] = DEFAULT_REFRESH_DEADLINE_S) -> dict:
     """Evrendeki her sembolu artimli tazele. Returns durum sayim sozlugu.
 
     Toplu yol: ``DataUpdater.update_many`` (yf.download chunk + retry + sembol kilidi).
     Toplu cagri tumden patlarsa sembol basina tekli yola duser. ``sleep_s`` yalniz
-    bu dusus yolunda semboller arasi beklemedir.
+    bu dusus yolunda semboller arasi beklemedir. ``deadline_s``: tum tazeleme icin duvar-saati
+    siniri (asilirsa kalan semboller failed sayilir; kosu surer).
+
+    Sayim sozlugu ek alanlar: ``total``, ``stale_after`` (basarisiz + tazelemeden SONRA son
+    tarihi ``stale_business_days`` is gununden eski), ``stale_fraction``, ``failed_sample``.
     """
     syms = _universe_symbols(data_dir)
     if limit > 0:
@@ -107,11 +131,15 @@ def refresh_universe(data_dir: str, *, sleep_s: float = 0.0,
     _log(f"veri tazeleme: {len(syms)} sembol (toplu)")
     targets = [(os.path.join(data_dir, f"{s}.csv"), s) for s in syms]
     try:
-        results = DataUpdater.update_many(targets)
+        results = DataUpdater.update_many(targets, deadline_s=deadline_s)
     except Exception as exc:  # toplu yol patlarsa tekli yola dus
         _log(f"[WARN] toplu tazeleme hatasi ({str(exc)[:80]}); tekli yola dusuluyor")
         results = {}
+        t_end = None if deadline_s is None else time.monotonic() + deadline_s
         for i, (path, sym) in enumerate(targets, 1):
+            if t_end is not None and time.monotonic() >= t_end:
+                _log(f"[WARN] tazeleme genel siniri asildi; kalan {len(targets) - i + 1} sembol atlandi")
+                break
             try:
                 results[sym] = DataUpdater.check_and_update(path, sym, interactive=False)
             except Exception as one_exc:  # tek sembol patlamasi pipeline'i durdurmasin
@@ -121,14 +149,27 @@ def refresh_universe(data_dir: str, *, sleep_s: float = 0.0,
                 time.sleep(sleep_s)
             if progress_every and i % progress_every == 0:
                 _log(f"  ... {i}/{len(targets)}")
+    stale_after = 0
+    failed_sample: list[str] = []
     for sym in syms:
         res = results.get(sym)
         if res is None:
             counts["failed"] += 1
+            stale_after += 1
+            failed_sample.append(sym)
             continue
         counts[res.status] = counts.get(res.status, 0) + 1
         rows_added += int(res.rows_added or 0)
+        if res.status == "failed":
+            failed_sample.append(sym)
+        if res.status == "failed" or check_freshness(
+                res.latest_date_after, max_business_days=stale_business_days).stale:
+            stale_after += 1
     counts["rows_added"] = rows_added
+    counts["total"] = len(syms)
+    counts["stale_after"] = stale_after
+    counts["stale_fraction"] = round(stale_after / len(syms), 4) if syms else 0.0
+    counts["failed_sample"] = failed_sample[:10]
     _log(f"veri tazeleme bitti: {counts}")
     return counts
 
@@ -174,6 +215,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="sembol-paralel ozellik hesabi isci sayisi: -1 otomatik (min(cpu-1, 8)), 1 sekansiyel; "
                          "sonuc n_jobs'tan bagimsiz birebirdir")
     ap.add_argument("--sleep-s", type=float, default=0.0, help="yalniz tekli dusus yolunda semboller arasi bekleme")
+    ap.add_argument("--max-stale-fraction", type=float, default=DEFAULT_MAX_STALE_FRACTION,
+                    help="tazeleme sonrasi (basarisiz + bayat) sembol orani bunu asarsa skorlama ATLANIR, "
+                         f"cikis kodu {EXIT_STALE_REFRESH} (varsayilan %(default)s; 1.0 = kapi kapali)")
+    ap.add_argument("--refresh-deadline-s", type=float, default=DEFAULT_REFRESH_DEADLINE_S,
+                    help="tum veri tazeleme icin duvar-saati siniri (sn); asilirsa kalan semboller basarisiz sayilir")
+    ap.add_argument("--status-file", default=None,
+                    help="makine-okunur kosu durumu JSON (varsayilan: --db'nin yanindaki nightly_status.json)")
     ap.add_argument("--skip-data", action="store_true")
     ap.add_argument("--skip-trading-gate", action="store_true")
     return ap
@@ -367,6 +415,35 @@ def score_main(argv: Optional[Sequence[str]] = None) -> int:
     return run_scoring(build_parser().parse_args(argv))
 
 
+def _run_pipeline(args: argparse.Namespace, status: NightlyRunStatus) -> int:
+    """(b) veri tazeleme -> (c) skorlama; asama bilgisi durum dosyasina islenir."""
+    if args.skip_data:
+        _log("veri tazeleme atlandi (--skip-data)")
+        status.update(refresh=None, scoring="pending")
+    else:
+        status.update(phase="refresh")
+        counts = refresh_universe(
+            args.data_dir, sleep_s=args.sleep_s, limit=args.limit,
+            stale_business_days=args.stale_business_days, deadline_s=args.refresh_deadline_s)
+        frac = float(counts.get("stale_fraction", 0.0))
+        status.update(phase="refreshed", refresh=counts,
+                      stale_symbols_after_refresh=int(counts.get("stale_after", 0)),
+                      stale_fraction=frac, max_stale_fraction=args.max_stale_fraction)
+        if frac > args.max_stale_fraction:
+            _log(f"HATA tazeleme yetersiz: {counts.get('stale_after')}/{counts.get('total')} sembol "
+                 f"basarisiz/bayat (oran {frac:.0%} > esik {args.max_stale_fraction:.0%}); "
+                 f"SKORLAMA ATLANDI, onceki PeerStore kosusu korunuyor. cikis={EXIT_STALE_REFRESH}")
+            status.update(scoring="skipped_stale_refresh")
+            return EXIT_STALE_REFRESH
+        status.update(scoring="pending")
+
+    _log(f"skorlama baslatiliyor: model={args.model} boost={args.boost} db={args.db}")
+    status.update(phase="scoring")
+    rc = run_scoring(args)
+    status.update(scoring="done" if rc == 0 else "failed")
+    return rc
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -374,6 +451,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     _log("=== gecelik serving pipeline basladi ===")
 
     # (a) islem-gunu kapisi: hedef seans saate gore (aksam=bugun, sabah=dun).
+    # Durum dosyasindan ONCE: hafta sonu atlamasi onceki (basarisiz olabilecek) kosunun izini silmesin.
     if not args.skip_trading_gate:
         target = gate_target_date()
         if not is_trading_day(target):
@@ -381,19 +459,49 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
         _log(f"islem gunu: {target} -> devam")
 
-    # (b) veri tazeleme
-    if args.skip_data:
-        _log("veri tazeleme atlandi (--skip-data)")
-    else:
-        refresh_universe(args.data_dir, sleep_s=args.sleep_s, limit=args.limit)
-
-    # (c) skorlama (surec-ici)
-    _log(f"skorlama baslatiliyor: model={args.model} boost={args.boost} db={args.db}")
-    rc = run_scoring(args)
+    status = NightlyRunStatus(
+        args.status_file or status_path_for_db(args.db),
+        model=args.model, skip_data=bool(args.skip_data), limit=int(args.limit))
+    try:
+        rc = _run_pipeline(args, status)
+    except BaseException as exc:  # KeyboardInterrupt/SystemExit dahil: izi yaz, sonra yeniden firlat
+        _log(f"HATA pipeline beklenmedik sekilde durdu: {type(exc).__name__}: {str(exc)[:200]}")
+        status.fail(f"{type(exc).__name__}: {exc}")
+        raise
+    status.finish(rc)
 
     _log(f"=== pipeline bitti: exit={rc}, sure={time.time()-t0:.0f}s ===")
     return rc
 
 
+def should_force_exit(abandoned_calls: int) -> bool:
+    """Kosu sirasinda en az bir saglayici cagrisi zaman asimiyla terk edildiyse True.
+
+    Terk edilen yfinance thread'i interpreter cikisinda join edilir ve sureci (kosu
+    bitmis olsa bile) canli tutabilir; bu durumda ``os._exit`` ile sonlanilir.
+    """
+    return int(abandoned_calls) > 0
+
+
+def exit_after_run(rc: int, *, exit_fn=os._exit, abandoned_calls: Optional[int] = None) -> None:
+    """Durum/log yazildiktan SONRA cikis: gerekirse asili thread'leri beklemeden sonlanir.
+
+    Yalniz ``__main__`` yolunda cagrilir (kutuphane/test cagrilari sureci oldurmez).
+    Zorunlu cikis gerekmiyorsa normal ``SystemExit`` (rc) firlatir.
+    """
+    count = abandoned_call_count() if abandoned_calls is None else abandoned_calls
+    if not should_force_exit(count):
+        raise SystemExit(rc)
+    _log(f"UYARI {count} saglayici cagrisi zaman asimiyla terk edildi; "
+         f"asili thread'ler beklenmeden surec sonlandiriliyor (cikis={rc}).")
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except (OSError, ValueError) as exc:  # kapali/kopmus akis: cikisi engellemesin
+            print(f"flush basarisiz: {exc}", file=sys.__stderr__)
+    logging.shutdown()  # handler'lari flush + kapat
+    exit_fn(int(rc))
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    exit_after_run(main())

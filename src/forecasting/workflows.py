@@ -11,9 +11,10 @@ from typing import Any, Callable, Dict, Optional
 import numpy as np
 import pandas as pd
 
-from src.data.preprocessor import create_sequences, scale_data
 from src.forecasting.artifacts import (
+    ArtifactFeaturesOutdatedError,
     ForecastArtifactError,
+    ModelNoLongerSupportedError,
     artifact_sidecar_paths,
     load_forecast_artifact_package,
 )
@@ -21,14 +22,26 @@ from src.database.paths import resolve_model_path
 from src.forecasting.bist_rules import RULES_VERSION
 from src.pipeline.config import DataConfig, ValidationConfig
 from src.pipeline.data_manager import DataManager
-from src.pipeline.model_scope import DATE_AWARE_MODELS as _DATE_AWARE_MODELS
+from src.pipeline.model_scope import is_removed_model
 
 logger = logging.getLogger(__name__)
 
-_TREE_MODELS = {"XGBoost", "Random Forest", "Ridge Return", "ElasticNet Return", "LightGBM Return"}
-_SEQ_MODELS = {"LSTM", "LSTM Lite", "AttentionLSTM v2", "DLinear", "NLinear"}
+_TREE_MODELS = {"XGBoost", "Ridge Return", "LightGBM Return"}
+# Production forecast icin gereken minimum temiz tarihsel satir sayisi.
+_MIN_FORECAST_ROWS = 32
 _BASELINE_MODELS = {"Naive Last Value", "Naive Zero Return", "Naive Drift"}
-_MACRO_FEATURES = {"Rate_Level", "Rate_Change", "CPI_MoM", "CPI_YoY", "Real_Rate"}
+# Makro veriye bagimli (use_macro gerektiren) kurate ozellikler (2026-11 IC denetimi).
+# Faiz/CPI/VIX/... eski artifact ozellikleri artik uretilmez; onlari isteyen artifact
+# `_prepare_artifact_context`'te acik hata verir (feature listesi uyusmazligi).
+_MACRO_FEATURES = {
+    "USDTRY_Return",
+    "USDTRY_Volatility7",
+    "BIST100_Return",
+    "BIST100_MA7",
+    "Relative_Strength",
+    "market_momentum_60d",
+    "relative_to_market_60d",
+}
 
 # h>1 recursive forecast, 1-adim modelin kendi ciktisiyla besleyerek uretilir ve
 # hicbir walk-forward/backtest ile dogrulanmamistir (yalnizca h=1 dogrulanir).
@@ -75,7 +88,6 @@ class ForecastContext:
     model_config: Any
     # ForecastRunner factory callable'ları (model_config'e bağlı; runner'da kalır).
     make_model_instance: Callable[..., Any]
-    make_prophet: Callable[[list], Any]
     target_to_price: Callable[[float, float, str], float]
     # Kardeş servis referansları (servisler kurulduktan sonra runner tarafından bağlanır).
     model_resolver: Any = None
@@ -243,7 +255,6 @@ class ForecastSymbolWorkflow:
         metadata = selection.get("ensemble_metadata") or {}
         members = list(metadata.get("members") or [])
         weights = dict(metadata.get("weights") or {})
-        method = str(metadata.get("method") or selection["model_name"].replace("Ensemble ", ""))
         if len(members) < 2:
             raise ForecastArtifactError(
                 f"{selection['model_name']} icin ensemble member metadata eksik."
@@ -284,7 +295,6 @@ class ForecastSymbolWorkflow:
         points = self.ctx.forecast_point_generator.combine_member_points(
             member_points=member_points,
             weights=weights,
-            method=method,
             last_observed_date=data_manager.df["Date"].iloc[-1],
             last_close=float(data_manager.df["Close"].iloc[-1]),
         )
@@ -346,6 +356,9 @@ class BestModelResolver:
         `force_model_name` verilmezse kayıtlı best model kullanılır.
         """
         best = self.ctx.db.get_best_model(symbol)
+        self._reject_removed_model(
+            symbol, force_model_name or (None if best is None else best.get("model_name"))
+        )
         if force_model_name:
             # Once zorlanan modele ait, artifact dosyasi diskte mevcut olan en guncel
             # deneyi ara. Bulunursa forecast dogrudan o artifact'i yukler (model_path
@@ -392,6 +405,12 @@ class BestModelResolver:
                 f"{symbol} icin best_models kaydi yok. Once pipeline calistirin veya --model kullanin."
             )
         return self._resolve_best_or_replacement(symbol, best)
+
+    @staticmethod
+    def _reject_removed_model(symbol: str, model_name: Any) -> None:
+        """Silinen modeller icin yapisal 'yeniden egit' hatasi (import hatasi degil)."""
+        if is_removed_model(model_name):
+            raise ModelNoLongerSupportedError(str(model_name), symbol=symbol)
 
     def _resolve_best_or_replacement(self, symbol: str, best: Dict[str, Any]) -> Dict[str, Any]:
         model_name = str(best["model_name"])
@@ -542,27 +561,16 @@ class ProductionTrainingWorkflow:
             model_factory=lambda name: self.ctx.make_model_instance(name, stage="final"),
         )
         features = list(artifact.metadata.get("feature_names") or data_manager.feature_names)
-        missing = [feature for feature in features if feature not in frame.columns]
-        if missing:
-            raise ForecastArtifactError(
-                f"{model_name} artifact feature mismatch: missing {missing[:5]}"
-            )
+        self._validate_artifact_features(
+            model_name=model_name,
+            features=features,
+            frame_columns=frame.columns,
+            current_features=data_manager.feature_names,
+            scaler_X=artifact.scaler_X,
+        )
         X_all = frame[features].to_numpy(dtype=float)
         latest_X = X_all[-1:].copy()
         latest_X_s = self._transform_features(artifact.scaler_X, latest_X)
-        latest_seq = self._latest_sequence(
-            model_name=model_name,
-            scaler_X=artifact.scaler_X,
-            X_all=X_all,
-            time_steps=data_manager.data_cfg.time_steps,
-        )
-        metadata_time_steps = artifact.metadata.get("time_steps")
-        if metadata_time_steps and int(metadata_time_steps) != int(
-            data_manager.data_cfg.time_steps
-        ):
-            raise ForecastArtifactError(
-                f"{model_name} artifact time_steps mismatch: {metadata_time_steps} != {data_manager.data_cfg.time_steps}"
-            )
         return artifact.model, {
             "features": features,
             "target_mode": data_manager.data_cfg.target_mode,
@@ -579,11 +587,9 @@ class ProductionTrainingWorkflow:
             "artifact_metadata": artifact.metadata,
             "latest_X": latest_X,
             "latest_X_s": latest_X_s,
-            "latest_seq": latest_seq,
             "last_close": float(close[-1]),
             "last_observed_date": pd.to_datetime(frame["Date"].iloc[-1]).normalize(),
-            "feature_frame": frame[["Date", "Close", *features]].copy(),
-            "time_steps": data_manager.data_cfg.time_steps,
+            "feature_frame": self._recursive_feature_frame(frame, features),
             "forecast_strategy": "recursive_direct_target",
             "artifact_mode": "artifact_loaded",
             "forecast_warnings": ["projected_exogenous_features"],
@@ -595,12 +601,62 @@ class ProductionTrainingWorkflow:
         return resolve_model_path(model_path, project_root=self.ctx.project_root)
 
     @staticmethod
+    def _recursive_feature_frame(frame: pd.DataFrame, features: list[str]) -> pd.DataFrame:
+        """Recursive roll-forward icin feature frame'i: Date/Close + OHLV + ozellikler.
+
+        Open/High/Low/Volume ozellik OLMASA bile tutulur: NATR_14 (High/Low) ve diger
+        close-bagimli gostergelerin her adimda yeniden hesaplanabilmesi icin gerekir.
+        """
+        ohlv = [c for c in ("Open", "High", "Low", "Volume") if c in frame.columns]
+        cols: list[str] = []
+        for col in ["Date", "Close", *ohlv, *features]:
+            if col not in cols:
+                cols.append(col)
+        return frame[cols].copy()
+
+    @staticmethod
+    def _validate_artifact_features(
+        *,
+        model_name: str,
+        features: list[str],
+        frame_columns,
+        current_features: list[str],
+        scaler_X,
+    ) -> None:
+        """Artifact ozellik listesi mevcut feature matrisiyle uyusmuyorsa ACIK hata verir.
+
+        2026-11 IC denetimi kurate ozellik setine gecti: eski artifact'lar kaldirilan
+        ozellikleri (EMA_*, VIX_*, Rate_*, ...) bekler. Eksik kolon -> yeniden egitim
+        gerekir (migrasyon yok). Ayrica scaler ozellik sayisi artifact listesiyle
+        uyusmazsa (metadata listesi eksik/eski) sessiz kolon kaymasi yerine hata verilir.
+        """
+        available = set(frame_columns)
+        missing = [feature for feature in features if feature not in available]
+        if missing:
+            raise ArtifactFeaturesOutdatedError(
+                model_name,
+                f"{model_name} artifact feature mismatch: artifact bekledigi "
+                f"{len(missing)}/{len(features)} ozellik mevcut feature setinde yok "
+                f"(ilk 10: {missing[:10]}). Artifact eski ozellik seti ile egitilmis; "
+                f"modeli yeniden egitin. Mevcut set ({len(current_features)}): "
+                f"{list(current_features)}"
+            )
+        n_scaler = getattr(scaler_X, "n_features_in_", None)
+        if n_scaler is not None and int(n_scaler) != len(features):
+            raise ArtifactFeaturesOutdatedError(
+                model_name,
+                f"{model_name} artifact feature mismatch: scaler {int(n_scaler)} ozellik "
+                f"bekliyor, artifact listesi {len(features)} ozellik iceriyor "
+                f"(metadata feature_names eksik/eski). Modeli yeniden egitin."
+            )
+
+    @staticmethod
     def _clean_training_frame(data_manager: DataManager) -> pd.DataFrame:
         frame = data_manager.df.copy()
         frame = frame.dropna(subset=["Date", "Close", *data_manager.feature_names]).copy()
         frame.sort_values("Date", inplace=True)
         frame.reset_index(drop=True, inplace=True)
-        if len(frame) < data_manager.data_cfg.time_steps + 2:
+        if len(frame) < _MIN_FORECAST_ROWS:
             raise ValueError("Production forecast icin yeterli tarihsel veri yok.")
         return frame
 
@@ -612,63 +668,6 @@ class ProductionTrainingWorkflow:
             transformed = np.clip(transformed, clip_report["clip_low"], clip_report["clip_high"])
         return transformed
 
-    def _latest_sequence(self, *, model_name: str, scaler_X, X_all, time_steps: int):
-        if model_name not in _SEQ_MODELS:
-            return None
-        if len(X_all) < time_steps:
-            raise ForecastArtifactError(f"{model_name} icin recursive sequence yetersiz.")
-        X_all_s = self._transform_features(scaler_X, X_all)
-        return X_all_s[-time_steps:].reshape(1, time_steps, X_all_s.shape[1])
-
-    def _fit_model(
-        self,
-        model_name,
-        data_manager,
-        frame,
-        X_all,
-        X_train,
-        y_train,
-        X_train_s,
-        y_train_s,
-        scaler_X,
-    ):
-        if model_name == "Prophet":
-            model = self.ctx.make_prophet(data_manager.feature_names)
-            model.train(X_train, y_train, dates_train=frame["Date"].iloc[:-1])
-            return model, None
-        if model_name in _TREE_MODELS:
-            model = self.ctx.make_model_instance(model_name)
-            model.train(X_train_s, y_train_s)
-            return model, None
-        if model_name in _SEQ_MODELS:
-            return self._fit_sequence_model(
-                model_name, data_manager, X_all, X_train_s, y_train_s, scaler_X
-            )
-        model = self.ctx.make_model_instance(model_name)
-        model.train(X_train, y_train, dates_train=frame["Date"].iloc[:-1])
-        return model, None
-
-    def _fit_sequence_model(self, model_name, data_manager, X_all, X_train_s, y_train_s, scaler_X):
-        X_all_s = scaler_X.transform(X_all)
-        clip_report = getattr(scaler_X, "clip_report_", {}) or {}
-        if clip_report.get("clip_low") is not None and clip_report.get("clip_high") is not None:
-            X_all_s = np.clip(X_all_s, clip_report["clip_low"], clip_report["clip_high"])
-        X_train_seq, y_train_seq = create_sequences(
-            X_train_s,
-            y_train_s,
-            time_steps=data_manager.data_cfg.time_steps,
-        )
-        if len(X_train_seq) == 0:
-            raise ValueError(f"{model_name} icin sequence sayisi yetersiz.")
-        model = self.ctx.make_model_instance(model_name, stage="final")
-        model.train(X_train_seq, y_train_seq)
-        latest_seq = X_all_s[-data_manager.data_cfg.time_steps :].reshape(
-            1,
-            data_manager.data_cfg.time_steps,
-            X_all_s.shape[1],
-        )
-        return model, latest_seq
-
 
 class LatestTargetPredictionWorkflow:
     def __init__(self, ctx: ForecastContext) -> None:
@@ -677,73 +676,14 @@ class LatestTargetPredictionWorkflow:
     def predict(self, model_name: str, model: Any, context: Dict[str, Any]) -> float:
         """En son gözlem penceresinden tek-adım hedef tahmini üretir.
 
-        Model tipine göre (date-aware / tree / sequence) uygun giriş tensörünü
-        seçer ve son adımın skaler tahminini döner.
+        Model tipine göre (tree / ham tabular) uygun giriş tensörünü seçer ve
+        son adımın skaler tahminini döner.
         """
-        if model_name in _DATE_AWARE_MODELS:
-            raw = model.predict(context["latest_X"], dates_test=[context["last_observed_date"]])
-            return float(np.asarray(raw).ravel()[-1])
         if model_name in _TREE_MODELS:
             scaled = np.asarray(model.predict(context["latest_X_s"])).reshape(-1, 1)
             return float(context["scaler_y"].inverse_transform(scaled).ravel()[-1])
-        if model_name in _SEQ_MODELS:
-            return self._predict_sequence_target(model_name, model, context)
         raw = model.predict(context["latest_X"])
         return float(np.asarray(raw).ravel()[-1])
-
-    @staticmethod
-    def _predict_sequence_target(model_name: str, model: Any, context: Dict[str, Any]) -> float:
-        latest_seq = context.get("latest_seq")
-        if latest_seq is None:
-            raise ValueError(f"{model_name} icin latest sequence yok.")
-        if hasattr(model, "predict_quantiles"):
-            scaled = np.asarray(model.predict_quantiles(latest_seq))
-            p50_idx = scaled.shape[1] // 2 if scaled.ndim == 2 else 0
-            scaled_target = scaled[:, p50_idx].reshape(-1, 1)
-        else:
-            scaled_target = np.asarray(model.predict(latest_seq)).reshape(-1, 1)
-        return float(context["scaler_y"].inverse_transform(scaled_target).ravel()[-1])
-
-    def predict_quantiles_target(
-        self,
-        model_name: str,
-        model: Any,
-        context: Dict[str, Any],
-        quantiles: tuple[float, ...] = (0.1, 0.5, 0.9),
-    ) -> Optional[Dict[float, float]]:
-        """
-        Sprint 4 (2026-05-25) Plan A4.4: model `predict_quantiles` destekliyorsa
-        en son zaman adimi icin {quantile: target_value} doner. Aksi halde None.
-        """
-        if not hasattr(model, "predict_quantiles"):
-            return None
-        if model_name in _SEQ_MODELS:
-            latest = context.get("latest_seq")
-        elif model_name in _TREE_MODELS:
-            latest = context.get("latest_X_s")
-        else:
-            latest = context.get("latest_X")
-        if latest is None:
-            return None
-        try:
-            scaled = np.asarray(model.predict_quantiles(latest))
-        except TypeError:
-            scaled = np.asarray(model.predict_quantiles(latest, quantiles=quantiles))
-        if scaled.ndim != 2 or scaled.shape[1] == 0:
-            return None
-        # Son satir (latest sample) icin quantile vektoru.
-        last_row_scaled = scaled[-1].reshape(-1, 1)
-        scaler_y = context.get("scaler_y")
-        if scaler_y is not None:
-            last_row = scaler_y.inverse_transform(last_row_scaled).ravel()
-        else:
-            last_row = last_row_scaled.ravel()
-        # Quantile sayilari modelinkilerle eslestir; kullanicinin istedigi qs
-        # listesi farkliysa interpolasyon yapmak yerine modelinkileri tutariz.
-        model_qs = getattr(model, "quantiles", None) or quantiles
-        if len(model_qs) != len(last_row):
-            return None
-        return {float(q): float(v) for q, v in zip(model_qs, last_row)}
 
 
 class ForecastPointGenerator:
@@ -755,13 +695,12 @@ class ForecastPointGenerator:
         *,
         member_points: Dict[str, list[dict[str, Any]]],
         weights: Dict[str, float],
-        method: str,
         last_observed_date: Any,
         last_close: float,
     ) -> list[dict[str, Any]]:
         """Ensemble üye nokta tahminlerini ağırlıklı birleştirip tek seriye indirger.
 
-        `method`/`weights` ile her horizon adımında üye getirilerini harmanlar ve
+        `weights` ile her horizon adımında üye getirilerini harmanlar ve
         `last_close`'tan başlayarak fiyat serisini yeniden kurar.
         """
         names = list(member_points)
@@ -775,12 +714,6 @@ class ForecastPointGenerator:
                 float(member_points[name][idx]["bounded_predicted_close"]) * normalized[name]
                 for name in names
             )
-            if method == "Cash-Gated":
-                returns = [float(member_points[name][idx]["predicted_return"]) for name in names]
-                signs = np.sign(np.asarray(returns, dtype=float))
-                agreement = max((signs > 0).sum(), (signs < 0).sum()) / float(len(signs))
-                if agreement < 0.6:
-                    weighted_close = previous_close
             bounded_close, band = self.ctx.rules.bound_forecast_price(weighted_close, previous_close)
             point = {
                 "target_date": dates[idx].strftime("%Y-%m-%d"),
@@ -934,29 +867,6 @@ class ForecastPointGenerator:
                 "upper_band": band.upper_band,
                 "price_tick": band.price_tick,
             }
-            # Quantile-destekli modeller (Quantile-LGB, LSTM-Lite MC-dropout): modelin
-            # kendi bandi KALIBRASYONSUZdur (MC-dropout yalnizca epistemik belirsizlik;
-            # horizon ile genislemez). Yayinlanan band HER ZAMAN model-agnostik
-            # B2/C kalibrasyonundan gecer; merkez = modelin medyani (predict() bu
-            # modellerde p50 doner). Ham model quantile'lari yalniz teshis metadatasi.
-            quantile_targets = predictor.predict_quantiles_target(model_name, model, context)
-            if quantile_targets:
-                quantile_close: dict[str, float] = {}
-                quantile_returns: dict[str, float] = {}
-                for q, qval in quantile_targets.items():
-                    qc = self.ctx.target_to_price(float(qval), previous_close, target_mode)
-                    bounded_qc, _ = self.ctx.rules.bound_forecast_price(qc, previous_close)
-                    label = f"p{int(round(q * 100))}"
-                    quantile_close[label] = float(bounded_qc)
-                    quantile_returns[label] = (
-                        (float(bounded_qc) / previous_close) - 1.0 if previous_close else 0.0
-                    )
-                point["raw_model_quantiles"] = {
-                    "quantile_close": quantile_close,
-                    "quantile_returns": quantile_returns,
-                    "calibrated": False,
-                    "note": "diagnostic only; published p10/p90 come from calibrated band",
-                }
             # Model-agnostik olasiliksal interval (B2 residual / C conformal).
             # Kalibrasyon yoksa band yayinlanmaz (kalibrasyonsuz band yayinlamaktan iyi).
             self._apply_model_agnostic_interval(
@@ -984,6 +894,8 @@ class ForecastPointGenerator:
             frame = self._apply_macro_forward_projection_safe(
                 frame, context, target_date, step=idx
             )
+            # Momentum (60g) close + BIST100 projeksiyonuna bagli: projeksiyondan SONRA tazele.
+            frame = self._recompute_momentum_features_safe(frame, context, step=idx)
             # Relative_Strength = Return - BIST100_Return (yeni satir icin tazele).
             frame = self._recompute_relative_strength(frame)
             previous_close = bounded_close
@@ -1086,12 +998,6 @@ class ForecastPointGenerator:
         latest_X_s = ProductionTrainingWorkflow._transform_features(context["scaler_X"], latest_X)
         context["latest_X"] = latest_X
         context["latest_X_s"] = latest_X_s
-        if model_name in _SEQ_MODELS:
-            time_steps = int(context["time_steps"])
-            if len(X_all) < time_steps:
-                raise ValueError(f"{model_name} icin recursive sequence yetersiz.")
-            X_all_s = ProductionTrainingWorkflow._transform_features(context["scaler_X"], X_all)
-            context["latest_seq"] = X_all_s[-time_steps:].reshape(1, time_steps, X_all_s.shape[1])
 
     @staticmethod
     def _record_warning(context: Dict[str, Any], warning: str) -> None:
@@ -1128,6 +1034,37 @@ class ForecastPointGenerator:
                 exc,
             )
             self._record_warning(context, tag)
+            return frame
+
+    def _recompute_momentum_features_safe(
+        self,
+        frame: pd.DataFrame,
+        context: Dict[str, Any],
+        step: Optional[int] = None,
+    ) -> pd.DataFrame:
+        """momentum_60d / market_momentum_60d / relative_to_market_60d'yi tazeler.
+
+        Hata olursa frame degismez; loglanir + forecast_warnings'e yazilir.
+        """
+        if "momentum_60d" not in frame.columns:
+            return frame
+        try:
+            from src.features.feature_pipeline import FeaturePipeline
+
+            return FeaturePipeline().recompute_momentum_features(frame).ffill().bfill()
+        except Exception as exc:  # noqa: BLE001 - forecast uretimi bozulmamali; kayit altinda
+            logger.warning(
+                "momentum recompute basarisiz (step=%s): %s: %s",
+                step,
+                type(exc).__name__,
+                exc,
+            )
+            self._record_warning(
+                context,
+                f"momentum_recompute_failed_step_{step}"
+                if step is not None
+                else "momentum_recompute_failed",
+            )
             return frame
 
     def _apply_macro_forward_projection_safe(
@@ -1191,6 +1128,9 @@ class ForecastPointGenerator:
         new_row = frame.iloc[-1].copy()
         new_row["Date"] = pd.to_datetime(target_date).normalize()
         new_row["Close"] = float(bounded_close)
+        # Takvim ozelligi: son satirdan kopya kalmasin, yeni tarihten turet (0=Pazartesi).
+        if "day_of_week" in frame.columns:
+            new_row["day_of_week"] = float(pd.Timestamp(new_row["Date"]).dayofweek)
         # Sentetik bar: gun-ici bilgi yok -> durust sifir-aralikli bar.
         # Open = onceki kapanis; High/Low = Open ve Close'un max/min'i (Low<=Close<=High);
         # Volume = son 20 bar medyani. (Son gercek barin OHLV'si KOPYALANMAZ.)
@@ -1205,11 +1145,18 @@ class ForecastPointGenerator:
             if len(trailing):
                 new_row["Volume"] = float(trailing.median())
         simple_return = (bounded_close / previous_close) - 1.0 if previous_close else 0.0
-        log_return = float(np.log(bounded_close / previous_close)) if previous_close else 0.0
         if "Return" in frame.columns:
             new_row["Return"] = simple_return
-        if "Log_Return" in frame.columns:
-            new_row["Log_Return"] = log_return
+        # LogRet_Lag_k[t+1] = log-getiri[t+1-k]: egitimdeki tanimla (shift(k)) ayni.
+        # Lag_1 = SON GERCEK/ONCEKI adimin log-getirisi (log(previous_close / Close[-2]));
+        # yeni adimin kendi getirisi lag-0'dir (Return kolonu) ve lag'a SIZDIRILMAZ.
+        # Lag_k (k>=2) = onceki satirin Lag_{k-1}'i.
+        prev_prev_close = float(frame["Close"].iloc[-2]) if len(frame) >= 2 else 0.0
+        prev_log_return = (
+            float(np.log(previous_close / prev_prev_close))
+            if previous_close and prev_prev_close
+            else 0.0
+        )
         lag_cols = sorted(
             [col for col in frame.columns if col.startswith("LogRet_Lag_")],
             key=lambda col: int(col.rsplit("_", 1)[-1]),
@@ -1218,7 +1165,7 @@ class ForecastPointGenerator:
         for col in reversed(lag_cols):
             idx = int(col.rsplit("_", 1)[-1])
             if idx == 1:
-                new_row[col] = log_return
+                new_row[col] = prev_log_return
             else:
                 new_row[col] = previous.get(f"LogRet_Lag_{idx - 1}", new_row.get(col, 0.0))
         return pd.concat([frame, pd.DataFrame([new_row])], ignore_index=True)

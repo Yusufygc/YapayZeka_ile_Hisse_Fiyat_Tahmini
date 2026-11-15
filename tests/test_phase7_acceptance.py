@@ -35,7 +35,6 @@ class Phase7AcceptanceTests(unittest.TestCase):
         dm.target_mode = "log_return"
         dm.scaling_mode = "standard"
         dm.models_dir = self.tmp
-        dm.time_steps = 2
         dm.scaling_reports = []
         dm._prepare_tensors_call_idx = 0
         dm.clip_shift_warning_threshold_pct = 1.0
@@ -111,33 +110,32 @@ class Phase7AcceptanceTests(unittest.TestCase):
         self.assertAlmostEqual(float(scaler_y.mean_[0]), 1.0)
         self.assertGreater(float(X_test_s[0, 0]), 90.0)
 
-    def test_macro_release_lag_prevents_future_cpi_and_rate_visibility(self):
-        from src.features.macro_pipeline import MacroPipeline
+    def test_macro_release_lag_prevents_future_rate_visibility(self):
+        # CPI feature'lari kaldirildi; faiz yayim kurali risk-free serisinde korunur.
+        import tempfile
 
-        mp = MacroPipeline(rate_release_lag_days=1, cpi_release_lag_days=15)
+        from src.utils.risk_free_rate import get_risk_free_rate_series
+
         raw_rate = pd.DataFrame({
             "Date": pd.to_datetime(["2024-01-01", "2024-02-01"]),
             "INTEREST_RATE": [40.0, 45.0],
         })
-        raw_cpi = pd.DataFrame({
-            "Date": pd.date_range("2023-01-01", periods=14, freq="MS"),
-            "CPI": np.arange(100.0, 114.0),
-        })
+        dates = pd.to_datetime(["2024-01-31", "2024-02-01", "2024-02-29", "2024-03-01"])
+        with tempfile.TemporaryDirectory() as tmp:
+            raw_rate.to_csv(os.path.join(tmp, "INTEREST_RATE.csv"), index=False)
+            old = os.environ.pop("RISK_FREE_RATE_ANNUAL", None)
+            try:
+                out = get_risk_free_rate_series(dates, macro_cache_dir=tmp, lag_days=1, annual=True)
+            finally:
+                if old is not None:
+                    os.environ["RISK_FREE_RATE_ANNUAL"] = old
 
-        rate_feats = mp._engineer_monthly_rate(raw_rate)
-        rate_feats["Date"] = rate_feats["Date"] + pd.to_timedelta(mp.rate_release_lag_days, unit="D")
-        cpi_feats = mp._engineer_monthly_cpi(raw_cpi)
-        cpi_feats["Date"] = cpi_feats["Date"] + pd.to_timedelta(mp.cpi_release_lag_days, unit="D")
-
-        self.assertEqual(rate_feats["Date"].iloc[0], pd.Timestamp("2024-01-02"))
-        self.assertEqual(cpi_feats["Date"].iloc[-1], pd.Timestamp("2024-02-16"))
-
-        daily = pd.DataFrame({"Date": pd.date_range("2024-02-01", "2024-02-20", freq="D")})
-        merged = pd.merge(daily, cpi_feats, on="Date", how="left")
-        merged[["CPI_MoM", "CPI_YoY"]] = merged[["CPI_MoM", "CPI_YoY"]].ffill()
-        before_release = merged.loc[merged["Date"] < pd.Timestamp("2024-02-16"), "CPI_YoY"]
-        self.assertTrue(before_release.isna().all())
-        self.assertTrue(np.isfinite(merged.loc[merged["Date"] == pd.Timestamp("2024-02-16"), "CPI_YoY"].iloc[0]))
+        # Ocak degeri 2024-02-01'de (ay sonu 01-31 + 1 gun) gorunur, oncesinde NaN.
+        self.assertTrue(np.isnan(out.iloc[0]))
+        self.assertAlmostEqual(out.iloc[1], 0.40)
+        # Subat degeri 2024-03-01'de (02-29 + 1) gorunur; 02-29'da hala Ocak degeri.
+        self.assertAlmostEqual(out.iloc[2], 0.40)
+        self.assertAlmostEqual(out.iloc[3], 0.45)
 
     def test_backtest_report_trade_equity_and_metric_columns_are_consistent(self):
         dates = pd.date_range("2024-01-01", periods=4, freq="D")

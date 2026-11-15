@@ -12,7 +12,6 @@ import numpy as np
 from src.pipeline import model_factory
 
 _TREE_MODELS = model_factory.TREE_MODELS
-_SEQ_MODELS = model_factory.SEQ_MODELS
 
 
 class _TrainingWorkflowBase:
@@ -92,27 +91,6 @@ class _TrainingWorkflowBase:
     def _model_class_for_name(self, model_name: str):
         return self.helpers.model_class_for_name(model_name)
 
-    def _make_prophet(self):
-        return self.helpers.make_prophet()
-
-    def _make_arima(self):
-        return self.helpers.make_arima()
-
-    def _make_lstm(self, stage: str):
-        return self.helpers.make_lstm(stage)
-
-    def _make_lstm_lite(self, stage: str):
-        return self.helpers.make_lstm_lite(stage)
-
-    def _make_attention_lstm_v2(self, stage: str):
-        return self.helpers.make_attention_lstm_v2(stage)
-
-    def _has_min_sequences(self, count: int, model_name: str, context: str) -> bool:
-        return self.helpers.has_min_sequences(count, model_name, context)
-
-    def _wf_has_min_sequences(self, wf_splits: list, data_manager, model_name: str) -> bool:
-        return self.helpers.wf_has_min_sequences(wf_splits, data_manager, model_name)
-
     def _skip(self, name: str) -> bool:
         return self.helpers.skip(name)
 
@@ -128,9 +106,6 @@ class _TrainingWorkflowBase:
     def _boosting_baseline_specs(self):
         return self.helpers.boosting_baseline_specs()
 
-    def _sequence_baseline_specs(self):
-        return self.helpers.sequence_baseline_specs()
-
     def _dump_feature_importances(self, validators: dict) -> None:
         return self.helpers.dump_feature_importances(validators)
 
@@ -145,27 +120,12 @@ class FinalHoldoutTrainingWorkflow(_TrainingWorkflowBase):
         tensors = data_manager.prepare_tensors(data_manager.selection_df, data_manager.final_holdout_df)
         cls = self._model_class_for_name(model_name)
 
-        if model_name == "Prophet":
-            model = self._make_prophet()
-            model.train(tensors["X_train"], tensors["y_train"], dates_train=tensors["dates_train"])
-        elif model_name in _TREE_MODELS:
+        if model_name in _TREE_MODELS:
             model = cls()
             model.train(tensors["X_train_s"], tensors["y_train_s"])
-        elif model_name in _SEQ_MODELS:
-            if not self._has_min_sequences(len(tensors["X_train_seq"]), model_name, "final holdout train"):
-                raise ValueError(f"{model_name} final holdout egitimi icin sequence sayisi yetersiz.")
-            if model_name == "LSTM":
-                model = self._make_lstm("final")
-            elif model_name == "LSTM Lite":
-                model = self._make_lstm_lite("final")
-            elif model_name == "AttentionLSTM v2":
-                model = self._make_attention_lstm_v2("final")
-            else:
-                model = cls()
-            model.train(tensors["X_train_seq"], tensors["y_train_seq"])
         else:
             model = cls()
-            model.train(tensors["X_train"], tensors["y_train"], dates_train=tensors["dates_train"])
+            model.train(tensors["X_train"], tensors["y_train"])
 
         self.final_holdout_model_name = model_name
         self.final_holdout_model = model
@@ -185,21 +145,13 @@ class SingleSplitTrainingWorkflow(_TrainingWorkflowBase):
         optuna_storage = f"sqlite:///{optuna_path.replace(os.sep, '/')}"
         self._train_baseline_models(tensors)
         self._train_tree_family_models(tensors)
-        self._train_sequence_baselines(tensors)
-        self._train_prophet_if_selected(tensors)
         self._train_tuned_tree_models(tensors, optuna_storage)
-        self._train_deep_models(tensors)
 
     def _train_baseline_models(self, tensors: dict) -> None:
         for name, cls in self._baseline_specs():
             model = cls()
-            model.train(tensors["X_train"], tensors["y_train"], dates_train=tensors["dates_train"])
+            model.train(tensors["X_train"], tensors["y_train"])
             self.trained_models[name] = model
-
-        if not self._skip("ARIMA"):
-            model = self._make_arima()
-            model.train(tensors["X_train"], tensors["y_train"], dates_train=tensors["dates_train"])
-            self.trained_models["ARIMA"] = model
 
     def _train_tree_family_models(self, tensors: dict) -> None:
         for name, cls in self._linear_baseline_specs():
@@ -219,32 +171,12 @@ class SingleSplitTrainingWorkflow(_TrainingWorkflowBase):
             except ImportError as exc:
                 print(f"  [WARN] {name} atlandi: {exc}")
 
-    def _train_sequence_baselines(self, tensors: dict) -> None:
-        for name, cls in self._sequence_baseline_specs():
-            if self._skip(name):
-                continue
-            if self._has_min_sequences(len(tensors["X_train_seq"]), name, "train"):
-                model = cls()
-                model.train(tensors["X_train_seq"], tensors["y_train_seq"])
-                self.trained_models[name] = model
-
-    def _train_prophet_if_selected(self, tensors: dict) -> None:
-        if self._skip("Prophet") or "Prophet" not in self.selected_models:
-            return
-        try:
-            prophet = self._make_prophet()
-            prophet.train(tensors["X_train"], tensors["y_train"], dates_train=tensors["dates_train"])
-            self.trained_models["Prophet"] = prophet
-        except Exception as exc:
-            print(f"  [WARN] Prophet egitimi basarisiz, atlaniyor: {exc}")
-
     def _train_tuned_tree_models(self, tensors: dict, optuna_storage: str) -> None:
         # Study adı çalıştırma başına benzersiz: kalıcı per-symbol DB'de önceki
         # koşuların trial'ları yeniden kullanılmasın (kayıt amaçlı storage).
         run_token = (self.dataset_metadata or {}).get("run_id") or uuid.uuid4().hex[:12]
         specs = (
             ("XGBoost", "XGBoostModel", f"xgb_{self.stock_symbol}_{run_token}"),
-            ("Random Forest", "RandomForestModel", f"rf_{self.stock_symbol}_{run_token}"),
         )
         trainer_module = importlib.import_module("src.pipeline.model_trainer")
         for model_name, attr, study_name in specs:
@@ -259,49 +191,29 @@ class SingleSplitTrainingWorkflow(_TrainingWorkflowBase):
             )
             self.trained_models[model_name] = model
 
-    def _train_deep_models(self, tensors: dict) -> None:
-        specs = (
-            ("LSTM", lambda: self._make_lstm("single")),
-            ("LSTM Lite", lambda: self._make_lstm_lite("single")),
-            ("AttentionLSTM v2", lambda: self._make_attention_lstm_v2("single")),
-        )
-        for model_name, factory in specs:
-            if self._skip(model_name):
-                continue
-            if self._has_min_sequences(len(tensors["X_train_seq"]), model_name, "train"):
-                model = factory()
-                model.train(tensors["X_train_seq"], tensors["y_train_seq"])
-                self.trained_models[model_name] = model
-
-
 
 class WalkForwardTrainingWorkflow(_TrainingWorkflowBase):
     def run(self, wf_splits: list, data_manager):
         preprocessors = {
             "baseline": self._preprocessor(data_manager, "baseline"),
             "tree": self._preprocessor(data_manager, "tree"),
-            "seq": self._preprocessor(data_manager, "seq"),
         }
         validators = {}
-        self._run_standard_validators(wf_splits, data_manager, preprocessors, validators)
+        self._run_standard_validators(wf_splits, preprocessors, validators)
         self._run_tuned_tree_validators(wf_splits, preprocessors["tree"], validators)
-        self._run_deep_validators(wf_splits, data_manager, preprocessors["seq"], validators)
         self._materialize_validator_results(validators)
         self._dump_feature_importances(validators)
         self._stamp_walk_forward_threshold_config()
 
     def _preprocessor(self, data_manager, kind: str):
-        def prepare(train_df, test_df, context_df=None):
-            tensors = data_manager.prepare_tensors(train_df, test_df, context_df=context_df)
+        def prepare(train_df, test_df):
+            tensors = data_manager.prepare_tensors(train_df, test_df)
             if kind == "baseline":
                 x_train, y_train = tensors["X_train"], tensors["y_train"]
                 x_test, y_test, scaler_y = tensors["X_test"], tensors["y_test"], None
-            elif kind == "tree":
+            else:
                 x_train, y_train = tensors["X_train_s"], tensors["y_train_s"]
                 x_test, y_test, scaler_y = tensors["X_test_s"], tensors["y_test_s"], tensors["scaler_y"]
-            else:
-                x_train, y_train = tensors["X_train_seq"], tensors["y_train_seq"]
-                x_test, y_test, scaler_y = tensors["X_test_seq"], tensors["y_test_seq"], tensors["scaler_y"]
             return (
                 x_train, y_train,
                 x_test, y_test,
@@ -315,21 +227,10 @@ class WalkForwardTrainingWorkflow(_TrainingWorkflowBase):
             )
         return prepare
 
-    def _run_standard_validators(self, wf_splits, data_manager, preprocessors, validators) -> None:
+    def _run_standard_validators(self, wf_splits, preprocessors, validators) -> None:
         for name, cls in self._baseline_specs():
             self._wf_run(name, cls, preprocessors["baseline"], wf_splits, validators)
-        self._run_prophet_and_arima(wf_splits, preprocessors["baseline"], validators)
         self._run_tabular_baselines(wf_splits, preprocessors["tree"], validators)
-        self._run_sequence_baselines(wf_splits, data_manager, preprocessors["seq"], validators)
-
-    def _run_prophet_and_arima(self, wf_splits, preprocessor, validators) -> None:
-        if not self._skip("Prophet"):
-            try:
-                self._wf_run("Prophet", self._make_prophet, preprocessor, wf_splits, validators, skip_import_err=True)
-            except Exception as exc:
-                print(f"  [WARN] Prophet walk-forward calistirilamadi: {exc}")
-        if not self._skip("ARIMA"):
-            self._wf_run("ARIMA", self._make_arima, preprocessor, wf_splits, validators)
 
     def _run_tabular_baselines(self, wf_splits, preprocessor, validators) -> None:
         for name, cls in self._linear_baseline_specs():
@@ -339,17 +240,9 @@ class WalkForwardTrainingWorkflow(_TrainingWorkflowBase):
             if not self._skip(name):
                 self._wf_run(name, cls, preprocessor, wf_splits, validators, skip_import_err=True)
 
-    def _run_sequence_baselines(self, wf_splits, data_manager, preprocessor, validators) -> None:
-        for name, cls in self._sequence_baseline_specs():
-            if self._skip(name):
-                continue
-            if self._wf_has_min_sequences(wf_splits, data_manager, name):
-                self._wf_run(name, cls, preprocessor, wf_splits, validators)
-
     def _run_tuned_tree_validators(self, wf_splits, preprocessor, validators) -> None:
         specs = (
             ("XGBoost", "XGBoostModel", {"early_stopping_rounds": 50}),
-            ("Random Forest", "RandomForestModel", {}),
         )
         trainer_module = importlib.import_module("src.pipeline.model_trainer")
         for model_name, attr, extra_kwargs in specs:
@@ -367,18 +260,6 @@ class WalkForwardTrainingWorkflow(_TrainingWorkflowBase):
                 wf_splits,
                 validators,
             )
-
-    def _run_deep_validators(self, wf_splits, data_manager, preprocessor, validators) -> None:
-        specs = (
-            ("LSTM", lambda: self._make_lstm("wf")),
-            ("LSTM Lite", lambda: self._make_lstm_lite("wf")),
-            ("AttentionLSTM v2", lambda: self._make_attention_lstm_v2("wf")),
-        )
-        for model_name, factory in specs:
-            if self._skip(model_name):
-                continue
-            if self._wf_has_min_sequences(wf_splits, data_manager, model_name):
-                self._wf_run(model_name, factory, preprocessor, wf_splits, validators)
 
     def _materialize_validator_results(self, validators: dict) -> None:
         for name, validator in validators.items():

@@ -3,18 +3,21 @@
 
 from __future__ import annotations
 
+REMOVED = {"LSTM", "LSTM Lite", "AttentionLSTM v2", "DLinear", "NLinear", "Prophet", "ARIMA"}
 
-def test_interactive_manual_menu_contains_lstm_lite():
+
+def test_interactive_manual_menu_has_only_supported_candidates():
     from src.cli.interactive import AVAILABLE_MODELS
 
-    assert "LSTM Lite" in AVAILABLE_MODELS
-    assert AVAILABLE_MODELS.index("LSTM Lite") == AVAILABLE_MODELS.index("LSTM") + 1
+    assert {"XGBoost", "Ridge Return", "LightGBM Return"} <= set(AVAILABLE_MODELS)
+    assert not REMOVED & set(AVAILABLE_MODELS)
 
 
-def test_interactive_deep_learning_preset_contains_lstm_lite():
-    from src.cli.interactive import PRESETS
+def test_interactive_presets_never_offer_removed_models():
+    from src.cli.interactive import AVAILABLE_MODELS, PRESETS
 
-    label, models = PRESETS["3"]
-    assert "Derin" in label
-    assert set(models) == {"LSTM", "LSTM Lite", "AttentionLSTM v2"}
-
+    for label, models in PRESETS.values():
+        if models is None:
+            continue
+        assert not REMOVED & set(models), label
+        assert set(models) <= set(AVAILABLE_MODELS), label

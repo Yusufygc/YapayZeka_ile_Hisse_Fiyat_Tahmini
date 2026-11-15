@@ -243,8 +243,13 @@ def test_to_storable_path_is_idempotent_and_keeps_foreign_paths(tmp_path):
     assert once == "outputs/A/m.pt"
     assert db_paths.to_storable_path(once) == once
     assert db_paths.to_storable_path("") == ""
+    # pytest tmp dizini repo icinde (.codex_tmp/pytest/...) olabilir; "dis" yol icin proje
+    # koku acikca tmp altindaki ayri bir dizine verilir -> yol gercekten kok DISINDA.
+    fake_root = str(tmp_path / "repo")
     outside = str(tmp_path / "other" / "m.pt")
-    assert db_paths.to_storable_path(outside) == outside
+    assert db_paths.to_storable_path(outside, project_root=fake_root) == outside
+    inside_fake = os.path.join(fake_root, "outputs", "A", "m.pt")
+    assert db_paths.to_storable_path(inside_fake, project_root=fake_root) == "outputs/A/m.pt"
 
 
 def test_migration_rewrites_legacy_absolute_paths_idempotently(tmp_path):

@@ -28,11 +28,7 @@ def test_benchmark_models_content():
 
 
 def test_candidate_models_content():
-    expected = {
-        "Prophet", "ARIMA", "Ridge Return", "ElasticNet Return", "LightGBM Return",
-        "DLinear", "NLinear", "XGBoost", "Random Forest", "LSTM", "LSTM Lite",
-        "AttentionLSTM v2",
-    }
+    expected = {"Ridge Return", "LightGBM Return", "XGBoost"}
     assert set(CANDIDATE_MODELS) == expected
 
 
@@ -46,11 +42,7 @@ def test_canonical_ordering_preserved():
     """Tarihi tuple sıralaması bozulmamış."""
     assert BENCHMARK_MODELS == ("Naive Last Value", "Naive Zero Return", "Naive Drift")
     # CANDIDATE_MODELS sıralaması da preserve edilmeli.
-    expected_order = (
-        "Prophet", "ARIMA", "Ridge Return", "ElasticNet Return", "LightGBM Return",
-        "DLinear", "NLinear", "XGBoost", "Random Forest", "LSTM", "LSTM Lite",
-        "AttentionLSTM v2",
-    )
+    expected_order = ("Ridge Return", "LightGBM Return", "XGBoost")
     assert CANDIDATE_MODELS == expected_order
 
 
@@ -66,10 +58,10 @@ def test_function_form_matches_tuple_form():
     assert default_candidate_models() == DEFAULT_CANDIDATE_MODELS
 
 
-def test_normalize_with_unknown_filters_out():
-    result = normalize_candidate_models(["XGBoost", "__BogusModel__"])
-    assert "XGBoost" in result
-    assert "__BogusModel__" not in result
+def test_normalize_with_unknown_raises():
+    # 2026-11-16: bilinmeyen/kaldirilmis ad sessizce dusurulmez, ValueError verir.
+    with pytest.raises(ValueError, match="__BogusModel__"):
+        normalize_candidate_models(["XGBoost", "__BogusModel__"])
 
 
 def test_normalize_empty_returns_defaults():
@@ -79,4 +71,4 @@ def test_normalize_empty_returns_defaults():
 
 def test_is_benchmark_model():
     assert is_benchmark_model("Naive Zero Return") is True
-    assert is_benchmark_model("Random Forest") is False
+    assert is_benchmark_model("XGBoost") is False

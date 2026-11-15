@@ -10,6 +10,10 @@ import json
 import math
 from typing import Any, Dict, Optional
 
+# LEGACY: "Cash-Gated" / "Seq-Attention Inverse RMSE" yeni kosularda uretilmez
+# (model_scope.REMOVED_MODELS). Isimler yalnizca eski satirlarin okunmasi/best_models
+# yeniden insasi icin tutulur; silmek DB'yi degistirirdi (eski satirlar dusurulurdu).
+# Okuma/forecast yolu bu satirlari "model no longer supported, retrain" ile reddeder.
 PRODUCTION_ENSEMBLE_METHODS = {"Inverse RMSE", "Cash-Gated", "Seq-Attention Inverse RMSE"}
 
 

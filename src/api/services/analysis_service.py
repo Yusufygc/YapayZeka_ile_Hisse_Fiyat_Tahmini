@@ -32,6 +32,7 @@ from src.api.services.data_quality_monitor import (
 from src.api.services.data_refresh_service import DataRefreshService, read_latest_market_row
 from src.database.paths import resolve_model_path
 from src.pipeline.confidence_calculator import compute_confidence
+from src.pipeline.model_scope import is_removed_model
 from src.xai.product_summary import build_xai_product_summary
 
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -45,13 +46,14 @@ def _now_iso() -> str:
 
 def _model_family(model_name: str) -> str:
     name = str(model_name or "")
-    if any(k in name for k in ("XGBoost", "LightGBM", "Random Forest")):
+    # Silinmis (eski DB satirlarinda kalan) modeller: okunabilir ama desteklenmiyor.
+    if is_removed_model(name):
+        return "removed"
+    if any(k in name for k in ("XGBoost", "LightGBM")):
         return "tree"
-    if any(k in name for k in ("Ridge", "ElasticNet")):
+    if any(k in name for k in ("Ridge",)):
         return "linear"
-    if any(k in name for k in ("LSTM", "DLinear", "NLinear", "Attention")):
-        return "deep"
-    if any(k in name for k in ("Naive", "ARIMA", "Prophet")):
+    if "Naive" in name:
         return "baseline"
     return "unknown"
 

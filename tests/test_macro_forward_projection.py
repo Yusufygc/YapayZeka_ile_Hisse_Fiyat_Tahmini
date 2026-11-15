@@ -24,14 +24,14 @@ def _seed_frame(n=300, seed=42):
     dates = pd.date_range("2024-01-01", periods=n + 1, freq="D")
     usdtry = 30.0 + np.cumsum(rng.normal(0.01, 0.05, size=n + 1))
     bist100 = 9000.0 + np.cumsum(rng.normal(5, 50, size=n + 1))
-    vix = 18.0 + rng.normal(0, 2, size=n + 1)
+    ma7 = 0.01 + rng.normal(0, 0.005, size=n + 1)
     close = 100.0 + np.cumsum(rng.normal(0, 1, size=n + 1))
     df = pd.DataFrame({
         "Date": dates,
         "Close": close,
         "USDTRY": usdtry,
         "BIST100": bist100,
-        "VIX": vix,
+        "BIST100_MA7": ma7,
         "NonMacro": np.ones(n + 1) * 7.5,
     })
     # Son satir: macro sutunlarda son known degeri ayni (frozen senaryosu)
@@ -44,7 +44,7 @@ def test_auto_resolve_columns_picks_known_macros():
     cols = p._resolve_columns(df)
     assert "USDTRY" in cols
     assert "BIST100" in cols
-    assert "VIX" in cols
+    assert "BIST100_MA7" in cols
     assert "NonMacro" not in cols
 
 
@@ -60,7 +60,7 @@ def test_project_last_row_updates_macro_only():
     # Son satir macroyu manuel "donmus" sabit yapalim
     df.loc[df.index[-1], "USDTRY"] = float(df["USDTRY"].iloc[-2])
     df.loc[df.index[-1], "BIST100"] = float(df["BIST100"].iloc[-2])
-    df.loc[df.index[-1], "VIX"] = float(df["VIX"].iloc[-2])
+    df.loc[df.index[-1], "BIST100_MA7"] = float(df["BIST100_MA7"].iloc[-2])
     p = MacroForwardProjector()
     out = p.project_last_row(df, target_date=pd.Timestamp("2099-01-01"))
     # NonMacro dokunulmamali

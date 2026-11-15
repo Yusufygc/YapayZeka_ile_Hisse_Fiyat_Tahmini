@@ -234,7 +234,7 @@ def _parse_args() -> argparse.Namespace:
         "--models",
         type=str,
         default=None,
-        help="Virgülle ayrılmış model listesi (ör. XGBoost,LSTM). Varsayılan: tümü",
+        help="Virgülle ayrılmış model listesi (ör. XGBoost,Ridge Return). Varsayılan: tümü",
     )
     p.add_argument(
         "--workers",
@@ -432,6 +432,14 @@ def main() -> None:
     symbols = _resolve_symbols(args)
     debug_quick = _resolve_mode(args)
     selected_models, disabled_models, require_available = _resolve_models(args)
+    if selected_models:
+        from src.pipeline.model_scope import validate_selected_models
+
+        try:
+            validate_selected_models(selected_models)
+        except ValueError as exc:
+            print(f"[ERROR] {exc}", file=sys.stderr)
+            sys.exit(2)
     _print_banner(symbols, args, selected_models, disabled_models, require_available)
 
     if args.dry_run:

@@ -15,6 +15,7 @@ import numpy as np
 
 from src.database.stock_model_db import StockModelDB
 from src.forecasting.bist_calendar import ensure_bist_calendar
+from src.forecasting.artifacts import ModelNoLongerSupportedError
 from src.forecasting.bist_rules import BistMarketRules
 from src.forecasting.workflows import (
     BestModelResolver,
@@ -26,6 +27,7 @@ from src.forecasting.workflows import (
     ProductionTrainingWorkflow,
 )
 from src.pipeline.config import ModelConfig
+from src.pipeline.model_scope import is_removed_model
 
 
 @dataclass
@@ -73,7 +75,6 @@ class ForecastRunner:
             rules=self.rules,
             model_config=self.model_config,
             make_model_instance=self._make_model_instance,
-            make_prophet=self._make_prophet,
             target_to_price=ForecastRunner._target_to_price,
         )
         self.context = ctx
@@ -136,18 +137,6 @@ class ForecastRunner:
             return float(target)
         raise ValueError(f"Desteklenmeyen target_mode: {target_mode}")
 
-    def _make_prophet(self, feature_names: list[str]):
-        from src.models.prophet_model import ProphetModel
-
-        cfg = self.model_config.model_settings.get("prophet", {})
-        return ProphetModel(
-            yearly_seasonality=True,
-            weekly_seasonality=True,
-            use_regressors=bool(cfg.get("use_regressors", False)),
-            regressor_names=cfg.get("regressor_names"),
-            feature_names=feature_names,
-        )
-
     def _make_model_instance(self, model_name: str, *, stage: str = "single"):
         if model_name == "Naive Last Value":
             from src.models.naive_model import NaiveLastValueModel
@@ -158,92 +147,15 @@ class ForecastRunner:
         if model_name == "Naive Drift":
             from src.models.naive_model import NaiveDriftModel
             return NaiveDriftModel()
-        if model_name == "ARIMA":
-            from src.models.arima_model import ARIMAModel
-            cfg = self.model_config.model_settings.get("arima", {})
-            return ARIMAModel(
-                order=tuple(cfg.get("order", (1, 0, 0))),
-                auto_order=bool(cfg.get("auto_order", False)),
-                candidate_orders=[tuple(order) for order in cfg.get("candidate_orders", [])] or None,
-            )
         if model_name == "Ridge Return":
             from src.models.linear_model import RidgeReturnModel
             return RidgeReturnModel()
-        if model_name == "ElasticNet Return":
-            from src.models.linear_model import ElasticNetReturnModel
-            return ElasticNetReturnModel()
         if model_name == "LightGBM Return":
             from src.models.gradient_boosting_model import LightGBMReturnModel
             return LightGBMReturnModel()
         if model_name == "XGBoost":
             from src.models.xgboost_model import XGBoostModel
             return XGBoostModel()
-        if model_name == "Random Forest":
-            from src.models.random_forest_model import RandomForestModel
-            return RandomForestModel()
-        if model_name == "DLinear":
-            from src.models.linear_sequence_model import DLinearSequenceModel
-            return DLinearSequenceModel()
-        if model_name == "NLinear":
-            from src.models.linear_sequence_model import NLinearSequenceModel
-            return NLinearSequenceModel()
-        if model_name == "LSTM":
-            from src.models.lstm_model import AttentionLSTMModel
-            cfg = self._deep_stage_config("lstm", stage)
-            return AttentionLSTMModel(
-                epochs=int(cfg.get("epochs", 80)),
-                patience=int(cfg.get("patience", 15)),
-                dropout_rate=float(cfg.get("dropout", 0.2)),
-                batch_size=int(cfg.get("batch_size", 32)),
-                lr_patience=int(cfg.get("lr_patience", 5)),
-                validation_ratio=float(cfg.get("validation_ratio", 0.1)),
-                min_val_samples=int(cfg.get("min_validation_samples", 32)),
-            )
-        if model_name == "LSTM Lite":
-            from src.models.lstm_lite_model import LSTMLiteModel
-            cfg = self._deep_stage_config("lstm_lite", stage)
-            return LSTMLiteModel(
-                units=int(cfg.get("units", 32)),
-                dense_units=int(cfg.get("dense_units", 16)),
-                epochs=int(cfg.get("epochs", 80)),
-                patience=int(cfg.get("patience", 12)),
-                dropout_rate=float(cfg.get("dropout", 0.25)),
-                batch_size=int(cfg.get("batch_size", 32)),
-                learning_rate=float(cfg.get("learning_rate", 0.0003)),
-                lr_patience=int(cfg.get("lr_patience", 4)),
-                validation_ratio=float(cfg.get("validation_ratio", 0.1)),
-                min_val_samples=int(cfg.get("min_validation_samples", 32)),
-                tune_on_fit=bool(cfg.get("tune_on_fit", False)),
-                tune_n_trials=int(cfg.get("tune_n_trials", 12)),
-            )
-        if model_name == "AttentionLSTM v2":
-            from src.models.attention_lstm_v2_model import AttentionLSTMV2Model
-            cfg = self._deep_stage_config("attention_lstm_v2", stage)
-            return AttentionLSTMV2Model(
-                units_1=int(cfg.get("units_1", 64)),
-                units_2=int(cfg.get("units_2", 32)),
-                dense_units=int(cfg.get("dense_units", 32)),
-                epochs=int(cfg.get("epochs", 80)),
-                patience=int(cfg.get("patience", 12)),
-                dropout_rate=float(cfg.get("dropout", 0.30)),
-                batch_size=int(cfg.get("batch_size", 32)),
-                learning_rate=float(cfg.get("learning_rate", 0.0005)),
-                lr_patience=int(cfg.get("lr_patience", 4)),
-                validation_ratio=float(cfg.get("validation_ratio", 0.1)),
-                min_val_samples=int(cfg.get("min_validation_samples", 32)),
-                tune_on_fit=bool(cfg.get("tune_on_fit", False)),
-                tune_n_trials=int(cfg.get("tune_n_trials", 12)),
-                loss=str(cfg.get("loss", "huber")),
-            )
+        if is_removed_model(model_name):
+            raise ModelNoLongerSupportedError(model_name)
         raise KeyError(f"Bilinmeyen model adi: {model_name}")
-
-    def _deep_stage_config(self, section: str, stage: str) -> dict[str, Any]:
-        deep = self.model_config.model_settings.get("deep_learning", {})
-        cfg = dict(deep.get(section, {}))
-        stage_key = f"epochs_{stage}"
-        patience_stage_key = f"patience_{stage}"
-        cfg["epochs"] = cfg.get(stage_key, cfg.get("epochs_single", cfg.get("epochs", 80)))
-        cfg["patience"] = cfg.get(patience_stage_key, cfg.get("patience", 15))
-        cfg["validation_ratio"] = deep.get("validation_ratio", 0.1)
-        cfg["min_validation_samples"] = deep.get("min_validation_samples", 32)
-        return cfg

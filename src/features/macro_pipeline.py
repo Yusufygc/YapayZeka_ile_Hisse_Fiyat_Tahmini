@@ -2,59 +2,36 @@
 """
 macro_pipeline.py — Makroekonomik & Piyasa Bağlamı Veri Katmanı
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-BIST hisse tahminlerini desteklemek için üç farklı kaynaği birleştirir:
+2026-11 IC denetimi sonrasi KURATE makro katman. Model ozellikleri:
 
-  1. yfinance  (günlük, otomatik)
-     • USD/TRY : "USDTRY=X"
-     • BIST100  : "XU100.IS"
+  yfinance (günlük, otomatik)
+     • USD/TRY : "USDTRY=X"  -> USDTRY_Return, USDTRY_Volatility7
+     • BIST100 : "XU100.IS"  -> BIST100_Return, BIST100_MA7
 
-  2. FRED / pandas_datareader  (aylık, otomatik)
-     • TCMB Faizi proxy : "INTDSRTRM193N"  — IMF İskonto Faizi (% yıllık)
-     • Türkiye TÜFE     : "TURCPIALLMINMEI" — CPI Endeksi (2015=100)
+Kaldirilanlar: EURTRY, VIX, Altin, Petrol, DXY, US10Y, sektor endeksleri
+(XBANK...), FRED CPI ve faiz/enflasyon FEATURE'lari (Rate_Level, Rate_Change,
+CPI_MoM, CPI_YoY, Real_Rate) + ABD-seansi 1 gun gecikme mantigi (yalniz onlara
+hizmet ediyordu).
 
-     Kurulum (FRED için):
-       pip install pandas-datareader
+ISTISNA — INTEREST_RATE.csv: ``src/utils/risk_free_rate.py`` risk-free oran
+kaynagi olarak ``data/macro/INTEREST_RATE.csv``'yi okur (Sharpe/Sortino). Bu
+yuzden TCMB EVDS faiz cache yenilemesi (``refresh_interest_rate_cache``) korunur;
+``get_macro_features`` her cagrida cache'i tazeler AMA faiz artik model feature'i
+uretmez. EVDS erisilemezse manuel CSV fallback (kolonlar: Date, INTEREST_RATE).
 
-  3. Manuel CSV fallback  (FRED erişilemezse)
-     • data/macro/INTEREST_RATE.csv  →  kolonlar: Date, Rate
-     • data/macro/CPI.csv            →  kolonlar: Date, CPI
-     İki kolon yeterli; Date "YYYY-MM-DD" formatında olmalı.
+Sonuc: makro matris USDTRY/BIST100 serilerinin basladigi tarihten (2014) baslar;
+eski aylik CPI YoY (12 ay geriye bakis) + dropna hisse gecmisini 2021-07'ye
+kesiyordu — artik kesmez.
 
-Türetilen Özellikler:
-  Döviz/Endeks (günlük):
-    USDTRY_Return, USDTRY_Volatility7
-    BIST100_Return, BIST100_MA7
-
-  Faiz & Enflasyon (aylık → günlük ffill):
-    Rate_Level       — politika faizi düzeyi (%)
-    Rate_Change      — aylık faiz değişimi (artış/indirim sinyali)
-    CPI_YoY          — yıllık enflasyon oranı (%)
-    CPI_MoM          — aylık CPI değişimi (%)
-    Real_Rate        — Reel faiz = Rate_Level − CPI_YoY
-                       (negatif reel faiz → hisse piyasası için olumlu)
-
-Metodolojik not:
-  Aylık faiz/CPI feature'ları ÖNCE kendi aylık frekanslarında hesaplanır
-  (diff, pct_change), SONRA günlük takvime ffill ile taşınır.
-
-  Yanlış: raw_monthly → ffill → daily → diff/pct_change
-    → Rate_Change ay içinde hep 0, CPI_YoY 12 günlük fark olur.
-
-  Doğru: raw_monthly → diff/pct_change (aylık) → ffill → daily
-    → Tüm türetilmiş değerler gerçek aylık değişimleri yansıtır.
-
-Look-ahead notları:
-  * Aylık değerler ayın 1'i ile damgalıdır ama ay SONU / o ayın gerçekleşmesidir;
-    yayın tarihi = ay sonu + lag (bkz. macro_transforms.lag_monthly_features).
-  * Aylık→günlük birleşim merge_asof(backward) ile yapılır (yayın günü hafta
-    sonuna düşse bile ay kaybolmaz).
-  * ABD seansı serileri (VIX, DXY, US10Y, GOLD_USD, OIL_USD) BIST kapanışından
-    ~5 saat sonra kapanır; macro_feature_engineering.US_SESSION_COLUMNS ile
-    1 satır geciktirilir. USDTRY ve BIST endeksleri gecikmesizdir.
+Look-ahead notlari:
+  * USDTRY ve BIST100 BIST seansi sirasinda gozlenebilir -> gecikmesiz.
+  * Faiz cache'inin yayim kurali risk_free_rate.get_risk_free_rate_series icinde
+    (macro_transforms.lag_monthly_features: ay sonu + lag) uygulanir.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import warnings
 from datetime import datetime, timedelta
@@ -77,60 +54,28 @@ except ImportError:  # pragma: no cover - minimal validation runtimes
 
 warnings.filterwarnings("ignore")
 
+logger = logging.getLogger(__name__)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Sabitler
 # ─────────────────────────────────────────────────────────────────────────────
 
-# yfinance ile çekilen günlük seriler
+# yfinance ile çekilen günlük seriler (yalniz model feature'i uretenler)
 _YFINANCE_TICKERS = {
     "USDTRY":  "USDTRY=X",
     "BIST100": "XU100.IS",
-    # Tier 1 — Kola eklenen yüksek etkili global göstergeler (Faz 4.1)
-    "EURTRY":  "EURTRY=X",   # EUR/TRY kuru — BIST ile güçlü korelasyon
-    "VIX":     "^VIX",        # CBOE Volatility Index — küresel risk iştahı
-    "GOLD_USD": "GC=F",       # Altın vadeli (USD/oz) — TL varlıklarıyla ters korelasyon
-    "OIL_USD":  "BZ=F",       # Brent petrol (USD/bbl) — enerji hisseleri için kritik
-    "DXY":     "DX-Y.NYB",   # Dolar endeksi — küresel EM etkisi
-    "US10Y":   "^TNX",        # ABD 10-yıllık faiz — carry trade sinyali
-    # Sektörel Endeksler
-    "XBANK":   "XBANK.IS",
-    "XUSIN":   "XUSIN.IS",
-    "XHOLD":   "XHOLD.IS",
-    "XULAS":   "XULAS.IS",
-    "XTCRT":   "XTCRT.IS",
-    "XTEK":    "XTEK.IS",
 }
 
 _EVDS_BASE_URL = "https://evds2.tcmb.gov.tr/service/evds/"
 _DEFAULT_EVDS_RATE_SERIES = "TP.PPK.H01"
-_MONTHLY_SERIES_KEYS = ("INTEREST_RATE", "CPI")
-
-# FRED'den çekilen aylık seriler
-_FRED_SERIES = {
-    "CPI":           "TURCPIALLMINMEI",  # Türkiye TÜFE endeksi (aylık)
-}
+_RATE_KEY = "INTEREST_RATE"  # risk-free oran kaynagi (feature DEGIL)
 
 # Cache dosya adları
 _CACHE_FILES = {
     "USDTRY":        "USDTRY.csv",
     "BIST100":       "BIST100.csv",
-    "INTEREST_RATE": "INTEREST_RATE.csv",
-    "CPI":           "CPI.csv",
-    # Faz 4.1 eklentileri
-    "EURTRY":        "EURTRY.csv",
-    "VIX":           "VIX.csv",
-    "GOLD_USD":      "GOLD_USD.csv",
-    "OIL_USD":       "OIL_USD.csv",
-    "DXY":           "DXY.csv",
-    "US10Y":         "US10Y.csv",
-    # Sektörel Endeksler
-    "XBANK":         "XBANK.csv",
-    "XUSIN":         "XUSIN.csv",
-    "XHOLD":         "XHOLD.csv",
-    "XULAS":         "XULAS.csv",
-    "XTCRT":         "XTCRT.csv",
-    "XTEK":          "XTEK.csv",
+    _RATE_KEY:       "INTEREST_RATE.csv",
 }
 
 _STALE_DAYS_DAILY   = 1   # Günlük veri için yenileme eşiği
@@ -142,29 +87,23 @@ _STALE_DAYS_MONTHLY = 28  # Aylık veri için yenileme eşiği (yaklaşık 1 ay)
 # ─────────────────────────────────────────────────────────────────────────────
 class MacroPipeline:
     """
-    Tüm makro veri kaynaklarını birleştiren merkezi pipeline.
+    Günlük makro özellik pipeline'ı (USDTRY + BIST100) + faiz cache yenileme.
 
     Args:
         cache_dir : Ham veri CSV'lerinin saklanacağı dizin.
-        rate_release_lag_days : Politika faizi için AY SONUNDAN sonraki gecikme
-            (gün). INTEREST_RATE.csv değeri ayın 1'i ile damgalanır ama ay-sonu
-            seviyesidir (2023-06-01=15.00, artış 2023-06-22'de oldu); bu yüzden
-            damga önce ay sonuna taşınır, sonra +1 gün eklenir.
-        cpi_release_lag_days : TÜFE için AY SONUNDAN sonraki gecikme (gün).
-            TÜİK, M ayı TÜFE'sini M+1 ayının ~3'ünde yayımlar; ay sonu + 5 gün
-            (~3. iş günü) güvenli yaklaşımdır. Eski varsayılan (ayın 1'i + 15)
-            yayımdan ~2 hafta ÖNCE değeri görünür kılıyordu.
+        rate_release_lag_days : Politika faizi (risk-free kaynagi) icin AY SONUNDAN
+            sonraki gecikme (gün). Artik model feature'i uretmez; parametre
+            ``risk_free_rate.get_risk_free_rate_series`` ile ayni yayim kuralini
+            (ay sonu + lag) belgelemek/geriye uyumluluk icin korunur.
     """
 
     def __init__(
         self,
         cache_dir: str = "data/macro",
         rate_release_lag_days: int = 1,
-        cpi_release_lag_days: int = 5,
     ):
         self.cache_dir = cache_dir
         self.rate_release_lag_days = max(0, int(rate_release_lag_days))
-        self.cpi_release_lag_days = max(0, int(cpi_release_lag_days))
         os.makedirs(cache_dir, exist_ok=True)
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -280,31 +219,8 @@ class MacroPipeline:
             print(f"  [MACRO] {key}: yeni veri alınamadı, mevcut cache korunuyor.")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # B. Aylık Veri — FRED (pandas_datareader) + CSV Fallback
+    # B. Aylık Faiz — TCMB EVDS + CSV Fallback (risk-free kaynagi; feature DEGIL)
     # ══════════════════════════════════════════════════════════════════════════
-
-    def _fetch_fred(self, series_id: str, start: str, end: str) -> Optional[pd.DataFrame]:
-        """
-        pandas_datareader üzerinden FRED verisini çeker.
-        pandas_datareader yüklü değilse ya da bağlantı yoksa None döner.
-        """
-        try:
-            import pandas_datareader.data as web
-            df = web.DataReader(series_id, "fred",
-                                start=pd.to_datetime(start),
-                                end=pd.to_datetime(end))
-            if df.empty:
-                return None
-            df = df.reset_index()
-            df.columns = ["Date", series_id]
-            df["Date"] = pd.to_datetime(df["Date"]).dt.normalize()
-            return df
-        except ImportError:
-            print("  [MACRO] pandas_datareader yüklü değil -> pip install pandas-datareader")
-            return None
-        except Exception as exc:
-            print(f"  [MACRO] FRED {series_id}: {exc}")
-            return None
 
     def _fetch_evds_series(
         self,
@@ -381,13 +297,14 @@ class MacroPipeline:
         df.sort_values("Date", inplace=True)
         return df[["Date", value_name]]
 
-    def _update_monthly_cache(self, key: str, start: str) -> None:
+    def _update_interest_rate_cache(self, start: str) -> None:
         """
-        Aylık FRED verisini günceller.
+        INTEREST_RATE.csv'yi TCMB EVDS'ten gunceller (risk_free_rate.py kaynagi).
         Başarısız olursa manual CSV olup olmadığını kontrol eder.
         """
-        path      = self._cache_path(key)
-        existing  = self._load_cache(key)
+        key = _RATE_KEY
+        path = self._cache_path(key)
+        existing = self._load_cache(key)
 
         # Var olan veriden ileriye devam et
         if existing is not None and not existing.empty:
@@ -397,17 +314,12 @@ class MacroPipeline:
             fetch_start = start
 
         fetch_end = (datetime.today() + timedelta(days=1)).strftime("%Y-%m-%d")
-        if key == "INTEREST_RATE":
-            series_id = os.getenv("TCMB_EVDS_RATE_SERIES", _DEFAULT_EVDS_RATE_SERIES).strip()
-            print(f"  [MACRO] {key} (EVDS:{series_id}) guncelleniyor ...")
-            new_data = self._fetch_evds_series(series_id, fetch_start, fetch_end, key)
-        else:
-            series_id = _FRED_SERIES[key]
-            print(f"  [MACRO] {key} (FRED:{series_id}) güncelleniyor ...")
-            new_data = self._fetch_fred(series_id, fetch_start, fetch_end)
+        series_id = os.getenv("TCMB_EVDS_RATE_SERIES", _DEFAULT_EVDS_RATE_SERIES).strip()
+        print(f"  [MACRO] {key} (EVDS:{series_id}) guncelleniyor ...")
+        new_data = self._fetch_evds_series(series_id, fetch_start, fetch_end, key)
 
         if new_data is not None and not new_data.empty:
-            # Sütun adını normalize et: series_id → key (INTEREST_RATE veya CPI)
+            # Sütun adını normalize et: series_id → key (INTEREST_RATE)
             val_col = [c for c in new_data.columns if c != "Date"][0]
             new_data = new_data.rename(columns={val_col: key})
 
@@ -433,26 +345,10 @@ class MacroPipeline:
                 return
 
         # Rehber mesajı
-        label_map = {
-            "INTEREST_RATE": (
-                "Faiz oranı",
-                "INTEREST_RATE.csv",
-                "Date,Rate\n2020-01-01,12.0\n2020-02-01,10.75\n...",
-                "https://www.tcmb.gov.tr → Para Politikası → Politika Faizi",
-            ),
-            "CPI": (
-                "TÜFE/Enflasyon",
-                "CPI.csv",
-                "Date,CPI\n2020-01-01,450.5\n2020-02-01,452.1\n...",
-                "https://data.tuik.gov.tr → Tüketici Fiyat İstatistikleri",
-            ),
-        }
-        if key in label_map:
-            label, fname, sample, source = label_map[key]
-            print(f"\n  [MACRO] ⚠ {label} verisi otomatik alınamadı.")
-            print(f"  Manuel yol: '{self.cache_dir}/{fname}' dosyasını oluştur.")
-            print(f"  Format örneği:\n    {sample}")
-            print(f"  Kaynak: {source}\n")
+        print("\n  [MACRO] ⚠ Faiz oranı verisi otomatik alınamadı.")
+        print(f"  Manuel yol: '{self.cache_dir}/INTEREST_RATE.csv' dosyasını oluştur.")
+        print("  Format örneği:\n    Date,INTEREST_RATE\n    2020-01-01,12.0\n    2020-02-01,10.75\n    ...")
+        print("  Kaynak: https://www.tcmb.gov.tr → Para Politikası → Politika Faizi\n")
 
     # ══════════════════════════════════════════════════════════════════════════
     # C. Ana Metod
@@ -460,83 +356,39 @@ class MacroPipeline:
 
     def get_macro_features(self, start_date: str, end_date: str) -> pd.DataFrame:
         """
-        Belirtilen tarih aralığı için tam makro özellik matrisini döndürür.
+        Belirtilen tarih aralığı için makro özellik matrisini döndürür.
 
-        Akış (metodolojik olarak doğru):
-          1. Aylık ham veriyi kendi frekansında feature'lara çevir
-             (Rate_Change=diff, CPI_MoM/YoY=pct_change aylık seride)
-          2. Aylık feature'ları günlük takvime ffill ile taşı
-          3. Günlük USD/TRY ve BIST100 feature'larını türet
+        Akış:
+          1. Faiz cache'ini tazele (risk-free kaynagi; feature uretmez)
+          2. Günlük USD/TRY ve BIST100 cache'lerini tazele + yükle
+          3. Outer join + ffill, USDTRY_* / BIST100_* özelliklerini türet
 
         Returns:
-            pd.DataFrame  — Date sütunu + tüm makro özellikler.
-                            Boş döner → feature_pipeline makroyu atlar.
+            pd.DataFrame  — Date sütunu + 4 makro özellik
+                            (USDTRY_Return, USDTRY_Volatility7, BIST100_Return,
+                            BIST100_MA7). Boş döner → feature_pipeline makroyu atlar.
         """
         window = self._macro_date_window(start_date, end_date)
+        # Faiz cache'i feature uretmese de risk_free_rate.py okur -> yenileme korunur.
+        self.refresh_interest_rate_cache(window["buf_monthly_str"])
         self._refresh_daily_caches(window["buf_daily_str"])
         usdtry_df, bist100_df = self._load_required_daily_frames()
-        buf_daily = window["buf_daily_str"]
-        # CPI_YoY için 12 aylık geriye bakış gerekir; aylık veriler daha erken başlamalı
-        buf_monthly = window["buf_monthly_str"]
 
-        # ── Günlük veriler (yfinance) ─────────────────────────────────────────
         if usdtry_df is None or bist100_df is None:
             print("  [MACRO] Döviz/endeks verisi yüklenemedi, makro özellikler atlanacak.")
             return pd.DataFrame()
 
-        # ── Tarih filtreleri ───────────────────────────────────────────────────
         s = window["start"]
         e = window["end"]
         buf = window["buf_daily"]
-        buf_m = window["buf_monthly"]
-
         usdtry_df = self._filter_macro_frame(usdtry_df, buf, e)
         bist100_df = self._filter_macro_frame(bist100_df, buf, e)
 
-        # Faz 4.1: Genişletilmiş global göstergeler (try/except — her biri opsiyonel)
-        _global_dfs = self._refresh_global_daily_frames(buf_daily, buf, e)
-
-        # ── Aylık veriler (EVDS/FRED) ─────────────────────────────────────────
-        self._refresh_monthly_caches(buf_monthly)
-
-        interest_df = self._load_cache("INTEREST_RATE")
-        cpi_df      = self._load_cache("CPI")
-        interest_df = self._filter_macro_frame(interest_df, buf_m, e)
-        cpi_df      = self._filter_macro_frame(cpi_df, buf_m, e)
-
-        # ══════════════════════════════════════════════════════════════════════
-        # ADIM 1: Aylık feature'ları kendi frekansında hesapla (ffill'den ÖNCE)
-        # ══════════════════════════════════════════════════════════════════════
-        monthly_rate_feats, monthly_cpi_feats = self._build_lagged_monthly_features(
-            interest_df=interest_df,
-            cpi_df=cpi_df,
-        )
-
-        # ══════════════════════════════════════════════════════════════════════
-        # ADIM 2: Günlük takvim kur (USD/TRY + BIST100 outer join)
-        # ══════════════════════════════════════════════════════════════════════
         macro = self._build_base_daily_macro(usdtry_df, bist100_df)
-
-        # Faz 4.1: Global göstergeleri left-merge ile ekle (yoksa sütun oluşmaz)
-        macro = self._merge_global_daily_frames(macro, _global_dfs)
-
-        # ══════════════════════════════════════════════════════════════════════
-        # ADIM 3: Aylık feature dataframe'lerini günlük takvime ffill ile taşı
-        # ══════════════════════════════════════════════════════════════════════
-        macro = self._merge_monthly_feature_frames(
-            macro,
-            monthly_rate_feats=monthly_rate_feats,
-            monthly_cpi_feats=monthly_cpi_feats,
-        )
-
-        # ══════════════════════════════════════════════════════════════════════
-        # ADIM 4: Günlük USD/TRY & BIST100 feature'larını türet
-        # ══════════════════════════════════════════════════════════════════════
         macro = self._engineer_daily(macro)
 
         # Tampon dönemini çıkar
         macro = macro[macro["Date"] >= s].reset_index(drop=True)
-
         return macro
 
     @staticmethod
@@ -548,29 +400,17 @@ class MacroPipeline:
             if self._is_stale(key, _STALE_DAYS_DAILY):
                 self._update_daily_cache(key, buffer_start)
 
-    def _refresh_monthly_caches(self, buffer_start: str) -> None:
-        for key in _MONTHLY_SERIES_KEYS:
-            if self._is_stale(key, _STALE_DAYS_MONTHLY):
-                self._update_monthly_cache(key, buffer_start)
+    def refresh_interest_rate_cache(self, buffer_start: str) -> None:
+        """INTEREST_RATE.csv bayatsa EVDS'ten yeniler (risk-free kaynagi).
 
-    def _refresh_global_daily_frames(self, buf_daily: str, buf, e) -> dict:
-        """Faz 4.1 genişletilmiş global günlük göstergeleri yeniler + filtreler.
-
-        EURTRY/VIX/GOLD_USD/OIL_USD/DXY/US10Y; her biri opsiyonel — biri
-        başarısız olursa atlanır (sütun oluşmaz). Returns: {key: filtreli df}.
+        Hata makro feature uretimini DURDURMAZ (faiz artik feature degil) ama
+        loglanir; sessiz yutulmaz.
         """
-        global_keys = ["EURTRY", "VIX", "GOLD_USD", "OIL_USD", "DXY", "US10Y"]
-        global_dfs: dict = {}
-        for gkey in global_keys:
-            try:
-                if self._is_stale(gkey, _STALE_DAYS_DAILY):
-                    self._update_daily_cache(gkey, buf_daily)
-                gdf = self._load_cache(gkey)
-                if gdf is not None and not gdf.empty:
-                    global_dfs[gkey] = self._filter_macro_frame(gdf, buf, e)
-            except Exception as exc:
-                print(f"  [MACRO] {gkey} atlanıyor: {exc}")
-        return global_dfs
+        try:
+            if self._is_stale(_RATE_KEY, _STALE_DAYS_MONTHLY):
+                self._update_interest_rate_cache(buffer_start)
+        except Exception as exc:  # noqa: BLE001 - risk-free cache hatasi feature'lari bozmamali
+            logger.warning("INTEREST_RATE cache yenilemesi basarisiz: %s: %s", type(exc).__name__, exc)
 
     def _load_required_daily_frames(self) -> tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
         return self._load_cache("USDTRY"), self._load_cache("BIST100")
@@ -583,43 +423,6 @@ class MacroPipeline:
     ) -> Optional[pd.DataFrame]:
         return macro_transforms.filter_macro_frame(df, start, end)
 
-    def _build_lagged_monthly_features(
-        self,
-        *,
-        interest_df: Optional[pd.DataFrame],
-        cpi_df: Optional[pd.DataFrame],
-    ) -> tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
-        return (
-            self._lag_monthly_rate_features(interest_df),
-            self._lag_monthly_cpi_features(cpi_df),
-        )
-
-    def _lag_monthly_rate_features(
-        self,
-        interest_df: Optional[pd.DataFrame],
-    ) -> Optional[pd.DataFrame]:
-        if interest_df is None or interest_df.empty:
-            return None
-        monthly_rate_feats = self._engineer_monthly_rate(interest_df)
-        return macro_transforms.lag_monthly_features(
-            monthly_rate_feats,
-            lag_days=self.rate_release_lag_days,
-            raw_date_column="Rate_Raw_Date",
-        )
-
-    def _lag_monthly_cpi_features(
-        self,
-        cpi_df: Optional[pd.DataFrame],
-    ) -> Optional[pd.DataFrame]:
-        if cpi_df is None or cpi_df.empty:
-            return None
-        monthly_cpi_feats = self._engineer_monthly_cpi(cpi_df)
-        return macro_transforms.lag_monthly_features(
-            monthly_cpi_feats,
-            lag_days=self.cpi_release_lag_days,
-            raw_date_column="CPI_Raw_Date",
-        )
-
     @staticmethod
     def _build_base_daily_macro(
         usdtry_df: pd.DataFrame,
@@ -628,92 +431,16 @@ class MacroPipeline:
         return macro_transforms.build_base_daily_macro(usdtry_df, bist100_df)
 
     @staticmethod
-    def _merge_global_daily_frames(
-        macro: pd.DataFrame,
-        global_dfs: dict[str, pd.DataFrame],
-    ) -> pd.DataFrame:
-        return macro_transforms.merge_global_daily_frames(macro, global_dfs)
-
-    def _merge_monthly_feature_frames(
-        self,
-        macro: pd.DataFrame,
-        *,
-        monthly_rate_feats: Optional[pd.DataFrame],
-        monthly_cpi_feats: Optional[pd.DataFrame],
-    ) -> pd.DataFrame:
-        return macro_transforms.merge_monthly_feature_frames(
-            macro,
-            monthly_rate_feats=monthly_rate_feats,
-            monthly_cpi_feats=monthly_cpi_feats,
-        )
-
-    @staticmethod
-    def _merge_ffill_monthly_features(
-        macro: pd.DataFrame,
-        monthly_feats: Optional[pd.DataFrame],
-        *,
-        columns: list[str],
-    ) -> pd.DataFrame:
-        return macro_transforms.merge_ffill_monthly_features(
-            macro,
-            monthly_feats,
-            columns=columns,
-        )
-
-    # ── Özellik Mühendisliği ──────────────────────────────────────────────────
-
-    @staticmethod
-    def _engineer_monthly_rate(df: pd.DataFrame) -> pd.DataFrame:
-        return macro_feature_engineering.engineer_monthly_rate(df)
-
-    @staticmethod
-    def _engineer_monthly_cpi(df: pd.DataFrame) -> pd.DataFrame:
-        return macro_feature_engineering.engineer_monthly_cpi(df)
-
-    @staticmethod
     def _engineer_daily(df: pd.DataFrame) -> pd.DataFrame:
         return macro_feature_engineering.engineer_daily(df)
 
     # ── Özellik İsimleri ──────────────────────────────────────────────────────
     @staticmethod
-    def macro_feature_names(include_rates: bool = True) -> list:
-        """
-        Pipeline'ın beklediği tüm makro özellik isimlerini döndürür.
-
-        Args:
-            include_rates: False ise faiz/enflasyon sütunları listeye eklenmez
-                           (bu veriler yokken feature_names ile tutarlılık için).
-        """
-        base = [
+    def macro_feature_names() -> list:
+        """MacroPipeline'in urettigi makro ozellik isimleri (kurate set)."""
+        return [
             "USDTRY_Return",
             "USDTRY_Volatility7",
             "BIST100_Return",
             "BIST100_MA7",
-            # Faz 4.1 — Global göstergeler (opsiyonel; yoksa feature pipeline atlar)
-            "EURTRY_Return",
-            "EURTRY_Volatility7",
-            "VIX_Level",
-            "VIX_Change",
-            "Gold_USD_Return",
-            "Gold_TRY_Return",
-            "Oil_USD_Return",
-            "DXY_Return",
-            "DXY_Volatility7",
-            "US10Y_Level",
-            "US10Y_Change",
-            # Sektörel Getiriler
-            "XBANK_Return",
-            "XUSIN_Return",
-            "XHOLD_Return",
-            "XULAS_Return",
-            "XTCRT_Return",
-            "XTEK_Return",
         ]
-        rate_inflation = [
-            "Rate_Level",
-            "Rate_Change",
-            "CPI_YoY",
-            "CPI_MoM",
-            "Real_Rate",
-        ]
-        return base + rate_inflation if include_rates else base

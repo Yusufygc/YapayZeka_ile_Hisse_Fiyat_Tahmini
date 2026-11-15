@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, TypeVar
 
 import pandas as pd
 import yfinance as yf
@@ -16,6 +17,69 @@ logger = logging.getLogger(__name__)
 DEFAULT_CHUNK_SIZE = 50
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_BACKOFF_S = 2.0
+# Ag zaman asimlari: yf.download `timeout` yalniz tekil HTTP istegini sinirlar; thread havuzu /
+# DNS / TLS asilmasi tum cagriyi sonsuza dek bekletebilir. Bu yuzden cagri ayrica sert bir
+# duvar-saati siniriyla (call_with_deadline) sarilir; asilirsa ProviderTimeout firlatilir.
+DEFAULT_REQUEST_TIMEOUT_S = 30.0
+DEFAULT_SINGLE_CALL_DEADLINE_S = 120.0
+DEFAULT_BATCH_CALL_DEADLINE_S = 300.0
+DEFAULT_REFRESH_DEADLINE_S = 2700.0  # tum toplu tazeleme icin genel sinir (45 dk)
+DEADLINE_ERROR = "deadline_exceeded"
+
+_T = TypeVar("_T")
+
+
+class ProviderTimeout(TimeoutError):
+    """Saglayici cagrisi duvar-saati sinirini asti (cagri terk edildi)."""
+
+
+# Terk edilen (zaman asimina ugrayan) cagri sayaci. yfinance ThreadPoolExecutor thread'leri
+# interpreter cikisinda join edilir; asili bir indirme kosu bittikten sonra bile sureci
+# canli tutabilir. Gecelik giris noktasi bu sayaca bakip gerekirse os._exit ile sonlanir.
+_ABANDONED_LOCK = threading.Lock()
+_ABANDONED_CALLS = 0
+
+
+def abandoned_call_count() -> int:
+    """Surecte zaman asimiyla terk edilen saglayici cagrisi sayisi."""
+    with _ABANDONED_LOCK:
+        return _ABANDONED_CALLS
+
+
+def reset_abandoned_calls() -> None:
+    global _ABANDONED_CALLS
+    with _ABANDONED_LOCK:
+        _ABANDONED_CALLS = 0
+
+
+def call_with_deadline(fn: Callable[[], _T], timeout_s: float | None, label: str = "provider") -> _T:
+    """``fn()`` en fazla ``timeout_s`` sn bekler; asilirsa ProviderTimeout.
+
+    ``fn`` daemon thread'de kosar; asildiginda thread oldurulemez, terk edilir (daemon oldugu icin
+    surec cikisini engellemez). ``timeout_s`` None/<=0 ise sinirsiz dogrudan cagri.
+    """
+    if timeout_s is None or timeout_s <= 0:
+        return fn()
+    box: dict[str, Any] = {}
+
+    def _run() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # noqa: BLE001 - cagirana aynen iletilir
+            box["error"] = exc
+
+    worker = threading.Thread(target=_run, name=f"market-{label}", daemon=True)
+    worker.start()
+    worker.join(timeout_s)
+    if worker.is_alive():
+        global _ABANDONED_CALLS
+        with _ABANDONED_LOCK:
+            _ABANDONED_CALLS += 1
+        logger.warning("%s %.0f sn icinde donmedi; cagri terk edildi", label, timeout_s)
+        raise ProviderTimeout(f"{label}: {timeout_s:.0f} sn zaman asimi")
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
 
 
 class MarketDataProvider:
@@ -50,29 +114,40 @@ class YFinanceProvider(MarketDataProvider):
     """
 
     AUTO_ADJUST: bool = True
+    REQUEST_TIMEOUT_S: float = DEFAULT_REQUEST_TIMEOUT_S
+    SINGLE_CALL_DEADLINE_S: float = DEFAULT_SINGLE_CALL_DEADLINE_S
+    BATCH_CALL_DEADLINE_S: float = DEFAULT_BATCH_CALL_DEADLINE_S
 
     def download(self, ticker: str, *, start: str, end: str) -> pd.DataFrame:
         # auto_adjust=True ZORUNLU — split/temettu sizintisini onler.
-        return yf.download(
-            ticker,
-            start=start,
-            end=end,
-            progress=False,
-            auto_adjust=self.AUTO_ADJUST,
+        return call_with_deadline(
+            lambda: yf.download(
+                ticker,
+                start=start,
+                end=end,
+                progress=False,
+                auto_adjust=self.AUTO_ADJUST,
+                timeout=self.REQUEST_TIMEOUT_S,
+            ),
+            self.SINGLE_CALL_DEADLINE_S, f"yf.download({ticker})",
         )
 
     def download_many(self, tickers: Sequence[str], *, start: str, end: str) -> dict[str, pd.DataFrame]:
         tickers = list(tickers)
         if not tickers:
             return {}
-        raw = yf.download(
-            tickers=tickers,
-            start=start,
-            end=end,
-            group_by="ticker",
-            threads=True,
-            progress=False,
-            auto_adjust=self.AUTO_ADJUST,
+        raw = call_with_deadline(
+            lambda: yf.download(
+                tickers=tickers,
+                start=start,
+                end=end,
+                group_by="ticker",
+                threads=True,
+                progress=False,
+                auto_adjust=self.AUTO_ADJUST,
+                timeout=self.REQUEST_TIMEOUT_S,
+            ),
+            self.BATCH_CALL_DEADLINE_S, f"yf.download({len(tickers)} ticker)",
         )
         return split_batch_frame(raw, tickers)
 
@@ -105,11 +180,15 @@ def download_with_retries(
     max_retries: int = DEFAULT_MAX_RETRIES,
     backoff_s: float = DEFAULT_BACKOFF_S,
     sleep: Callable[[float], None] = time.sleep,
+    deadline: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, str]]:
     """Ticker'lari chunk'lar halinde indirir; basarisiz/bos olanlari ustel geri cekilmeyle yeniden dener.
 
     Doner: (frames, errors). ``frames`` icinde bos DataFrame kalan ticker "bos" demektir
     (tum denemelerden sonra); ``errors`` hic yanit alinamayan ticker'larin son hatasidir.
+    ``deadline`` (``clock()`` ekseninde mutlak an) asilirsa yeni chunk/deneme baslatilmaz;
+    veri alinamayan ticker'lar ``errors[t] = "deadline_exceeded"`` olur.
     """
     many = getattr(provider, "download_many", None)
     fetch = many if callable(many) else (lambda ts, **kw: download_each(provider, ts, **kw))
@@ -124,6 +203,12 @@ def download_with_retries(
         next_pending: list[str] = []
         for i in range(0, len(pending), max(1, chunk_size)):
             chunk = pending[i:i + max(1, chunk_size)]
+            if deadline is not None and clock() >= deadline:
+                for t in pending[i:]:  # bu turda hic denenmeyenler (veri almis olanlar korunur)
+                    if t not in frames:
+                        errors[t] = DEADLINE_ERROR
+                logger.warning("indirme genel siniri asildi; kalan ticker'lar indirilmedi")
+                return frames, errors
             try:
                 got = fetch(chunk, start=start, end=end)
             except Exception as exc:  # tum chunk dustu (ag/rate-limit): hepsi yeniden denenecek

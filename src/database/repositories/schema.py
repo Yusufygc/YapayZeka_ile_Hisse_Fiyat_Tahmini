@@ -11,6 +11,7 @@ import sqlite3
 from src.database import stock_model_db as schema
 from src.database.paths import migrate_stored_path
 from src.database.repositories.best_model import BestModelRepository
+from src.pipeline.model_scope import is_removed_model
 
 
 class SchemaRepository:
@@ -166,6 +167,10 @@ class SchemaRepository:
     def refresh_best_models_from_production_experiments(self, conn: sqlite3.Connection) -> None:
         """best_models'i üretim-aday deneylerden yeniden inşa eder.
 
+        NOT: SQL'deki ensemble isim listesi (Cash-Gated / Seq-Attention) LEGACY'dir;
+        yeni kosular yalnizca 'Ensemble Inverse RMSE' uretir. Liste kisaltilirsa eski
+        best_models satirlari dusurulur (DB degisir) — bilerek korunuyor.
+
         Üretim adayı olmayan kayıtları temizler, her sembol için en iyi üretim
         deneyini yeniden upsert eder (final_holdout veya üretim ensemble'ları).
         """
@@ -217,6 +222,12 @@ class SchemaRepository:
         ).fetchall()
         if not rows:
             return None
+        # Kaldirilmis modeller (LSTM/Random Forest/ElasticNet/...) en iyi secilmez:
+        # destekli satir varsa yalniz onlar yarisir; hic yoksa mevcut davranis korunur
+        # (forecast yolu yapisal "yeniden egit" sonucu verir).
+        supported = [row for row in rows if not is_removed_model(row["model_name"])]
+        if supported:
+            rows = supported
 
         def _rank(row) -> tuple[int, float, str, int]:
             status, _ = BestModelRepository.eligibility_from_experiment_row(row)

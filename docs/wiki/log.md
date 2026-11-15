@@ -1,3 +1,51 @@
+## [2026-11-16] Fix | İnceleme bulguları
+
+- **Recursive forecast (1-2):** artifact `feature_frame` artık `Open/High/Low/Volume` taşır;
+  `recompute_close_dependent` (NATR_14 vb.) h>=2 adımlarında çalışır, `recompute_failed_step_*`
+  uyarısı kalktı. `_append_recursive_row` `day_of_week`'i yeni tarihten türetir.
+- **Model seçimi (3):** `normalize_candidate_models`/`resolve_candidates` kaldırılmış veya
+  bilinmeyen adda `ValueError` verir (CLI: `[ERROR]`, çıkış 2; API job: `error` + mesaj).
+- **best_models (4):** `_best_production_experiment` kaldırılmış modelleri sıralamadan dışlar
+  (destekli satır yoksa eski davranış).
+- **Refresh (5-6):** kaldırılmış best model için önce veri güncellenir, sonra yapısal retrain;
+  eski özellikli artifact `ArtifactFeaturesOutdatedError` (`artifact_features_outdated`).
+- **Gece işi (7-8):** terk edilen sağlayıcı çağrısı varsa `__main__` `os._exit(rc)` ile çıkar;
+  `.ps1` hata yollarında `Write-Error` yerine `[Console]::Error.WriteLine` + `exit`.
+- **Test (9):** `to_storable_path` testi repo dışı yol için `project_root` verir (kod doğruydu).
+- **Özellik (10):** `market_momentum_60d` makro takviminde hesaplanır (eksik günlü hissede
+  kayık pencere yok); feature cache sürümü 6.
+
+## [2026-11-16] Refactor | Özellik seti, model kataloğu ve gece işi temizliği
+
+- **Özellik seti (1):** varsayılan `stationary_features` 19 özelliğe indi (IC denetimi: 250 hisse,
+  2021-07..2026-06; tam/yakın kopyalar, gürültülü özellikler kaldırıldı; volatilite tek sağlam
+  sinyal). Makro yalnız USDTRY/BIST100; CPI/faiz/VIX/DXY/US10Y/altın/petrol/EURTRY özellik
+  üretmez, `INTEREST_RATE.csv` risksiz faiz için yenilenir. Eğitim geçmişi artık 2021-07'de
+  kesilmez (THYAO 2015-03-27'den). Sektör endeksi özellikleri kaldırıldı
+  (`sector_mapping_report.status = "disabled"`). `Log_Return` üretilmez; `Market_Regime_SMA200`
+  yalnız yardımcı kolon. Recursive forecast: `LogRet_Lag_1` önceki adım getirisi, momentum her
+  adımda yeniden. Eski artefaktlar `_validate_artifact_features` ile "yeniden eğit" hatası verir.
+  Feature cache sürümü 5.
+- **Model kataloğu (2):** registry 3 naive benchmark + `XGBoost`, `Ridge Return`, `LightGBM Return`;
+  tek ensemble `Ensemble Inverse RMSE` (expanding prior-folds ağırlıkları). LSTM, LSTM Lite,
+  AttentionLSTM v2, DLinear, NLinear, Prophet, ARIMA, ElasticNet, Random Forest ve ensemble
+  varyantları kaldırıldı (815 walk-forward deneyi: hiçbir aile naive'i geçmedi). Eski DB satırları
+  okunur (`model_family: "removed"`); tahmin `ModelNoLongerSupportedError` verir. Bağımlılıklar
+  kaldırıldı: tensorflow, prophet, statsmodels, protobuf, pandas-datareader. Tek-split naive
+  çift dönüşüm hatası düzeltildi (`_predict_target_space`). Embargo yalnız horizon'a bağlı (h+5).
+- **Gece işi (3):** zamanlanmış görev 2026-09-16'dan beri kayıtlı değildi; Ağustos-Eylül koşuları
+  ~150-160 / 585 sembolden sonra öldü, fark edilmedi. Eklendi: `src/serving/run_status.py` ve
+  `data/nightly_status.json` (atomik, `completed:false` ile kesinti tespiti), bayat-pay kapısı
+  (`--max-stale-fraction` 0.20, çıkış kodu 3), `--refresh-deadline-s`, `--status-file`, ağ zaman
+  sınırları, `/health.nightly_run`, `Register-ScheduledTask` tabanlı kayıt, UTF-8 log. Tarih
+  ayrıştırma değer-bazlı; yazıcılar ISO. `data/ASELS.csv` ve `data/EREGL.csv` diskte hâlâ
+  `dd/mm/yyyy`. Açık: makro nightly'de yenilenmiyor; DB skorları ve Kol-B serving havuzu yeniden
+  üretilmeli.
+
+Güncellenen wiki sayfaları: `index.md`, `data-pipeline.md`, `architecture.md`, `model-catalog.md`
+(yeniden yazıldı), `validation-and-backtesting.md`, `persistence-and-api.md`,
+`e2-pooled-global-model-epic.md`, `testing-and-quality.md`, `log.md`.
+
 ## [2026-11-15] Feature | DuckDB analiz katmanı
 
 - Yeni: `src/analysis/analytics_db.py` (`AnalyticsDB`: bellek-içi DuckDB, kaynak varsa view'lar: `runs`, `run_model_metrics`, `run_experiments`, SQLite köprüsüyle `experiments/best_models/forecast_runs/forecast_points/peer_runs/peer_scores`, Parquet'ten `panel/panel_manifest`), `analytics_sources.py`, `analytics_queries.py` (`leaderboard`, `forecast_accuracy`, `ic_history`, `data_coverage`, `run_status`, `model_stability`), `tools/analytics.py` (`list/views/query/sql`; yalnız SELECT/WITH). `duckdb==2.0.0` requirements'a eklendi; `.gitignore`'a `!tools/analytics.py`.

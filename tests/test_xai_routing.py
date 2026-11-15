@@ -18,7 +18,6 @@ class _StubReporter(_MetricsReporterMixin):
             predictions={"Model": np.array([1.0, 2.0])},
             prediction_targets={"Model": np.array([0.01, 0.02])},
             y_true_aligned=np.array([1.1, 2.1]),
-            quantile_predictions={},
             latest_backtest_results={"wf": {"Model": {"ok": True}}},
         )
         self.writes = []

@@ -42,7 +42,6 @@ from src.pipeline.evaluation_services import (
 EMPTY_DICT_STATE = (
     "predictions",
     "prediction_targets",
-    "quantile_predictions",
     "single_backtest_inputs",
     "latest_tensors",
     "latest_backtest_results",

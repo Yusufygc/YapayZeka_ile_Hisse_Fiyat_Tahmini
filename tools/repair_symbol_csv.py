@@ -7,8 +7,9 @@ kolonuna kaydirir (Close = Hacim kontaminasyonu).
 
 Onarim:
   * alan sayisi = baslik-1 olan satirlara Adj Close = Close eklenir,
-  * tarih bicimi dosyanin cogunluk bicimine (iso / dd/mm/yyyy / dd.mm.yyyy)
-    normalize edilir (parse_dates; takassiz),
+  * tum tarihler ISO `YYYY-MM-DD` bicimine normalize edilir (dd/mm/yyyy, dd.mm.yyyy,
+    dd-mm-yyyy -> ISO; parse_dates, takassiz). Cogunluk bicimi dd/mm olsa bile ISO yazilir:
+    veri deposunun tek tip bicimi ISO'dur (2026-11-15: ASELS/EREGL dd/mm kalmisti),
   * degismeyen satirlar BAYT-BAYT korunur (BOM + satir sonu dahil),
   * degisen dosyanin orijinali `<backup-dir>/<SYM>.csv.bak_<YYYYMMDD>` olarak
     yedeklenir (mevcut yedegin ustune YAZILMAZ).
@@ -47,6 +48,7 @@ _FMT_PATTERNS = (
     ("dmy.", re.compile(r"^\d{1,2}\.\d{1,2}\.\d{4}$"), "%d.%m.%Y"),
     ("dmy-", re.compile(r"^\d{1,2}-\d{1,2}-\d{4}$"), "%d-%m-%Y"),
 )
+_ISO_FORMAT = ("iso", "%Y-%m-%d")   # hedef bicim (_classify donusuyle ayni sekil)
 _SKIP_STEMS = {"bist_universe", "advisory_history"}
 _ISTANBUL = timezone(timedelta(hours=3))
 
@@ -102,7 +104,7 @@ def analyze_text(text: str, label: str = "") -> tuple[str, FileReport]:
             if cls:
                 fmt_count[cls] += 1
     majority = fmt_count.most_common(1)[0][0] if fmt_count else None
-    rep.majority_format = majority[0] if majority else ""
+    rep.majority_format = majority[0] if majority else ""   # yalniz rapor; hedef bicim her zaman ISO
 
     out = list(lines)
     for i, row in parsed[1:]:
@@ -118,12 +120,12 @@ def analyze_text(text: str, label: str = "") -> tuple[str, FileReport]:
             else:
                 rep.unfixable_rows.append(i + 1)
                 continue
-        if majority and d_idx < len(row):
+        if d_idx < len(row):
             cls = _classify(row[d_idx])
-            if cls and cls != majority:
+            if cls and cls != _ISO_FORMAT:
                 new = parse_dates([row[d_idx].strip()]).iloc[0]
                 if new == new:  # NaT degil
-                    row[d_idx] = new.strftime(majority[1])
+                    row[d_idx] = new.strftime(_ISO_FORMAT[1])
                     rep.date_normalized += 1
                     changed = True
         if changed:

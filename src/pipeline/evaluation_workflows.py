@@ -10,15 +10,14 @@ import numpy as np
 import pandas as pd
 
 from src.evaluation.evaluator import compute_metrics, plot_comparison
-from src.evaluation.financial_metrics import compute_quantile_metrics
 from src.forecasting.artifacts import save_forecast_artifact_package
 from src.pipeline.model_result_exporter import (
     export_final_holdout_result,
     export_single_split_result,
     export_walk_forward_results,
 )
+from src.pipeline.model_scope import PRODUCTION_ENSEMBLE_NAME
 
-_KERAS_MODELS = {"LSTM", "LSTM Lite", "AttentionLSTM v2"}
 _BACKTEST_REGISTRY_FIELDS = (
     "Net_Return",
     "BuyHold_Return",
@@ -105,7 +104,6 @@ def _write_forecast_artifact_sidecars(owner, *, model_name: str, model_path: str
         "target_mode": owner.dataset_metadata.get("target_mode", "log_return"),
         "feature_mode": owner.dataset_metadata.get("feature_mode", "stationary_features"),
         "scaling_mode": owner.dataset_metadata.get("scaling_mode", "robust_x_standard_y_clip"),
-        "time_steps": owner.dataset_metadata.get("time_steps"),
         "dataset_hash": owner.dataset_hash,
         "run_id": owner.dataset_metadata.get("run_id"),
         "clip_report": tensors.get("clip_report", {}),
@@ -123,24 +121,6 @@ def _write_forecast_artifact_sidecars(owner, *, model_name: str, model_path: str
         )
     except Exception as exc:
         print(f"  [WARN] Forecast artifact sidecar yazilamadi ({model_name}): {exc}")
-
-
-def _write_attention_xai_if_available(owner, *, model_name: str, model, tensors: dict, suffix: str) -> None:
-    exporter = getattr(model, "export_attention_xai", None)
-    if exporter is None:
-        return
-    x_seq = tensors.get("X_test_seq")
-    if x_seq is None:
-        x_seq = tensors.get("X_train_seq")
-    if x_seq is None:
-        return
-    try:
-        out_dir = os.path.join(owner.xai_dir, "csv")
-        out_path = os.path.join(out_dir, f"xai_top_reasons_attention_{suffix}.csv")
-        exporter(x_seq, owner.feature_names, out_path, model_name=model_name)
-        print(f"  [OK] Attention XAI tablosu kaydedildi -> {out_path}")
-    except Exception as exc:
-        print(f"  [WARN] Attention XAI tablosu olusturulamadi ({model_name}): {exc}")
 
 
 def _attach_score_metadata(
@@ -271,14 +251,6 @@ class _EvaluationWorkflowBase:
     @prediction_targets.setter
     def prediction_targets(self, value: dict) -> None:
         self.state.prediction_targets = value
-
-    @property
-    def quantile_predictions(self) -> dict:
-        return self.state.quantile_predictions
-
-    @quantile_predictions.setter
-    def quantile_predictions(self, value: dict) -> None:
-        self.state.quantile_predictions = value
 
     @property
     def single_backtest_inputs(self) -> dict:
@@ -491,15 +463,10 @@ class SingleSplitEvaluationWorkflow(_EvaluationWorkflowBase):
             )
             for name, preds in self.predictions.items()
         }
-        for name, q_preds in self.quantile_predictions.items():
-            if name in metrics:
-                q_metrics = compute_quantile_metrics(self.y_true_aligned, q_preds)
-                metrics[name].update({key: round(value, 6) for key, value in q_metrics.items()})
         metrics = _attach_score_metadata(self, metrics)
         metrics = self._filter_reportable_models(metrics, metrics)
         self.predictions = self._filter_reportable_models(self.predictions, metrics)
         self.prediction_targets = self._filter_reportable_models(self.prediction_targets, metrics)
-        self.quantile_predictions = self._filter_reportable_models(self.quantile_predictions, metrics)
         self.single_backtest_inputs = self._filter_reportable_models(self.single_backtest_inputs, metrics)
         metrics = _attach_guard_metadata(self, metrics)
         backtest_results = self._run_backtests(
@@ -511,8 +478,7 @@ class SingleSplitEvaluationWorkflow(_EvaluationWorkflowBase):
         self.latest_model_metrics["latest"] = metrics
 
         for name, model_metrics in metrics.items():
-            model_ext = ".keras" if name in _KERAS_MODELS else ".pkl"
-            model_filename = f"{name.replace(' ', '_').lower()}_model{model_ext}"
+            model_filename = f"{name.replace(' ', '_').lower()}_model.pkl"
             model_path = os.path.join(self.models_dir, model_filename)
 
             original_model = trained_models.get(name)
@@ -528,13 +494,6 @@ class SingleSplitEvaluationWorkflow(_EvaluationWorkflowBase):
                     model_path=model_path,
                     tensors=self.latest_tensors,
                     validation_mode="single_split",
-                )
-                _write_attention_xai_if_available(
-                    self,
-                    model_name=name,
-                    model=original_model,
-                    tensors=self.latest_tensors,
-                    suffix="latest",
                 )
 
             if self.stock_db is not None:
@@ -574,7 +533,6 @@ class SingleSplitEvaluationWorkflow(_EvaluationWorkflowBase):
             "predictions": self.predictions,
             "backtest": backtest_results,
             "xai_payload": xai_payload,
-            "quantile_predictions": self.quantile_predictions,
         }
 
 
@@ -765,7 +723,7 @@ class WalkForwardEvaluationWorkflow(_EvaluationWorkflowBase):
         if self.stock_db is None:
             return
         for model_name, avg_metrics in wf_results.items():
-            is_prod_ensemble = model_name in {"Ensemble Inverse RMSE", "Ensemble Cash-Gated", "Ensemble Seq-Attention Inverse RMSE"}
+            is_prod_ensemble = model_name == PRODUCTION_ENSEMBLE_NAME
             self.stock_db.log_experiment(
                 stock_symbol=self.stock_symbol,
                 model_name=model_name,
@@ -889,7 +847,6 @@ class FinalHoldoutEvaluationWorkflow(_EvaluationWorkflowBase):
             dates,
             prediction_dates,
             market_regime,
-            quantile_price,
         ) = self._predict_single_model(model_name, model, tensors)
 
         metrics = {
@@ -902,9 +859,6 @@ class FinalHoldoutEvaluationWorkflow(_EvaluationWorkflowBase):
                 target_mode=self.dataset_metadata.get("target_mode", "log_return"),
             )
         }
-        if quantile_price is not None:
-            q_metrics = compute_quantile_metrics(y_true_price, quantile_price)
-            metrics[model_name].update({key: round(value, 6) for key, value in q_metrics.items()})
         # Benchmark-goreli metrikler (RMSE_vs_benchmark, DirAcc_vs_benchmark, Composite)
         # tek model sozlugunden hesaplanirsa model kendi kendine benchmark olur. Naive
         # baseline'lari holdout uzerinde de tahmin edip karsilastirmaya dahil ediyoruz;
@@ -946,8 +900,7 @@ class FinalHoldoutEvaluationWorkflow(_EvaluationWorkflowBase):
         final_metadata["protocol_stage"] = "final_holdout_evaluation"
         final_metadata["selected_by"] = "walk_forward_composite_score"
 
-        model_ext = ".keras" if model_name in _KERAS_MODELS else ".pkl"
-        model_filename = f"{model_name.replace(' ', '_').lower()}_final_holdout_model{model_ext}"
+        model_filename = f"{model_name.replace(' ', '_').lower()}_final_holdout_model.pkl"
         model_path = os.path.join(self.models_dir, model_filename)
         model.save(model_path)
         _write_forecast_artifact_sidecars(
@@ -956,13 +909,6 @@ class FinalHoldoutEvaluationWorkflow(_EvaluationWorkflowBase):
             model_path=model_path,
             tensors=tensors,
             validation_mode="final_holdout",
-        )
-        _write_attention_xai_if_available(
-            self,
-            model_name=model_name,
-            model=model,
-            tensors=tensors,
-            suffix="final_holdout",
         )
         export_final_holdout_result(
             self,
@@ -979,14 +925,6 @@ class FinalHoldoutEvaluationWorkflow(_EvaluationWorkflowBase):
                 "prev_close": prev_close,
             },
         )
-
-        quantiles_df = None
-        if quantile_price is not None:
-            quantile_labels = [f"Q{idx + 1}" for idx in range(quantile_price.shape[1])]
-            if quantile_price.shape[1] == 3:
-                quantile_labels = ["P10", "P50", "P90"]
-            quantiles_df = pd.DataFrame(quantile_price, columns=quantile_labels)
-            quantiles_df.insert(0, "Actual", y_true_price[-len(quantiles_df):])
 
         backtest_results = self._run_backtests(
             {
@@ -1041,8 +979,6 @@ class FinalHoldoutEvaluationWorkflow(_EvaluationWorkflowBase):
             "metrics": metrics,
             "y_true": y_true_price,
             "predictions": {model_name: pred_price},
-            "quantiles_df": quantiles_df,
-            "quantile_price": quantile_price,
             "backtest": backtest_results,
             "model_name": model_name,
         }

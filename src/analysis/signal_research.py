@@ -32,16 +32,8 @@ from src.pipeline.config import (
 
 DEFAULT_MODELS = (
     "Ridge Return",
-    "ElasticNet Return",
     "LightGBM Return",
     "XGBoost",
-    "Random Forest",
-    "DLinear",
-    "NLinear",
-    "LSTM Lite",
-    "AttentionLSTM v2",
-    "Prophet",
-    "ARIMA",
 )
 
 PLAN1_PRIMARY_SYMBOLS = (
@@ -87,11 +79,12 @@ SIGNAL_POLICY_PROFILES: Dict[str, Dict[str, Any]] = {
         "uses_final_holdout_for_selection": False,
     },
     "V4": {
-        "description": "Sector-relative confirmation as an opt-in entry filter.",
+        # 2026-11: Sector_Relative_Strength feature'i kaldirildi (IC denetimi); profil artik
+        # yalniz min-entry-threshold tabani uygular, bagimli feature YOK.
+        "description": "Sector-relative confirmation profile (min entry threshold floor; sector feature removed).",
         "signal_mode": "professional",
         "quality_gate_mode": "soft",
         "sector_relative_confirmation": True,
-        "required_feature": "Sector_Relative_Strength",
         "uses_final_holdout_for_selection": False,
     },
 }

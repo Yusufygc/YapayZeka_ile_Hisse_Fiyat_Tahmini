@@ -3,9 +3,11 @@
 import os
 import shutil
 
+import pytest
+
 from src.database.stock_model_db import StockModelDB
 from src.pipeline.evaluation_services import MetricsReportingService
-from src.pipeline.model_scope import BENCHMARK_MODELS, reportable_model_names
+from src.pipeline.model_scope import BENCHMARK_MODELS, is_removed_model, reportable_model_names
 from src.pipeline.model_trainer import ModelTrainer
 
 
@@ -16,63 +18,46 @@ def _workspace_tmp(name: str) -> str:
     return path
 
 
-def test_selected_lstm_scope_keeps_only_lstm_as_candidate_and_naive_as_benchmarks():
+def test_selected_xgboost_scope_keeps_only_xgboost_as_candidate_and_naive_as_benchmarks():
     tmp = _workspace_tmp("trainer_scope")
     trainer = ModelTrainer(
         stock_symbol="TEST",
         feature_names=["f1"],
-        selected_models=["LSTM"],
+        selected_models=["XGBoost"],
         dataset_metadata={"target_mode": "log_return"},
     )
 
-    assert trainer.training_context.candidate_models == {"LSTM"}
+    assert trainer.training_context.candidate_models == {"XGBoost"}
     assert trainer.training_context.benchmark_models == set(BENCHMARK_MODELS)
     assert reportable_model_names(
-        ["LSTM", "ElasticNet Return", "Naive Last Value", "Naive Zero Return"],
+        ["XGBoost", "ElasticNet Return", "Naive Last Value", "Naive Zero Return"],
         trainer.training_context.candidate_models,
-    ) == {"LSTM", "Naive Last Value", "Naive Zero Return"}
+    ) == {"XGBoost", "Naive Last Value", "Naive Zero Return"}
 
 
-def test_selected_lstm_lite_scope_keeps_only_lstm_lite_as_candidate():
-    tmp = _workspace_tmp("trainer_lstm_lite_scope")
-    trainer = ModelTrainer(
-        stock_symbol="TEST",
-        feature_names=["f1"],
-        selected_models=["LSTM Lite"],
-        dataset_metadata={"target_mode": "log_return"},
-    )
-
-    assert trainer.training_context.candidate_models == {"LSTM Lite"}
-    assert reportable_model_names(
-        ["LSTM", "LSTM Lite", "Naive Last Value", "Naive Zero Return"],
-        trainer.training_context.candidate_models,
-    ) == {"LSTM Lite", "Naive Last Value", "Naive Zero Return"}
-
-
-def test_selected_attention_lstm_v2_is_opt_in_candidate_only():
-    tmp = _workspace_tmp("trainer_attention_v2_scope")
-    default_trainer = ModelTrainer(
-        stock_symbol="TEST",
-        feature_names=["f1"],
-        selected_models=None,
-        dataset_metadata={"target_mode": "log_return"},
-    )
-    selected_trainer = ModelTrainer(
-        stock_symbol="TEST",
-        feature_names=["f1"],
-        selected_models=["AttentionLSTM v2"],
-        dataset_metadata={"target_mode": "log_return"},
-    )
-
-    assert "AttentionLSTM v2" not in default_trainer.training_context.candidate_models
-    assert selected_trainer.training_context.candidate_models == {"AttentionLSTM v2"}
+def test_selected_removed_models_are_rejected():
+    """Silinmis modeller (LSTM/Prophet/...) secilirse ValueError (sessiz bos aday kumesi YOK)."""
+    for removed in (
+        "LSTM", "LSTM Lite", "AttentionLSTM v2", "DLinear", "NLinear", "Prophet", "ARIMA",
+        "ElasticNet Return", "Random Forest",
+    ):
+        with pytest.raises(ValueError, match="kaldirilmis"):
+            ModelTrainer(
+                stock_symbol="TEST",
+                feature_names=["f1"],
+                selected_models=[removed],
+                dataset_metadata={"target_mode": "log_return"},
+            )
+        assert is_removed_model(removed)
+    assert not is_removed_model("XGBoost")
+    assert not is_removed_model("Naive Last Value")
 
 
 def test_reportable_models_include_only_production_ensembles():
     assert reportable_model_names(
-        ["Ensemble Inverse RMSE", "Ensemble Meta-Stacker", "Ensemble Cash-Gated"],
-        {"LSTM"},
-    ) == {"Ensemble Inverse RMSE", "Ensemble Cash-Gated"}
+        ["Ensemble Inverse RMSE", "Ensemble Meta-Stacker", "Ensemble Cash-Gated", "Ensemble Equal Weight"],
+        {"XGBoost"},
+    ) == {"Ensemble Inverse RMSE"}
 
 
 def test_select_best_model_ignores_benchmarks_and_non_candidates():
@@ -87,7 +72,7 @@ def test_select_best_model_ignores_benchmarks_and_non_candidates():
             "RMSE": 0.2,
             "Candidate_For_Selection": False,
         },
-        "LSTM": {
+        "XGBoost": {
             "Composite_Score": 40.0,
             "RMSE": 1.0,
             # P1: secim kapisi sonlu RMSE_vs_benchmark <= 1 ister (enrichment her zaman yazar).
@@ -96,7 +81,7 @@ def test_select_best_model_ignores_benchmarks_and_non_candidates():
         },
     }
 
-    assert MetricsReportingService._select_best_model(metrics) == "LSTM"
+    assert MetricsReportingService._select_best_model(metrics) == "XGBoost"
 
 
 def test_best_models_highest_scored_final_holdout_candidate_wins():
@@ -110,7 +95,7 @@ def test_best_models_highest_scored_final_holdout_candidate_wins():
 
     db.log_experiment(
         "TEST",
-        "LSTM",
+        "XGBoost",
         {"RMSE": 0.1, "MAE": 0.1, "MAPE": 0.1, "Dir_Acc": 90.0, "Sharpe": 5.0, "Hit_Rate": 90.0},
         validation_mode="walk_forward",
         dataset_metadata=metadata,
@@ -167,7 +152,7 @@ def test_best_models_highest_scored_final_holdout_candidate_wins():
 
     third_id = db.log_experiment(
         "TEST",
-        "LSTM",
+        "XGBoost",
         {
             "RMSE": 0.1,
             "MAE": 0.1,
@@ -187,7 +172,7 @@ def test_best_models_highest_scored_final_holdout_candidate_wins():
     latest_best = db.get_best_model("TEST")
 
     assert latest_best["experiment_id"] == third_id
-    assert latest_best["model_name"] == "LSTM"
+    assert latest_best["model_name"] == "XGBoost"
     assert latest_best["validation_mode"] == "final_holdout"
     assert latest_best["run_id"] == "run_3"
 
@@ -214,7 +199,7 @@ def test_production_ensemble_can_be_best_with_metadata():
             "RMSE_vs_benchmark": 0.95,
             "Trade_Count": 8,
             "Ensemble_Method": "Inverse RMSE",
-            "Ensemble_Weights": '{"Ridge Return": 0.4, "LSTM": 0.6}',
+            "Ensemble_Weights": '{"Ridge Return": 0.4, "XGBoost": 0.6}',
         },
         validation_mode="walk_forward",
         dataset_metadata=metadata,
@@ -230,7 +215,8 @@ def test_production_ensemble_can_be_best_with_metadata():
     assert "Ridge Return" in best["ensemble_metadata_json"]
 
 
-def test_production_seq_attention_ensemble_can_be_best_with_metadata():
+def test_legacy_seq_attention_ensemble_row_remains_readable():
+    """Eski DB satirlari (silinmis Seq-Attention ensemble) okunurken coker degil."""
     tmp = _workspace_tmp("db_seq_ensemble_policy")
     db = StockModelDB(os.path.join(tmp, "stock_models.db"))
     metadata = {

@@ -16,9 +16,8 @@ from src.xai.feature_dictionary import describe_feature, feature_group
 from src.xai.group_summary import XaiGroupSummaryData, build_group_summaries
 from src.xai.manifest import read_xai_manifest
 
-_TREE_MODELS = {"XGBoost", "Random Forest", "LightGBM Return", "Random Forest Return"}
-_LINEAR_MODELS = {"Ridge Return", "ElasticNet Return"}
-_SEQ_MODELS = {"LSTM", "LSTM Lite", "DLinear", "NLinear", "AttentionLSTM", "AttentionLSTM v2"}
+_TREE_MODELS = {"XGBoost", "LightGBM Return"}
+_LINEAR_MODELS = {"Ridge Return"}
 
 
 def _model_family_caveat(model_name: str) -> str:
@@ -26,11 +25,6 @@ def _model_family_caveat(model_name: str) -> str:
         return "Tree modellerde SHAP TreeExplainer kullanilir; ozellik katkilari guvenilirdir."
     if model_name in _LINEAR_MODELS:
         return "Lineer modellerde katsayi bazli katkilar hesaplanir; yorumlama nispeten dogrudur."
-    if model_name in _SEQ_MODELS:
-        return (
-            "Derin ogrenme modellerinde ozellik katkilari yaklasiktir; "
-            "daha temkinli yorumlanmalidir."
-        )
     return "Model ailesi icin aciklanabilirlik kalitesi bilinmiyor."
 
 

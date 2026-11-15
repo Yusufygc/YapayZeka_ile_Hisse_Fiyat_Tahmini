@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Dynamic stock-to-sector index resolution from the BIST universe file."""
+"""Stock-to-sector LABEL resolution from the BIST universe file.
+
+2026-11 IC denetimi: sektor-endeksi FEATURE'lari (Sector_Relative_Strength,
+sector_momentum_60d, relative_momentum_60d) kaldirildi; endeks serileri hic
+feature matrisine ulasmiyor, "sektor" kolonlari BIST100 kopyasiydi. Bu modul
+yalniz universe dosyasindaki sektor ETIKETINI cozer (metadata/raporlama; Kol-B
+pooled modeli `sector` kolonunu pooled_loader'da kendi evren haritasindan alir).
+"""
 
 from __future__ import annotations
 
@@ -18,6 +25,15 @@ SUPPORTED_SECTOR_INDEXES = {
     "XULAS",
     "XTCRT",
     "XTEK",
+}
+
+
+# Sektor-endeksi feature'lari kapali: FeaturePipeline/DataManager raporu icin
+# dogru (truthful) durum. Tuketiciler (metadata, manifest) anahtari beklemeye devam eder.
+SECTOR_FEATURES_DISABLED_REPORT: dict[str, Any] = {
+    "status": "disabled",
+    "reason": "sector_index_features_removed",
+    "feature_created": False,
 }
 
 
@@ -98,13 +114,6 @@ def resolve_sector_mapping(
         source="universe_csv",
         universe_file=str(universe_path),
     )
-
-
-def sector_return_column(sector_index: str | None) -> str:
-    normalized = _normalize_sector_index(sector_index)
-    if normalized == DEFAULT_SECTOR_INDEX:
-        return "BIST100_Return"
-    return f"{normalized}_Return"
 
 
 def _fallback(symbol: str, universe_file: str | None, reason: str) -> SectorMapping:

@@ -25,20 +25,13 @@ def test_benchmark_specs_price_mode_excludes_zero_return():
 def test_linear_baseline_specs_contents():
     specs = model_factory.linear_baseline_specs()
     names = {name for name, _ in specs}
-    assert names == {"Ridge Return", "ElasticNet Return"}
+    assert names == {"Ridge Return"}
 
 
 def test_boosting_baseline_specs_contents():
     specs = model_factory.boosting_baseline_specs()
     names = [name for name, _ in specs]
     assert names == ["LightGBM Return"]
-
-
-def test_sequence_baseline_specs_ordering():
-    """DLinear önce, NLinear sonra (tarihi sıralama)."""
-    specs = model_factory.sequence_baseline_specs()
-    names = [name for name, _ in specs]
-    assert names[:2] == ["DLinear", "NLinear"]
 
 
 def test_spec_helpers_return_callable_factories():
@@ -56,13 +49,7 @@ def test_spec_helpers_return_callable_factories():
 def test_tree_models_dynamic():
     tree = model_factory.TREE_MODELS
     assert isinstance(tree, set)
-    assert {"XGBoost", "Random Forest", "Ridge Return", "ElasticNet Return", "LightGBM Return"}.issubset(tree)
-
-
-def test_seq_models_dynamic():
-    seq = model_factory.SEQ_MODELS
-    assert isinstance(seq, set)
-    assert {"LSTM", "LSTM Lite", "DLinear", "NLinear"}.issubset(seq)
+    assert tree == {"XGBoost", "Ridge Return", "LightGBM Return"}
 
 
 def test_benchmark_model_set_dynamic():
@@ -76,6 +63,7 @@ def test_all_models_dynamic():
     # Default candidate kümesi (Faz 2 sözleşmesi).
     assert set(all_models) == {"XGBoost", "Ridge Return", "LightGBM Return"}
     assert "LSTM Lite" not in all_models
+    assert not hasattr(model_factory, "sequence_baseline_specs")
 
 
 def test_factory_getattr_unknown_raises():

@@ -2,7 +2,7 @@
 title: Data Pipeline
 type: concept
 status: active
-last_updated: 2026-05-25
+last_updated: 2026-11-16
 owner: llm
 source_count: 11
 ---
@@ -18,7 +18,10 @@ tensors while enforcing chronological order and leakage controls.
 - `python -m src.cli.interactive` filters CSVs so metadata files such as `bist_universe.csv`
   and `bist_calendar.csv` are not shown as stocks.
 - `DataUpdater` can update stock files when `DataConfig.auto_update_data` is enabled.
-- Macro data is optional and controlled by `DataConfig.use_macro`.
+- Macro data is optional and controlled by `DataConfig.use_macro`. 2026-11-16
+  itibarıyla yalnız USDTRY ve BIST100 model özelliği üretir; ayrıntı için
+  [Kürate özellik seti](#kürate-özellik-seti-2026-11-16). Makro veri nightly işte
+  yenilenmez (bilinen açık).
 
 `DataUpdater.check_and_update()` now returns a structured `DataUpdateResult`
 instead of only printing side effects. The result records status, before/after
@@ -45,6 +48,10 @@ When target BIST stock CSV files are in YYYY-MM-DD format (e.g., `2026-06-02`), 
 - **Kilit/atomiklik:** `src/data/csv_safety.py` - `filelock` ile `<csv>.lock`; append ve full
   refetch gecici dosya + `os.replace`. Kilit alininca CSV yeniden okunur.
 - **Yedek:** full refetch oncesi `data/yedek/<SYM>.csv.bak_YYYYMMDD`, sembol basina en fazla 3.
+- **Tarih formati (2026-11-16):** `src/data/updater_frames.py` tarihleri `src/data/dates.py`
+  ayrıştırıcısının değer-bazlı (per-value) versiyonuyla okur; tüm yazıcılar (`DataUpdater`,
+  `tools/repair_symbol_csv.py`) ISO (`YYYY-MM-DD`) yazar. Diskte hâlâ `dd/mm/yyyy` olan
+  `data/ASELS.csv` ve `data/EREGL.csv` doğru ayrıştırılır; dosyalar henüz yeniden yazılmadı.
 
 **Universe-wide nightly refresh (E2 Faz 8):** there is no single
 `data_updater` CLI; the E2 nightly orchestrator `tools/e2_nightly_pipeline.py`
@@ -179,29 +186,38 @@ Order of operations during `ForecastPointGenerator.roll_forward_recursive`:
 
 1. Predict next-day target.
 2. Bound predicted close with BIST band rules.
-3. Append recursive row (`_append_recursive_row`) — Close, Return,
-   Log_Return, LogRet_Lag_* shifted in.
+3. Append recursive row (`_append_recursive_row`) — Close and Return shifted
+   in; `LogRet_Lag_1` = önceki adımın getirisi (2026-11-16 düzeltmesi: önceden
+   yeni satırın kendi tahmini geri besleniyordu).
 4. **`recompute_close_dependent(frame)`** — every close-derived feature
-   regenerated through the same `_add_*` chain used in training.
-5. **`MacroForwardProjector.project_last_row`** — macro features ARIMA
-   projected (see below).
+   regenerated through the same `_add_*` chain used in training; momentum
+   özellikleri (`momentum_60d`, `market_momentum_60d`, `relative_to_market_60d`)
+   de her recursive adımda yeniden hesaplanır (2026-11-16). Recursive `feature_frame`
+   `Open/High/Low/Volume` kolonlarını da taşır (NATR_14 High/Low gerektirir; aksi halde
+   h>=2'de teknik göstergeler son gerçek barda donuyordu) ve `day_of_week` yeni satırın
+   tarihinden türetilir.
+5. **`MacroForwardProjector.project_last_row`** — macro features projected
+   (see below).
 
-Macro, sector, and lag features are not touched by step 4. Lag handled in
-step 3, macro in step 5, sector inherits projected macro.
+Macro and lag features are not touched by step 4. Lag handled in step 3,
+macro in step 5. Sektör endeksi özellikleri kaldırıldığı için sektör adımı yoktur.
 
 ## Macro Forward Projection (Sprint 5 — 2026-05-25)
 
 `src/features/macro_forward_projection.py:MacroForwardProjector` advances
-known macro columns one step using ARIMA(1,1,1) over the last
-`history_window=252` days. ARIMA failure falls back to a 20-day mean-delta
-trend extrapolation.
+known macro columns one step. P1 denetim revizyonu (2026-11) ile ARIMA kaldırıldı
+(martingale baseline, tahmin iddiası yok): `*_Return` / `*_Change` kolonları
+0.0, diğer seviye kolonları son gözlenen değer (random walk / ffill). ARIMA ve
+statsmodels artık kullanılmaz.
 
-Macro whitelist (`_KNOWN_MACRO_COLUMNS`):
+Macro whitelist (`_KNOWN_MACRO_COLUMNS`, 2026-11-16 itibarıyla):
 
-- `USDTRY`, `USDTRY_Return`, `EURTRY`
-- `BIST100`, `BIST100_Return`
-- `BIST_*_Return` sector indices
-- `VIX`, `INTEREST_RATE`, `CPI`, `BRENT`, `GOLD`
+- `USDTRY`, `USDTRY_Return`, `USDTRY_Volatility7`
+- `BIST100`, `BIST100_Return`, `BIST100_MA7`
+
+Makro whitelist, 2026-11-16 özellik setinin daraltılmasıyla yalnız bu iki
+sembolü kapsar (CPI, faiz, VIX, altın, petrol, EURTRY, sektör endeksleri artık
+özellik üretmez; bkz. [Kürate özellik seti](#kürate-özellik-seti-2026-11-16)).
 
 Projection is applied only to the last (recursive) row. Historical macro
 rows are not modified — backtest and training data stay deterministic.
@@ -211,8 +227,7 @@ The forecast warnings enum updated from `frozen_exogenous_features` to
 deterministically rather than held constant. See
 [Analysis API Contract](analysis-api-contract.md) `forecast_source.warnings`.
 
-If `statsmodels` is unavailable the projector silently falls back to trend
-extrapolation; the forecast loop never raises.
+Projeksiyon adımı istisna fırlatmaz; forecast döngüsü bu adımda kesilmez.
 
 ## Calendar Features (Sprint 7 — 2026-05-25)
 
@@ -229,9 +244,12 @@ recursive forecast rows.
 | `is_quarter_end_week` | 1 if `days_to_quarter_end <= 5` else 0 |
 | `days_to_next_fomc` | days until next FOMC date, `365` if not found |
 
-FOMC dates are read from `data/meta/fomc_calendar.csv` (manually maintained).
-Missing CSV degrades to a constant `365.0` placeholder. Toggle via
-`FeaturePipeline(enable_calendar_features=False)`.
+**2026-11-16:** Model özellik setinde yalnız `day_of_week` kalır. Diğer takvim
+kolonları (`day_of_month`, `days_to_*`, `is_quarter_end_week`) ve FOMC özelliği
+(`days_to_next_fomc`) IC denetiminde gürültü çıktığı için kaldırıldı.
+
+FOMC dates were read from `data/meta/fomc_calendar.csv` (historical; özellik
+artık üretilmez). Toggle via `FeaturePipeline(enable_calendar_features=False)`.
 
 ## Cross-Sectional Momentum (Sprint 7 — 2026-05-25)
 
@@ -242,10 +260,14 @@ momentum against sector index and BIST100.
 | Column | Definition |
 |---|---|
 | `momentum_60d` | `Close.pct_change(60)` |
-| `market_momentum_60d` | cumprod-equivalent of `BIST100_Return` over 60d |
+| `market_momentum_60d` | cumprod-equivalent of `BIST100_Return` over 60d; makro takviminde hesaplanıp tarihe göre birleştirilir (aynı tarihte tüm hisselerde aynı; 2026-11-16, feature cache v6) |
 | `sector_momentum_60d` | cumprod-equivalent of sector index return (falls back to market when sector missing) |
 | `relative_momentum_60d` | `momentum_60d - sector_momentum_60d` |
 | `relative_to_market_60d` | `momentum_60d - market_momentum_60d` |
+
+**2026-11-16:** Model setinde yalnız `momentum_60d`, `market_momentum_60d` ve
+`relative_to_market_60d` kalır. `sector_momentum_60d` ve `relative_momentum_60d`
+sektör endeksine bağlı olduğu için kaldırıldı (sektör endeksleri artık kullanılmıyor).
 
 Missing macro return columns make the related rows silently absent — no
 exception is raised. Toggle via
@@ -263,7 +285,9 @@ Feature generation is split across:
 
 ### Feature Caching and Self-Healing Cache Eviction
 Feature engineering caching uses `FeatureCache` (a disk-based cache under `data/feature_cache`) to avoid redundant preprocessing. 
-To prevent transient data-gathering failures (such as EVDS API errors) from poisoning the cache with macro-less (degraded) datasets when `use_macro=True` is requested, `DataIngestionService._engineer_features_cached` implements a self-healing eviction check. If macro features are expected but the cached feature names lack the central policy interest rate feature (`Rate_Level`), the cache entry is considered degraded, gets automatically evicted via `_cache._evict()`, and the features are regenerated.
+To prevent transient data-gathering failures (such as EVDS API errors) from poisoning the cache with macro-less (degraded) datasets when `use_macro=True` is requested, `DataIngestionService._engineer_features_cached` implements a self-healing eviction check. If macro features are expected but the cached feature names lack the central policy interest rate feature (`Rate_Level`), the cache entry is considered degraded, gets automatically evicted via `_cache._evict()`, and the features are regenerated. (2026-11-16: politika faizi özelliği `Rate_Level`
+artık üretilmediği için bu kontrol eski önbellek kayıtlarının tarihsel temizliği olarak
+kalır; güncel model özellik kümesi için bkz. Kürate özellik seti.)
 
 ### Kol-B sembol başı Parquet özellik önbelleği (2026-11-15)
 
@@ -293,25 +317,58 @@ ve `tools/e2_kolb_validity_report.py` (aynı bayraklar). Çapraz-kesit özellikl
   her sembol yeniden hesaplanır; kazanç tekrarlı koşularda (kapı yeniden denemesi, skorlama/araştırma tekrarı) olur.
 - Testler: `tests/test_pooled_feature_cache.py` (isabet, değer/parmak izi değişimi, bozuk dosya, dtype, yükleyici entegrasyonu).
 
-The project favors stationary or normalized features:
+## Kürate özellik seti (2026-11-16)
 
-- Relative moving-average features instead of raw moving-average price levels.
-- Normalized ATR (`NATR_14`) and MACD-style features (`MACD_norm`, `MACD_Signal_norm`, `MACD_Diff_norm`).
-- Log-return lags instead of raw close lags.
-- Stationary momentum and volume indicators like Money Flow Index (`MFI_14`), Average Directional Index (`ADX_14`), and Chaikin Money Flow (`CMF_20`).
-- Macro lag controls for rate and CPI data to avoid lookahead.
-- Sektörel Göreli Güç (`Sector_Relative_Strength`), calculating the difference between target stock return and its corresponding sector index return (falling back to BIST100 if the index is missing).
-- Reduced correlation pruning threshold from `0.98` to `0.88` for stricter feature filtering.
+Varsayılan `feature_mode = "stationary_features"` (`src/features/feature_pipeline.py`)
+model için 19 özellik üretir:
 
-`Sector_Relative_Strength` is now driven by `data/bist_universe.csv`
-`Sector_Index` metadata rather than a hard-coded stock-to-sector dictionary.
-Missing symbols, missing or unsupported sector indexes, or unavailable sector
-return columns fall back to `BIST100_Return`; if `BIST100_Return` is also
-missing, the feature is skipped without failing the pipeline. Feature cache keys
-include the universe file path, timestamp, and content hash so mapping changes
-invalidate stale engineered-feature caches. Dataset metadata and cache metadata
-include a `sector_mapping` report with matched/fallback status and fallback
-reason.
+`Return`, `SMA_7_rel`, `SMA_21_rel`, `SMA_50_rel`, `RollStd_14_norm`,
+`RollStd_21_norm`, `NATR_14`, `RSI_14`, `MACD_Diff_norm`, `LogRet_Lag_1`,
+`day_of_week`, `USDTRY_Return`, `USDTRY_Volatility7`, `BIST100_Return`,
+`BIST100_MA7`, `Relative_Strength`, `momentum_60d`, `market_momentum_60d`,
+`relative_to_market_60d`.
+
+**Neden:** 250 hisse üzerinde IC denetimi (2021-07 .. 2026-06) önceki 63 özelliğin
+çoğunun gereksiz olduğunu gösterdi:
+
+- Tam kopyalar: `Return` = `Log_Return`, `Relative_Strength` = `Sector_Relative_Strength` vb.
+- Yakın kopyalar (rank korelasyonu > 0.9): SMA/EMA/RSI/VWAP/MACD kümesi; `BB_Width` ≈ `RollStd`.
+- Gürültü: ADX, OBV, CMF, MFI, lag 2-5, FOMC/takvim ekleri.
+- Sağlam çapraz-kesit sinyal yalnız volatilite özelliklerinde: `NATR_14` IC -0.074
+  (t -9.7), `RollStd` / `BB_Width` (düşük volatilite etkisi).
+
+**Makro:** Yalnız USDTRY ve BIST100 kalır. CPI, politika faizi, VIX, DXY, US10Y, altın,
+petrol ve EURTRY artık özellik üretmez; indirme kodları silindi. `INTEREST_RATE.csv`
+hâlâ yenilenir çünkü risksiz faiz kaynağıdır (`src/utils/risk_free_rate.py`,
+`MacroPipeline.refresh_interest_rate_cache`). Sonuç: eğitim geçmişi artık 2021-07'de
+kesilmez (CPI başlangıcı + 12 aylık YoY kısıtı kalktı); THYAO 2015-03-27'den başlar.
+
+**Sektör endeksi:** Kaldırıldı. Sektör endeks CSV'leri 2-8 satırlıktı ve her hisse
+sessizce BIST100'e düşüyordu. `sector_mapping_report.status = "disabled"`. Kol-B
+sektör ETİKETİ (label) kullanılmaya devam eder.
+
+**Diğer kurallar:**
+
+- `Log_Return` üretilmez; `LogRet_Lag_1` doğrudan Close'dan hesaplanır.
+  `lag_feature_count` varsayılanı 1.
+- `Market_Regime_SMA200` hesaplanmaya devam eder (sinyal/backtest kapıları okur) ama
+  model özelliği değildir; `PIPELINE_AUX_COLS` ile (`src/data/panel_columns.py`) özellik
+  listesinden hariç tutulur.
+- Korelasyon budaması kapalı kalır. `tests/test_curated_feature_set.py` tam kümeyi ve
+  hiçbir çiftin |Spearman| > 0.95 olmadığını doğrular.
+- Feature cache sürümü 5'e çıkarıldı (`src/features/feature_cache.py::_VERSION`).
+- Eski özellik listeli artefaktlar `_validate_artifact_features`
+  (`src/forecasting/workflows.py`) ile açık bir "yeniden eğit" hatası verir.
+- Bağlantılı: ARIMA/statsmodels, Prophet ve `pandas-datareader` bağımlılıkları da
+  kaldırıldı (bkz. [Architecture](architecture.md)).
+
+Eski ifadeler (tarihsel): önceki sürüm ayrıca `Sector_Relative_Strength` (sektör
+endeksi, BIST100 fallback'li), korelasyon eşiği `0.98 -> 0.88` ve `MFI_14`, `ADX_14`,
+`CMF_20` gibi özellikleri kullanıyordu; bunların hiçbiri artık model girdisi değildir.
+Stasyonerlik ilkesi (oran/normalize özellikler, Close'a göre) korunur.
+
+Makro gecikme kontrolleri (faiz/CPI) kaldırılan kolonlar için artık geçerli değildir;
+`INTEREST_RATE` yalnız risksiz faiz kaynağı olarak kalır.
 
 `MacroPipeline.get_macro_features()` now acts as an orchestration layer around
 separate cache refresh, cache loading, date filtering, monthly release-lag,
@@ -496,7 +553,10 @@ Prediction conversion:
 - `reconstruct_prices_from_return()` converts simple-return predictions to prices.
 - Clipping protects against pathological out-of-distribution predictions.
 
-## Sequence Tensors
+## Sequence Tensors (kaldırıldı, 2026-11-16)
+
+Sekans tensörleri (`time_steps`, pencereli X/y üretimi) derin sekans modelleriyle
+birlikte kaldırıldı; aşağıdaki açıklamalar tarihseldir. Güncel model girdisi tablodur.
 
 `create_sequences()` creates sequence tensors for sequence-style models such as
 LSTM and the lightweight linear sequence baselines:
@@ -520,7 +580,7 @@ and target for the next move.
   tarihi `ay sonu + lag` (faiz 1, CPI 5 gün) olarak hesaplanır ve günlük takvime
   `merge_asof(direction="backward")` ile taşınır (`macro_transforms.lag_monthly_features`,
   `merge_ffill_monthly_features`; 2026-11-15 derin denetim P0-3/P0-4).
-- ABD seansında kapanan seriler (`US_SESSION_COLUMNS`: VIX, DXY, US10Y, GOLD_USD, OIL_USD)
+- ABD seansında kapanan seriler (`US_SESSION_COLUMNS`: VIX, DXY, US10Y, GOLD_USD, OIL_USD; 2026-11-16 itibarıyla bu seriler özellik üretmez, tarihsel)
   1 satır geciktirilir; USDTRY ve BIST endeksleri gecikmesizdir (P0-5).
 - Makro kapsamı dışındaki hisse günlerinde `*_Return`/`*_Change` kolonları 0 ile
   doldurulur (tekrar edilmez); makro bitişi hisseden >5 gün gerideyse uyarı loglanır.

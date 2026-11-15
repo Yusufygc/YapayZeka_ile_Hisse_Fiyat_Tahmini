@@ -29,69 +29,43 @@ def describe_feature(feature_name: str) -> str:
         return "walk-forward pencerelerindeki genel model davranışı"
     if feature_name == "RSI_14":
         return "RSI 14: hissenin aşırı alım veya aşırı satım bölgesine yaklaşması"
-    if feature_name in {"Return", "Log_Return"}:
+    if feature_name == "Return":
         return "son fiyat getirisi: hissenin yakın dönem fiyat değişimi"
     if feature_name == "Relative_Strength":
         return "BIST100 göreli güç: hissenin endekse göre güçlü veya zayıf kalması"
 
-    ma_match = re.match(r"^(SMA|EMA)_(\d+)_rel$", feature_name)
+    ma_match = re.match(r"^SMA_(\d+)_rel$", feature_name)
     if ma_match:
-        ma_type, window = ma_match.groups()
-        avg_name = "basit hareketli ortalamasına" if ma_type == "SMA" else "üssel hareketli ortalamasına"
-        return f"{ma_type} {window}: fiyatın {window} günlük {avg_name} göre konumu"
+        window = ma_match.group(1)
+        return f"SMA {window}: fiyatın {window} günlük basit hareketli ortalamasına göre konumu"
+
+    if feature_name == "day_of_week":
+        return "haftanın günü: gün bazlı takvim etkisi"
+    if feature_name == "momentum_60d":
+        return "60 günlük momentum: hissenin son 60 iş günündeki getirisi"
+    if feature_name == "market_momentum_60d":
+        return "piyasa momentumu: BIST100'ün son 60 iş günündeki getirisi"
+    if feature_name == "relative_to_market_60d":
+        return "piyasaya göre 60 günlük momentum: hissenin endeksten güçlü veya zayıf kalması"
 
     if re.match(r"^RollStd_\d+_norm$", feature_name):
         window = feature_name.split("_")[1]
         return f"volatilite {window}: son {window} gündeki oynaklığın artıp azalması"
 
-    if re.match(r"^BB_Width_\d+$", feature_name):
-        window = feature_name.split("_")[-1]
-        return f"Bollinger bant genişliği {window}: fiyat bandının genişleyip daralması"
-
     if feature_name.startswith("LogRet_Lag"):
         return "gecikmeli getiri: geçmiş gün getirilerinin bugünkü tahmine etkisi"
-    if feature_name.startswith("OBV"):
-        return "OBV hacim akışı: hacim ile fiyat yönünün birlikte güçlenmesi"
-    if feature_name.startswith("VWAP"):
-        return "VWAP: fiyatın hacim ağırlıklı ortalamaya göre konumu"
     if feature_name.startswith("Market_Regime"):
         return "piyasa rejimi: fiyatın SMA-200'e göre trend konumu"
     if feature_name.startswith("MACD"):
         return "MACD: momentumun güçlenip zayıflaması"
     if feature_name.startswith("USDTRY"):
         return "USDTRY: kur hareketinin hisse üzerindeki olası etkisi"
-    if feature_name.startswith("EURTRY"):
-        return "EURTRY: euro kur hareketinin piyasa algisina etkisi"
     if feature_name.startswith("BIST100"):
         return "BIST100: genel endeks hareketinin hisseye etkisi"
-    if feature_name.startswith("VIX"):
-        return "VIX: global risk istahi ve oynaklik algisi"
-    if feature_name.startswith("Gold"):
-        return "altin: guvenli liman ve kur etkisini birlikte tasiyan makro sinyal"
-    if feature_name.startswith("Oil"):
-        return "petrol: enerji maliyeti ve global emtia baskisi"
-    if feature_name.startswith("DXY"):
-        return "DXY: dolar endeksinin global risk ve kur baskisi"
-    if feature_name.startswith("US10Y"):
-        return "ABD 10 yillik faiz: global faiz ve risk istahi sinyali"
-    if re.match(r"^X[A-Z0-9]+_Return$", feature_name):
-        return "sektor endeksi getirisi: hissenin sektor/piyasa baglamindaki hareketi"
-    if feature_name.startswith("Rate"):
-        return "faiz: faiz seviyesi veya faiz değişiminin piyasa baskısı"
-    if feature_name.startswith("CPI"):
-        return "enflasyon: TÜFE değişiminin piyasa algısına etkisi"
-    if feature_name == "Real_Rate":
-        return "reel faiz: reel faiz koşullarının risk iştahına etkisi"
     if feature_name.startswith("ATR"):
         return "ATR: fiyat oynaklığı ve günlük hareket aralığı"
     if feature_name.startswith("NATR"):
         return "NATR: normalize ATR (fiyata oranlı oynaklık)"
-    if feature_name.startswith("ADX"):
-        return "ADX: trendin gücü (yön bağımsız)"
-    if feature_name.startswith("CMF"):
-        return "CMF: Chaikin para akışı (hacim ağırlıklı alım/satım baskısı)"
-    if feature_name.startswith("MFI"):
-        return "MFI: para akışı endeksi (hacimli RSI, aşırı bölge)"
     if feature_name.startswith("Stoch"):
         return "Stokastik osilatör: kısa vadeli momentum ve aşırı bölge sinyali"
     if feature_name.startswith("Signal_"):
@@ -134,6 +108,7 @@ _GROUP_LABELS = {
     "technical": "Teknik gostergeler",
     "market_relative": "Piyasa ve sektor goreli guc",
     "volume": "Hacim ve para akisi",
+    "calendar": "Takvim etkileri",
     "volatility": "Volatilite ve fiyat araligi",
     "regime": "Piyasa rejimi",
     "lag": "Gecikmeli fiyat davranisi",
@@ -180,30 +155,23 @@ def feature_group(feature_name: str) -> str:
         return "volatility"
     if feature_name.startswith("LogRet_Lag") or feature_name.endswith("_Lag") or "_Lag_" in feature_name:
         return "lag"
-    if feature_name.startswith(("OBV", "VWAP", "CMF", "MFI")):
-        return "volume"
     if feature_name.startswith("Market_Regime"):
         return "regime"
-    if feature_name.startswith(("RollStd", "BB_Width", "ATR", "NATR", "Volatility")):
+    if feature_name.startswith(("RollStd", "ATR", "NATR", "Volatility")):
         return "volatility"
-    if feature_name.startswith("ADX"):
-        return "technical"
-    if (
-        feature_name == "Relative_Strength"
-        or feature_name.startswith("BIST100")
-        or re.match(r"^X[A-Z0-9]+_Return$", feature_name)
+    if feature_name == "day_of_week":
+        return "calendar"
+    if feature_name in {"Relative_Strength", "market_momentum_60d", "relative_to_market_60d"} or (
+        feature_name.startswith("BIST100")
     ):
         return "market_relative"
-    if (
-        feature_name.startswith(("USDTRY", "EURTRY", "Rate", "CPI", "VIX", "Gold", "Oil", "DXY", "US10Y"))
-        or feature_name == "Real_Rate"
-    ):
+    if feature_name.startswith("USDTRY"):
         return "macro"
     if feature_name.startswith("Signal_"):
         return "signal"
     if feature_name == "WalkForward_Summary":
         return "model_summary"
-    if feature_name.startswith(("SMA", "EMA", "MACD", "RSI", "Return", "Log_Return", "Stoch")):
+    if feature_name.startswith(("SMA", "EMA", "MACD", "RSI", "Return", "Stoch")) or feature_name == "momentum_60d":
         return "technical"
     if feature_name in {"Open", "High", "Low", "Volume"}:
         return "technical"

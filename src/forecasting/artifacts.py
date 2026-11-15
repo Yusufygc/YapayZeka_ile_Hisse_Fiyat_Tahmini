@@ -3,6 +3,8 @@
 Sorumluluklar:
   - ForecastArtifactPackage: model + scaler + metadata sidecar paketi.
   - ForecastArtifactError: eksik/bozuk artifact paketinde fırlatılır.
+  - ModelNoLongerSupportedError: silinmis (LSTM/Prophet/ARIMA/...) model icin.
+  - ArtifactFeaturesOutdatedError: eski ozellik setiyle egitilmis artifact icin.
 """
 from __future__ import annotations
 
@@ -16,6 +18,65 @@ import joblib
 
 class ForecastArtifactError(RuntimeError):
     """Raised when a production forecast artifact package is missing or invalid."""
+
+
+# DB'de silinmis model adi tasiyan eski satirlar icin yapisal sonuc kodu.
+MODEL_NO_LONGER_SUPPORTED_REASON = "model_no_longer_supported"
+
+
+class ModelNoLongerSupportedError(ForecastArtifactError):
+    """Raised when a stored best model names a model that was removed from the codebase.
+
+    Eski ``best_models``/``experiments`` satirlari silinen modelleri (LSTM, Prophet,
+    ARIMA, DLinear, ...) adlandirabilir. Bu durumda forecast, import hatasi/traceback
+    yerine acik bir "yeniden egitin" sonucu ile reddedilir.
+    """
+
+    reason = MODEL_NO_LONGER_SUPPORTED_REASON
+
+    def __init__(self, model_name: str, *, symbol: str | None = None) -> None:
+        self.model_name = str(model_name)
+        self.symbol = symbol
+        where = f"{symbol} icin " if symbol else ""
+        super().__init__(
+            f"{where}'{self.model_name}' modeli artik desteklenmiyor "
+            "(kaldirildi); sembolu desteklenen modellerle yeniden egitin (retrain)."
+        )
+
+    def as_payload(self) -> Dict[str, Any]:
+        return {
+            "failure_reason": self.reason,
+            "model_name": self.model_name,
+            "symbol": self.symbol,
+            "action": "retrain",
+        }
+
+
+# Artifact eski ozellik setiyle egitilmis (kurate sette olmayan kolon bekliyor).
+ARTIFACT_FEATURES_OUTDATED_REASON = "artifact_features_outdated"
+
+
+class ArtifactFeaturesOutdatedError(ForecastArtifactError):
+    """Raised when an artifact expects features absent from the current feature set.
+
+    API/CLI katmani bunu genel ``forecast_generation_failed`` yerine yapisal
+    "yeniden egitin" sonucuna (``reason`` + ``action="retrain"``) cevirir.
+    """
+
+    reason = ARTIFACT_FEATURES_OUTDATED_REASON
+
+    def __init__(self, model_name: str, message: str, *, symbol: str | None = None) -> None:
+        self.model_name = str(model_name)
+        self.symbol = symbol
+        super().__init__(message)
+
+    def as_payload(self) -> Dict[str, Any]:
+        return {
+            "failure_reason": self.reason,
+            "model_name": self.model_name,
+            "symbol": self.symbol,
+            "action": "retrain",
+        }
 
 
 @dataclass

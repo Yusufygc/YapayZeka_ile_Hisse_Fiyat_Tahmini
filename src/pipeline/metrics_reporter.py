@@ -122,7 +122,6 @@ class _MetricsReporterMixin:
             model_metrics["Scaling_Clip_Report"] = str(self.ctx.dataset_metadata.get("scaling_reports", []))
             model_metrics["Threshold_Config"] = str(self.ctx.dataset_metadata.get("signal_threshold_config", {}))
             model_metrics["Market_Regime_Source"] = "Market_Regime_SMA200"
-            model_metrics["Prophet_Regressors_Used"] = str(self.ctx.dataset_metadata.get("prophet_regressors_used", []))
             model_metrics["Survivorship_Bias_Check"] = str(self.ctx.dataset_metadata.get("survivorship_bias", {}))
         return metrics_dict
 
@@ -138,8 +137,6 @@ class _MetricsReporterMixin:
                 model_metrics["Model_Family"] = "ensemble"
                 model_metrics["Ensemble_Method"] = model_name.replace("Ensemble ", "")
                 model_metrics["Ensemble_Weights"] = str(self.state.ensemble_weights.get(model_name, {}))
-            elif model_name in {"DLinear", "NLinear"}:
-                model_metrics["Model_Family"] = "low_parameter_sequence_baseline"
             elif model_name == "LightGBM Return":
                 model_metrics["Model_Family"] = "gradient_boosting_return_baseline"
             else:
@@ -298,7 +295,6 @@ class _MetricsReporterMixin:
                 predictions=self.state.predictions,
                 prediction_targets=self.state.prediction_targets,
                 y_true_aligned=self.state.y_true_aligned,
-                quantile_predictions=self.state.quantile_predictions,
             )
             self._write_xai_reports(payload, suffix="latest")
             return payload

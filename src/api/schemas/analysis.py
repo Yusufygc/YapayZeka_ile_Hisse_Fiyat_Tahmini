@@ -40,8 +40,8 @@ class ForecastPoint(BaseModel):
     horizon_index: int
     bounded_predicted_close: Optional[float] = None
     predicted_return: Optional[float] = None
-    # Sprint 4 (2026-05-25) A4.5: model `predict_quantiles` destekliyorsa
-    # advisory confidence band alanlari. Yoksa None (geriye uyumlu).
+    # Advisory confidence band alanlari (kalibre B2/conformal interval). Interval
+    # uretilmediyse None (geriye uyumlu; alanlar kaldirilmadi).
     p10_close: Optional[float] = None
     p50_close: Optional[float] = None
     p90_close: Optional[float] = None
@@ -51,7 +51,8 @@ class ForecastPoint(BaseModel):
     lower_band: Optional[float] = None
     upper_band: Optional[float] = None
     price_tick: Optional[float] = None
-    # Olasılıksal interval üreteni: quantile_model | residual_b2 | conformal | None.
+    # Olasılıksal interval üreteni: residual_b2 | conformal | ensemble | None
+    # (eski satirlarda 'quantile_model' gorulebilir).
     interval_method: Optional[str] = None
 
 

@@ -1,46 +1,21 @@
 # -*- coding: utf-8 -*-
-"""Pure macro feature engineering helpers."""
+"""Pure macro feature engineering helpers (kurate set: USDTRY + BIST100)."""
 
 from __future__ import annotations
 
-import pandas as pd
 import numpy as np
-
-
-# ABD seansında kapanan seriler. BIST 18:00 TRT'de kapanır, ABD kapanışı ~23:00
-# TRT; aynı tarihli ABD verisi BIST karar anında bilinemez -> 1 satır gecikme.
-# USDTRY, EURTRY ve BIST100/sektör endeksleri BIST seansı sırasında gözlenebilir
-# olduğu için BİLEREK gecikmesiz bırakılır.
-US_SESSION_COLUMNS: tuple[str, ...] = ("VIX", "DXY", "US10Y", "GOLD_USD", "OIL_USD")
-US_SESSION_LAG_ROWS = 1
-
-
-def engineer_monthly_rate(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy().sort_values("Date").reset_index(drop=True)
-    rate_col = "INTEREST_RATE" if "INTEREST_RATE" in df.columns else "Rate"
-    df["Rate_Level"] = df[rate_col]
-    df["Rate_Change"] = df[rate_col].diff()
-    df.drop(columns=[rate_col], inplace=True)
-    return df[["Date", "Rate_Level", "Rate_Change"]]
-
-
-def engineer_monthly_cpi(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy().sort_values("Date").reset_index(drop=True)
-    df["CPI_MoM"] = df["CPI"].pct_change(periods=1) * 100
-    df["CPI_YoY"] = df["CPI"].pct_change(periods=12) * 100
-    df.drop(columns=["CPI"], inplace=True)
-    return df[["Date", "CPI_MoM", "CPI_YoY"]]
+import pandas as pd
 
 
 def engineer_daily(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
+    """USDTRY / BIST100 seviyelerinden stasyoner makro ozellikleri turetir.
 
-    # P0-5: ABD seansı seviyelerini getiri/değişim hesaplanmadan ÖNCE geciktir ki
-    # türetilmiş özellikler (VIX_Change, DXY_Return, ...) tutarlı kalsın.
-    # Satırlar Date'e göre sıralı varsayılır (build_base_daily_macro sıralar).
-    for col in US_SESSION_COLUMNS:
-        if col in df.columns:
-            df[col] = df[col].shift(US_SESSION_LAG_ROWS)
+    Uretilen: USDTRY_Return, USDTRY_Volatility7, BIST100_Return, BIST100_MA7.
+    Her iki seri de BIST seansi sirasinda gozlenebildigi icin gecikmesizdir.
+    (EURTRY/VIX/Altin/Petrol/DXY/US10Y/sektor endeksleri ve ABD-seansi gecikme
+    mantigi IC denetimi sonrasi kaldirildi.)
+    """
+    df = df.copy()
 
     if "USDTRY" in df.columns:
         df["USDTRY_Return"] = df["USDTRY"].pct_change()
@@ -53,47 +28,6 @@ def engineer_daily(df: pd.DataFrame) -> pd.DataFrame:
         bist_ma = df["BIST100"].rolling(7).mean()
         df["BIST100_MA7"] = df["BIST100"] / bist_ma.replace(0, np.nan) - 1.0
         df.drop(columns=["BIST100"], inplace=True)
-
-    for sect in ["XBANK", "XUSIN", "XHOLD", "XULAS", "XTCRT", "XTEK"]:
-        if sect in df.columns:
-            df[f"{sect}_Return"] = df[sect].pct_change()
-            df.drop(columns=[sect], inplace=True)
-
-    if "EURTRY" in df.columns:
-        df["EURTRY_Return"] = df["EURTRY"].pct_change()
-        df["EURTRY_Volatility7"] = df["EURTRY_Return"].rolling(7).std()
-        df.drop(columns=["EURTRY"], inplace=True)
-
-    if "VIX" in df.columns:
-        df["VIX_Level"] = df["VIX"]
-        df["VIX_Change"] = df["VIX"].diff()
-        df.drop(columns=["VIX"], inplace=True)
-
-    if "GOLD_USD" in df.columns:
-        df["Gold_USD_Return"] = df["GOLD_USD"].pct_change()
-        if "USDTRY_Return" in df.columns:
-            # Altın USD getirisi 1 gün gecikmeli olduğundan, TRY'ye çevirirken
-            # de aynı güne ait (gecikmeli) USDTRY getirisi kullanılır; aksi halde
-            # gerçek olmayan hibrit bir getiri oluşur.
-            usdtry_ret = df["USDTRY_Return"].shift(US_SESSION_LAG_ROWS)
-            df["Gold_TRY_Return"] = (
-                (1 + df["Gold_USD_Return"]) * (1 + usdtry_ret) - 1
-            )
-        df.drop(columns=["GOLD_USD"], inplace=True)
-
-    if "OIL_USD" in df.columns:
-        df["Oil_USD_Return"] = df["OIL_USD"].pct_change()
-        df.drop(columns=["OIL_USD"], inplace=True)
-
-    if "DXY" in df.columns:
-        df["DXY_Return"] = df["DXY"].pct_change()
-        df["DXY_Volatility7"] = df["DXY_Return"].rolling(7).std()
-        df.drop(columns=["DXY"], inplace=True)
-
-    if "US10Y" in df.columns:
-        df["US10Y_Level"] = df["US10Y"]
-        df["US10Y_Change"] = df["US10Y"].diff()
-        df.drop(columns=["US10Y"], inplace=True)
 
     df.dropna(inplace=True)
     df.reset_index(drop=True, inplace=True)

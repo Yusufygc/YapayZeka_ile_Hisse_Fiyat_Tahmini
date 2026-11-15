@@ -17,16 +17,15 @@ class DataConfig:
 
     data_file: str
     test_ratio: float = 0.20
-    time_steps: int = 30
     target_mode: str = "log_return"
     feature_mode: str = "stationary_features"
     scaling_mode: str = "robust_x_standard_y_clip"
     use_macro: bool = True
     macro_rate_lag_days: int = 1
-    macro_cpi_lag_days: int = 5  # ay sonu + 5 gün (TÜİK ~M+1 ayının 3. günü yayımlar)
+    macro_cpi_lag_days: int = 5  # DEPRECATED (2026-11): CPI feature'lari kaldirildi; yalniz geriye uyumluluk icin saklanir, kullanilmaz
     prune_correlated_features: bool = False
     correlation_threshold: float = 0.98
-    lag_feature_count: int = 5
+    lag_feature_count: int = 1
     universe_file: str = "data/bist_universe.csv"
     clip_shift_warning_threshold_pct: float = 1.0
     training_window_years: Optional[int] = 5
@@ -58,7 +57,7 @@ class ValidationConfig:
     wf_window_type: str = "sliding"
     # None/0 -> auto `target_horizon + 5` (etiket ortusmesi tamponu; pooled CV'deki
     # E=h+5 ile ayni). Explicit deger < target_horizon ValueError verir. Eski
-    # `max(200, time_steps)` "SMA200 sizintisi" varsayimi yanlisti: ozellikler nedensel,
+    # `max(200, sequence uzunlugu)` "SMA200 sizintisi" varsayimi yanlisti: ozellikler nedensel,
     # test penceresi etiketsiz baglam satirlari alir.
     wf_embargo_size: Optional[int] = None
     final_holdout_size: int = 60
@@ -79,56 +78,7 @@ class ModelConfig:
     ensemble_enabled: bool = True
     model_settings: Dict[str, Any] = field(
         default_factory=lambda: {
-            "arima": {"auto_order": False, "order": (1, 0, 0)},
-            "deep_learning": {
-                "min_sequence_samples": 64,
-                "validation_ratio": 0.1,
-                "min_validation_samples": 32,
-                "lstm": {
-                    "epochs_single": 80,
-                    "epochs_wf": 50,
-                    "epochs_final": 50,
-                    "patience": 15,
-                    "lr_patience": 5,
-                    "dropout": 0.2,
-                    "batch_size": 32,
-                },
-                "lstm_lite_min_sequence_samples": 252,
-                "lstm_lite": {
-                    "units": 32,
-                    "dense_units": 16,
-                    "dropout": 0.25,
-                    "learning_rate": 0.0003,
-                    "epochs_single": 80,
-                    "epochs_wf": 50,
-                    "epochs_final": 50,
-                    "patience": 12,
-                    "lr_patience": 4,
-                    "batch_size": 32,
-                    "tune_on_fit": False,
-                    "tune_n_trials": 12,
-                },
-                "attention_lstm_v2_min_sequence_samples": 252,
-                "attention_lstm_v2": {
-                    "units_1": 64,
-                    "units_2": 32,
-                    "dense_units": 32,
-                    "dropout": 0.30,
-                    "learning_rate": 0.0005,
-                    "loss": "huber",
-                    "epochs_single": 80,
-                    "epochs_wf": 50,
-                    "epochs_final": 50,
-                    "patience": 12,
-                    "lr_patience": 4,
-                    "batch_size": 32,
-                    "tune_on_fit": False,
-                    "tune_n_trials": 12,
-                },
-            },
-            "experimental_sequence_baselines": {},
             "gradient_boosting": {"lightgbm_optional": True},
-            "prophet": {"use_regressors": True},
         }
     )
 

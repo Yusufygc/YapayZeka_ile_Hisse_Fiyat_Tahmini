@@ -2,7 +2,7 @@
 title: E2 Pooled Global Model Epic
 type: feature-plan
 status: active
-last_updated: 2026-11-10
+last_updated: 2026-11-16
 owner: llm
 branch: feat/e2-pooled-global-model
 ---
@@ -381,6 +381,26 @@ scoring batch → `PeerStore`. Runs even when Claude is closed.
 - Idempotent: re-running on same data makes a new run_id; API reads latest —
   harmless. The trading-day gate already prevents pointless weekend/holiday runs.
 
+### Gece işi arızası ve sağlamlaştırma (2026-11-16)
+
+- **Teşhis:** `ts_forecasting_nightly` zamanlanmış görevi 2026-09-16'dan sonra kayıtlı
+  değildi. Ağustos-Eylül koşuları ~150-160 / 585 sembolden sonra öldü: alfabetik prefix
+  A1CAP..DOAS 2026-09-16'ya kadar güncellendi, DOCO..ZRGYO 2026-06-02'de kaldı. Sessiz
+  kaldı (durum dosyası ve bayat-pay kapısı yoktu).
+- **Düzeltmeler** (ayrıntı: [Persistence and API](persistence-and-api.md#nightly-automation-2026-11-16)):
+  `src/serving/run_status.py` + `data/nightly_status.json` (atomik; kosu bitmezse
+  `completed: false`); bayat-pay kapısı (`--max-stale-fraction` 0.20 üstünde skorlama
+  atlanır, çıkış kodu 3, son iyi PeerStore koşusu korunur); `--refresh-deadline-s`,
+  `--status-file`; ağ zaman sınırları (yfinance `timeout=30`, `call_with_deadline` 120 s
+  tekil / 300 s toplu, `update_many` 2700 s); `/health.nightly_run`;
+  `scripts/register_nightly_task.ps1` `Register-ScheduledTask` ile (pil/başlangıç/2 saat/IgnoreNew);
+  `nightly_serving.ps1` UTF-8 log ve her durumda bitiş satırı.
+- **Tarih:** tüm yazıcılar ISO; `data/ASELS.csv` ve `data/EREGL.csv` diskte hâlâ `dd/mm/yyyy`
+  (doğru ayrıştırılır).
+- **Açık:** Makro veri nightly işte yenilenmez. Kol-B özellik seti 2026-11-16 temizliğiyle
+  değiştiği için mevcut DB skorları ve serving havuzu eski semantikle üretildi; veri yenilemesinden
+  sonra yeniden koşulmalıdır.
+
 ## Faz 9 — Deep + Ensemble PoC (2026-06-05, branch `feat/e2-deep-ensemble`)
 
 Kol A (tek-hisse) derin model overfit'inin kök sebebi **veri açlığı** mıydı
@@ -460,6 +480,8 @@ PoC araçlarındaki MLP production'a taşındı + ensemble serving-uyumlu paketl
   `--model ensemble` eklenerek yapıldı (Task Scheduler action sabit kaldı → ps1
   version-controlled). Gece ~4× hesap, IC +%18 ranking sinyali. Smoke (20 sym,
   skip-data) uçtan uca exit=0, "final ENSEMBLE (LGB + 3-seed MLP)", PeerStore yazıldı.
+  **2026-11-16 düzeltmesi:** Bu canlı durum 2026-09-16'dan sonra geçerli değildi; görev
+  kayıtlı değildi ve koşular yarıda kalıyordu (yukarıdaki "Gece işi arızası" bölümü).
 
 ### Adım D — Sequence LSTM 3. bacak (denendi → RAF, 2026-06-05)
 

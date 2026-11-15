@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Tree-model Optuna tuning için paylaşılan yardımcılar (DRY).
 
-XGBoost / Random Forest (ve diğer tree modeller) `tune_and_train` metotları aynı
+XGBoost (ve diğer tree modeller) `tune_and_train` metotları aynı
 iskeleti paylaşır: TimeSeriesSplit üzerinde sign-of-pred Sharpe ile skorlama ve
 Optuna study (varsayılan: bellek-içi, çağrıya izole). Bu modül o ortak çekirdeği tek kaynakta toplar;
 modele özgü olan yalnızca arama uzayı (params) ve fit yoludur.

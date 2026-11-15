@@ -2,7 +2,7 @@
 title: Wiki Index
 type: index
 status: active
-last_updated: 2026-11-15
+last_updated: 2026-11-16
 owner: llm
 ---
 
@@ -22,8 +22,8 @@ linked pages below.
 ## System Knowledge
 
 - [Architecture](architecture.md): Main components, technology stack, database schema, and runtime structure.
-- [Data Pipeline](data-pipeline.md): OHLCV loading, corporate action handling, macro features, scaling, leakage controls, and tensors.
-- [Model Catalog](model-catalog.md): Benchmarks, candidate models, legacy/comparison models, and production selection rules.
+- [Data Pipeline](data-pipeline.md): OHLCV loading, corporate action handling, kürate 19 özellik seti (2026-11-16), makro (USDTRY/BIST100), scaling, and leakage controls.
+- [Model Catalog](model-catalog.md): Benchmarks, 3 production candidates (XGBoost, Ridge Return, LightGBM Return), the single ensemble (`Ensemble Inverse RMSE`), and removed models.
 - [Validation and Backtesting](validation-and-backtesting.md): Single split, walk-forward, final holdout, signal gates, backtest metrics, and leakage boundaries.
 - [Backtest Signal Improvement Plan](backtest-signal-improvement-plan.md): Draft plan for improving signal logic and model tiers before API integration or cost modelling.
 - [Persistence and API](persistence-and-api.md): Outputs, SQLite registry, forecast persistence, FastAPI endpoints, and downstream integration.
@@ -47,6 +47,15 @@ linked pages below.
 ## Current Project State
 
 - The project is a production-oriented research platform for BIST equity forecasting.
+- **Özellik ve model temizliği (2026-11-16, `fix/deep-audit-2026-11`):** model özellik seti
+  63'ten 19'a indi (IC denetimi; sektör endeksi ve makro'nun USDTRY/BIST100 dışı kolonları
+  kaldırıldı); model kataloğu 3 aday + 3 naive benchmark + tek ensemble (`Ensemble Inverse RMSE`)
+  ile sınırlandı, LSTM/Prophet/ARIMA/DLinear vb. silindi (`ModelNoLongerSupportedError`);
+  gece işi için durum dosyası, bayat-pay kapısı ve zaman sınırları eklendi (2026-09-16'dan
+  beri zamanlanmış görev kayıtlı değildi). **Mevcut DB skorları ve Kol-B serving havuzu eski
+  semantikle üretildi; önce veri yenilenmeli, sonra yeniden koşulmalıdır.** Bkz.
+  [Data Pipeline](data-pipeline.md), [Model Catalog](model-catalog.md),
+  [Persistence and API](persistence-and-api.md#nightly-automation-2026-11-16).
 - **Veri yönetimi düzeltmeleri (2026-11-15, `fix/deep-audit-2026-11`):** ortak tarih ayrıştırıcı (`src/data/dates.py`), ortak OHLCV temizleyici (`src/data/ohlcv_clean.py`), tazelik kapısı, seans-bilinçli + toplu + kilitli `DataUpdater` (nightly `update_many` kullanır), SQLite `get_db` önbelleği + WAL/busy_timeout + atomik yazımlar + göreli `model_path`, sıkıştırılmış model kayıtları + hafif `latest/` + `tools/prune_outputs.py`. Bkz. [Data Pipeline](data-pipeline.md), [Persistence and API](persistence-and-api.md).
 - The active orchestration facade is `ForecastingPipeline` in `src/pipeline/orchestrator.py`.
 - Main orchestration responsibilities are split across `DataManager`, `ModelTrainer`, and `EvaluationManager`.
@@ -96,14 +105,12 @@ linked pages below.
   data/forecast refresh work when the best model has no current forecast or the
   market data is stale.
 - Forward forecasts are served from saved production artifacts and recursive
-  horizon generation. Production ensemble leaders are limited to `Ensemble
-  Inverse RMSE` and `Ensemble Cash-Gated`, with member metadata persisted.
-- `AttentionLSTM v2` is an opt-in sequence candidate with temporal attention
-  XAI export; it is not part of the default production candidate set.
+  horizon generation. The only production ensemble leader is `Ensemble Inverse
+  RMSE` (2026-11-16: `Ensemble Cash-Gated` kaldırıldı), with member metadata persisted.
 - Repository-wide change discipline is captured in `RULES.md` and [Change Management](change-management.md).
 - **Validation mode** (as of 2026-05-25): default and production-only mode is
   `walk_forward`. `single_split` is research-only via `--debug-quick`. WF
-  embargo auto-resolves to `max(200, time_steps)` when left unset.
+  embargo auto-resolves to horizon + 5 (h+5) when left unset (2026-11-16).
 - **Metric priority (Sprint 1, 2026-05-25)**: reports lead with `Dir_Acc`,
   `Hit_Rate`, `Composite_Score`; `Net_Return` / `BuyHold_Return` move to a
   footnote because the default backtest is cost-free. Risk-free rate

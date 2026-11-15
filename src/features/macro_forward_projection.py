@@ -29,26 +29,18 @@ import pandas as pd
 
 # Bilinen macro seviye/getiri kolonlari (data/wiki uyumu). Sonek kurali
 # (_Return/_Change) bu listeye ek olarak genel olarak da uygulanir.
+# Kurate makro set (2026-11): yalniz USDTRY + BIST100 ozellikleri.
 _KNOWN_MACRO_COLUMNS = {
-    "USDTRY", "USDTRY_Return",
-    "BIST100", "BIST100_Return",
-    "VIX",
-    "INTEREST_RATE",
-    "CPI",
-    "BRENT",
-    "GOLD",
-    "EURTRY",
-    "BIST_BANK_Return", "BIST_HOLD_Return", "BIST_SANAYI_Return",
-    "BIST_INSAAT_Return", "BIST_GIDAI_Return", "BIST_KIMYA_Return",
-    "BIST_METALU_Return", "BIST_TICRT_Return", "BIST_ULASTRMA_Return",
-    "BIST_TURIZM_Return", "BIST_BILMEMURENGEL_Return",
+    "USDTRY", "USDTRY_Return", "USDTRY_Volatility7",
+    "BIST100", "BIST100_Return", "BIST100_MA7",
 }
 
 # Getiri/degisim sonekleri -> projeksiyon 0.0.
 _FLOW_SUFFIXES = ("_Return", "_Change")
 
 # Hissenin KENDI getiri kolonlari (sonek eslesse de macro degildir; dokunulmaz).
-_OWN_RETURN_COLUMNS = {"Return", "Log_Return", "Relative_Strength", "Sector_Relative_Strength"}
+# "Log_Return" artik uretilmez; eski/onbellekli frame guvenligi icin dislanir.
+_OWN_RETURN_COLUMNS = {"Return", "Log_Return", "Relative_Strength"}
 
 
 def _is_flow_column(col: str) -> bool:

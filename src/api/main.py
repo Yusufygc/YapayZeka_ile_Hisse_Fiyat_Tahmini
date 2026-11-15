@@ -54,7 +54,7 @@ from src.api.services.pipeline_jobs import (
     known_job_ids,
     start_pipeline_job,
 )
-from src.api.services.serving_health import serving_pool_status
+from src.api.services.serving_health import nightly_run_status, serving_pool_status
 from src.api.services.rate_limit import (
     get_default_limiter,
     rate_limit_middleware_factory,
@@ -162,6 +162,7 @@ def health_check() -> Dict[str, Any]:
         },
         "registered_symbols": total_symbols,
         "serving_pool": serving_pool_status(),
+        "nightly_run": nightly_run_status(),
         "timestamp": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
     }
 

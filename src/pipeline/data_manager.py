@@ -15,7 +15,7 @@ import pandas as pd
 
 from src.data.data_updater import DataUpdater
 from src.data.data_loader import load_data
-from src.data.preprocessor import scale_data, create_sequences
+from src.data.preprocessor import scale_data
 from src.utils.data_splitter import (
     TimeSeriesSplitter,
     _resolve_wf_embargo_size,
@@ -98,7 +98,6 @@ class DataManager:
 
         effective_wf_embargo_size = _resolve_wf_embargo_size(
             self.val_cfg.wf_embargo_size,
-            self.data_cfg.time_steps,
             target_horizon=int(getattr(self.data_cfg, "target_horizon", 1) or 1),
         )
 
@@ -392,7 +391,7 @@ class DataManager:
         """
         Backward-compatible constructor adapter.
 
-        Older callers passed flat arguments such as data_file/test_ratio/time_steps
+        Older callers passed flat arguments such as data_file/test_ratio
         directly to DataManager. Normalize those into config objects immediately so
         the rest of the class can keep using self.data_cfg/self.val_cfg.
         """
@@ -436,7 +435,6 @@ class DataManager:
             self.data_cfg = DataConfig(
                 data_file=getattr(self, "data_file", ""),
                 test_ratio=getattr(self, "test_ratio", 0.20),
-                time_steps=getattr(self, "time_steps", 30),
                 target_mode=getattr(self, "target_mode", "log_return"),
                 scaling_mode=getattr(self, "scaling_mode", "robust_x_standard_y_clip"),
                 use_macro=getattr(self, "use_macro", True),
@@ -480,7 +478,6 @@ class DataManager:
         if not hasattr(self, "validation_config"):
             effective_wf_embargo_size = _resolve_wf_embargo_size(
                 self.val_cfg.wf_embargo_size,
-                self.data_cfg.time_steps,
                 target_horizon=int(getattr(self.data_cfg, "target_horizon", 1) or 1),
             )
             wf_max_train_size = (
@@ -597,12 +594,9 @@ class DataManager:
         self,
         train_df: pd.DataFrame,
         test_df: pd.DataFrame,
-        context_df: pd.DataFrame | None = None,
     ) -> dict:
         self._prepare_data_services()
-        return self.tensor_preparation_service.prepare_tensors(
-            train_df, test_df, context_df=context_df
-        )
+        return self.tensor_preparation_service.prepare_tensors(train_df, test_df)
 
     def _record_scaling_report(
         self, train_df: pd.DataFrame, test_df: pd.DataFrame, scaler_X: object

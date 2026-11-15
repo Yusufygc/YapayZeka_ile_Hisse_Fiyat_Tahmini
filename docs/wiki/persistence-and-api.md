@@ -2,7 +2,7 @@
 title: Persistence and API
 type: concept
 status: active
-last_updated: 2026-11-10
+last_updated: 2026-11-16
 owner: llm
 source_count: 14
 ---
@@ -138,7 +138,9 @@ beats the current row under the selection guard:
 - within the same eligibility class, the higher `composite_score` wins.
 
 Schema refresh reconstructs `best_models` from the highest-scored production
-experiment per symbol, not from the latest inserted experiment.
+experiment per symbol, not from the latest inserted experiment. Kaldırılmış modeller
+(`REMOVED_MODELS`: LSTM, Random Forest, ElasticNet, Cash-Gated, ...) bu sıralamada
+dışlanır (2026-11-16); destekli üretim satırı yoksa mevcut davranış korunur.
 
 As of 2026-05-20, signal/trade quality fields are first-class SQLite metrics.
 `experiments` and `best_models` both carry `rmse_vs_benchmark`, `net_return`,
@@ -218,6 +220,18 @@ a best model exists.
 `python -m src.cli.forecast` is the CLI entrypoint. It uses `ForecastRunner` in
 `src/forecasting/runner.py`.
 
+**2026-11-16:** Özellik listesi eski bir artefaktla uyuşmuyorsa
+`_validate_artifact_features` (`src/forecasting/workflows.py`) açık bir "yeniden eğit"
+hatası verir. Silinmiş modeller için (`LSTM`, `Prophet`, `ARIMA`, ... bkz.
+[Model Catalog](model-catalog.md#removed-models-2026-11-16)) tahmin
+`ModelNoLongerSupportedError` fırlatır (reason `model_no_longer_supported`, action
+`retrain`). Hata `src/forecasting/artifacts.py` içinde tanımlıdır; refresh servisi
+(`src/api/services/data_refresh_service.py`) bu istisnayı yakalar. Eski özellik listesi
+artık `ArtifactFeaturesOutdatedError` (reason `artifact_features_outdated`, action `retrain`)
+verir ve refresh servisi bunu genel `forecast_generation_failed` yerine aynı yapısal
+"yeniden eğit" sonucuna çevirir. Kaldırılmış best model için refresh önce piyasa verisini
+günceller, sonra yapısal retrain hatasını döner (veri bayatlamaz).
+
 Example commands:
 
 ```bash
@@ -265,7 +279,8 @@ through `ForecastArtifactError`; serving code should not silently retrain in tha
 - `forecast_points` ek kolonlar: `p10_close`, `p50_close`, `p90_close`,
   `predicted_return_p10/p50/p90`, `interval_method`
   (`quantile_model | residual_b2 | conformal | null`). p10=alt, p50=nokta, p90=üst.
-  Quantile model yolu da aynı alanları doldurur; `interval_method` üreteni ayırır.
+  2026-11-16: quantile-model yolu kaldırıldı; `p10/p50/p90` alanları nullable olarak kalır ve
+  yalnızca model-agnostik kalibrasyondan dolar; `interval_method` üreteni ayırır.
   Geriye uyumlu: eski satırlar/interval'siz tahminler `null`.
 - `forecast_accuracy_summary` ek kolonlar: `interval_coverage` (%),
   `interval_avg_width`, `nominal_coverage`. Resolve sırasında
@@ -278,8 +293,8 @@ through `ForecastArtifactError`; serving code should not silently retrain in tha
 - Karşılaştırma: `tools/interval_coverage_report.py` (B2 vs conformal coverage tablosu).
   Detay: [Validation and Backtesting](validation-and-backtesting.md).
 
-Production ensemble leaders are now allowed only for the curated methods
-`Ensemble Inverse RMSE` and `Ensemble Cash-Gated`. Their forecast runs persist
+Production ensemble leaders are now allowed only for `Ensemble Inverse RMSE`
+(2026-11-16: `Ensemble Cash-Gated` kaldırıldı). Their forecast runs persist
 `ensemble_metadata_json`, `ensemble_direction_agreement`, `forecast_strategy`,
 `artifact_mode`, and forecast warnings such as frozen exogenous features.
 
@@ -326,7 +341,9 @@ Important endpoints:
 `/health` now includes schema status, table counts, latest refresh job metadata,
 CORS mode, project root, and Python executable. CORS is local-first by default:
 `http://localhost` and `http://127.0.0.1` are allowed, and extra origins must be
-provided with `AI_CORE_CORS_ORIGINS`.
+provided with `AI_CORE_CORS_ORIGINS`. 2026-11-16: `/health` ayrıca `nightly_run`
+anahtarını döner (`serving_health.nightly_run_status`; `data/nightly_status.json`
+özeti, `interrupted` bayrağı dahil).
 
 `GET /analysis/{symbol}` still returns HTTP 200 for `no_model` and
 `no_forecast`, but its response now includes refresh status fields and a
@@ -451,7 +468,41 @@ never modified. See [Analysis API Contract](analysis-api-contract.md) and
 trading-day gate → universe data refresh (`DataUpdater.check_and_update` loop) →
 scoring batch (`tools/e2_faz5_nightly_scoring.py`). `scripts/nightly_serving.ps1`
 is the Windows Task Scheduler target (daily 21:00, logs to `logs/nightly_*.log`);
-`scripts/register_nightly_task.ps1` registers it.
+`scripts/register_nightly_task.ps1` registers it. 2026-11-16 sağlamlaştırması için
+aşağıdaki bölüme bakın.
+
+## Nightly Automation (2026-11-16)
+
+**Teşhis:** `ts_forecasting_nightly` zamanlanmış görevi 2026-09-16'dan sonra kayıtlı
+değildi. Ağustos-Eylül koşuları ~150-160 / 585 sembolden sonra ölmüştü (alfabetik
+A1CAP..DOAS 2026-09-16'ya kadar güncellendi, DOCO..ZRGYO 2026-06-02'de kaldı). Fark
+edilmedi.
+
+**Değişiklikler:**
+
+- **Durum dosyası:** `src/serving/run_status.py` → `data/nightly_status.json`. Kosu
+  başında ve her fazda atomik (geçici dosya + `os.replace`) yazılır; kosu normal
+  bitmezse `completed: false` kalır. `/health.nightly_run` bunu `interrupted` olarak gösterir.
+- **Bayat-pay kapısı:** başarısız + bayat sembol oranı `--max-stale-fraction` (varsayılan
+  0.20) üstünde ise skorlama atlanır, çıkış kodu 3, son iyi PeerStore koşusu korunur.
+- **Zaman sınırları:** `--refresh-deadline-s` (varsayılan `DataUpdater.update_many`
+  deadline 2700 s); yfinance `timeout=30`; `call_with_deadline` tekil 120 s, toplu 300 s
+  (`src/data/market_providers.py`). `--status-file` durum dosyasını değiştirir.
+  Zaman aşımıyla terk edilen bir sağlayıcı çağrısı (asılı yfinance thread'i) varsa
+  `python -m src.serving.nightly` durum/log yazıldıktan sonra `os._exit(rc)` ile sonlanır
+  (`exit_after_run`; yalnız `__main__` yolu).
+- **Görev kaydı:** `scripts/register_nightly_task.ps1` `Register-ScheduledTask` kullanır;
+  pilde başlar, pil modunda durmaz, uygun olunca başlar (StartWhenAvailable), 2 saat
+  zaman sınırı, `MultipleInstances IgnoreNew`.
+- **Log:** `scripts/nightly_serving.ps1` UTF-8 log yazar ve bitiş satırını her durumda yazar.
+- **Tarih:** `src/data/updater_frames.py` değer-bazlı ayrıştırıcı kullanır; tüm yazıcılar ISO
+  yazar. Diskte `dd/mm/yyyy` kalan `data/ASELS.csv`, `data/EREGL.csv` doğru okunur (bkz.
+  [Data Pipeline](data-pipeline.md)).
+
+**Bilinen açık:** Makro veri (`USDTRY`, `BIST100`, `INTEREST_RATE`) nightly işte
+yenilenmez; bu bir açıktır.
+
+**Sonraki adım:** Veri yenilenmeden DB skorları ve Kol-B serving havuzu yeniden üretilmelidir.
 
 ## Serving Havuzu Tazelik Alanı (K6, 2026-11-10)
 

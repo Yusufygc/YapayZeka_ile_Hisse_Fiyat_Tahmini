@@ -7,11 +7,17 @@ ozellik olarak sizabiliyordu. Yeni kolon eklemek artik tek dosya.
 """
 from __future__ import annotations
 
-# FeaturePipeline CIKTISINDA ozellik OLMAYAN ham OHLCV kolonlari (yukleyici icin).
+# FeaturePipeline cikti frame'inde hesaplanan ama model girdisi OLMAYAN yardimci kolonlar.
+# Market_Regime_SMA200: sinyal/backtest kapilari (data_services -> backtesting) okur;
+# IC denetimi (2026-11) sonrasi model ozelligi degildir.
+PIPELINE_AUX_COLS: frozenset[str] = frozenset({"Market_Regime_SMA200"})
+
+# FeaturePipeline CIKTISINDA ozellik OLMAYAN kolonlar: ham OHLCV (yukleyici icin)
+# + yardimci kolonlar (PIPELINE_AUX_COLS).
 PIPELINE_RAW_COLS: frozenset[str] = frozenset({
     "Date", "Close", "Open", "High", "Low", "Volume",
     "Adj Close", "Düzeltilmiş_Kapanış", "Hacim",
-})
+}) | PIPELINE_AUX_COLS
 
 # PANEL'de (yukleyici ciktisi + CV/OOS alanlari) ozellik OLMAYAN kolonlar.
 PANEL_NON_FEATURE_COLS: frozenset[str] = frozenset({

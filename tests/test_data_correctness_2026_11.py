@@ -189,12 +189,16 @@ def test_repair_script_fixes_rows_and_backs_up(tmp_path):
     rep = rsc.run(str(data), None, str(data / "yedek"), "bak_t", dry_run=False)
     assert rep[0].fixed_rows == 1
     out = p.read_bytes().decode("utf-8-sig")
-    assert "03/01/2024,1,2,0.5,1.7,1.7,500\r\n" in out
+    assert "2024-01-03,1,2,0.5,1.7,1.7,500\r\n" in out   # eksik alan tamamlandi + ISO'ya normalize
+    assert "2024-01-02,1,2,0.5,1.5,1.4,100\r\n" in out
     assert (data / "yedek" / "ZZZ.csv.bak_t").read_bytes().decode("utf-8-sig") == src
     assert rsc.run(str(data), None, str(data / "yedek"), "bak_t", dry_run=True)[0].status == "ok"
 
 
-def test_repair_script_normalizes_minority_date_format(tmp_path):
+def test_repair_script_always_writes_iso_even_when_majority_is_dmy(tmp_path):
     text = _HEADER + "\n02/01/2024,1,1,1,1,1,5\n03/01/2024,1,1,1,1,1,5\n2024-01-04,1,1,1,1,1,5\n"
     out, rep = rsc.analyze_text(text)
-    assert rep.date_normalized == 1 and "04/01/2024,1,1,1,1,1,5" in out
+    assert rep.date_normalized == 2
+    assert "2024-01-02,1,1,1,1,1,5" in out and "2024-01-03,1,1,1,1,1,5" in out
+    assert "2024-01-04,1,1,1,1,1,5" in out and "/" not in out.split("\n", 1)[1]
+    assert rsc.analyze_text(out)[1].status == "ok"   # ikinci tur: zaten ISO -> degisiklik yok

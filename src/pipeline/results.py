@@ -44,9 +44,6 @@ class SingleSplitResult(TypedDict):
     xai_payload: Optional[Dict[str, Any]]
     """XAI aciklama icerigi veya None."""
 
-    quantile_predictions: Dict[str, np.ndarray]
-    """Kantil tahminler {model_name: ndarray[n_samples, n_quantiles]}."""
-
 
 class WalkForwardResult(TypedDict):
     """evaluate_walk_forward() don\u00fc\u015f tipi."""
@@ -87,12 +84,6 @@ class FinalHoldoutResult(TypedDict):
 
     predictions: Dict[str, np.ndarray]
     """Secilen model tahminleri {model_name: ndarray}."""
-
-    quantiles_df: Optional[pd.DataFrame]
-    """Kantil tahmin DataFrame'i veya None."""
-
-    quantile_price: Optional[np.ndarray]
-    """Ham kantil tahmin matrisi veya None."""
 
     backtest: Dict[str, Any]
     """Final holdout backtest sonuclari."""
