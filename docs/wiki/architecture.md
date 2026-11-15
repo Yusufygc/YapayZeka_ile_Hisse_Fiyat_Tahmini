@@ -264,7 +264,7 @@ outputs/{SYMBOL}/
 
 outputs/batch_summaries/     batch CSV/JSON summaries
 data/optuna/                 Optuna warm-start SQLite files
-tools/reports/               local report generation helpers
+tools/archive/               arşivlenmiş tek seferlik araştırma/rapor scriptleri
 ```
 
 The run id includes timestamp, symbol, validation mode, and a compact selected-model slug
@@ -297,3 +297,18 @@ all-models runs in `model_result_exporter` (2026-06-02 fix).
 - [Testing and Quality](testing-and-quality.md)
 - [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md)
 
+## Gece İşi ve Değerlendirme Katmanı (2026-11-15)
+
+- Gece işi tek modül: `python -m src.serving.nightly` (işlem günü kapısı + veri yenileme + skorlama
+  aynı süreçte). `tools/e2_nightly_pipeline.py` ve `tools/e2_faz5_nightly_scoring.py` ince
+  sarmalayıcıdır; `scripts/nightly_serving.ps1` yorumlayıcıyı `AI_CORE_PYTHON` -> `.venv` -> PATH
+  sırasıyla bulur ve `--fallback-dir data/yedek` geçer.
+- `EvaluationManager` yalnız `generate_predictions` ve üç `evaluate_*` girişini taşır; durum
+  `manager.state` (`EvaluationState`), yapılandırma `manager.context`
+  (`EvaluationContext.from_config(ExecutionConfig, ...)`). Property/setter yönlendirme ve
+  delegasyonlar kaldırıldı; servisler ortak `_EvaluationService(ctx, state)` tabanından türer.
+  `ModelTrainer` aynı şekilde `training_context`/`training_state` kullanır. `DataManager`
+  yönlendirme property'leri henüz duruyor (davranış riski nedeniyle ertelendi).
+- WF OOS girdileri `EvaluationState.wf_backtest_inputs` içinde tutulur; final holdout artifact
+  sidecar'ı interval kalibrasyonunu buradan üretir.
+- SQLite bağlantıları `src/database/connection.ClosingConnection` ile `with` sonunda kapanır.

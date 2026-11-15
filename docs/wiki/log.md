@@ -1,3 +1,16 @@
+## [2026-11-15] Refactor | Derin denetim Faz 3–4: operasyonel açıklar, nightly, sahte DI
+
+- F3 önbellek tazelik parmak izi + TTL 3600, F14 GUI sabit yol (`fc2e19e`).
+- Gece işi `src/serving/nightly.py`; PoC'ler silindi, araştırma scriptleri `tools/archive/` (`96ce1fc`).
+- Ölü kod temizliği (`6b9ab59`, ~2.800 satır).
+- Sahte DI katmanı kaldırıldı (`d9ec389`): EvaluationManager 1003->134, ModelTrainer 452->274.
+- Bugfix (`26c1e1c`): final holdout interval kalibrasyonu WF girdisini okuyamıyordu, üretimde
+  `interval_calib` hep None idi; artık `EvaluationState.wf_backtest_inputs`.
+- Açık: `enable_signal_execution_calibration` config bayrağı okunmuyor (AttributeError getattr
+  ile yutuluyor, fiilen hep True) — davranış değişikliği olduğu için kullanıcı kararı bekliyor.
+  DataManager property yönlendirmesi ertelendi.
+- Güncellenen sayfalar: `architecture.md`, `e1-owner-forward-epic.md`, `index.md`, arşiv yolları.
+
 ## [2026-11-15] Refactor | Ölü kod temizliği (davranış değişmez)
 
 - Silindi: `src/validation/{cpcv,purged_kfold,rolling_holdout}.py` + config bayrakları

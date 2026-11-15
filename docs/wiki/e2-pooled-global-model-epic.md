@@ -72,7 +72,7 @@ confidence concept is introduced.
 ## Phase Plan
 
 - **Faz 0 — Data/universe audit (blocking). ✅ DONE 2026-06-02.** See findings
-  below. Auditor: `tools/e2_faz0_universe_audit.py` (read-only; writes
+  below. Auditor: `tools/archive/e2_faz0_universe_audit.py` (read-only; writes
   `outputs/e2_faz0_universe_audit.md` + `outputs/e2_faz0_symbol_stats.csv`).
 - **Faz 0.5 — Universe re-pull (freshness/format/universe fix). ✅ DONE
   2026-06-02.** `tools/refetch_universe.py` re-fetches every ticker from yfinance
@@ -107,7 +107,7 @@ confidence concept is introduced.
   = unchanged) wired into `TensorPreparationService.build_target_series` /
   `prepare_tensors` (`y[t]=target(close[t+h])`, `X=features[:-h]`). Tests in
   `tests/test_data_services.py`; full suite green (568). Predictive comparison
-  `tools/e2_faz1_horizon_compare.py` (Ridge+LightGBM, chronological 80/20,
+  `tools/archive/e2_faz1_horizon_compare.py` (Ridge+LightGBM, chronological 80/20,
   EREGL/AKBNK/TUPRS/AEFES/SASA, h∈{1,3,5,10}):
   - Mean Dir_Acc rises h=1 ~50% → h=5 ~52.5% → h=10 ~52% — weekly is modestly
     more predictable than daily, as predicted.
@@ -178,7 +178,7 @@ confidence concept is introduced.
     `target_cs` self-leaking as a feature. Tests:
     `test_target_variants_never_become_features`, IC tests.
   - 6 + 4 tests. Full suite 602 green.
-  - **DECISIVE full-universe run** (`tools/e2_faz35_cs_ic_study.py`,
+  - **DECISIVE full-universe run** (`tools/archive/e2_faz35_cs_ic_study.py`,
     `outputs/e2_faz35_cs_ic_study.md`): **589 symbols, 1.228M rows, 2856 dates,
     378 OOS days, h=5.** ABSOLUTE target → IC +0.032, ICIR 0.525, %IC>0 70%.
     **CROSS-SECTIONAL target → IC +0.083, ICIR 1.243, %IC>0 90%.** ICIR 1.24 is
@@ -198,7 +198,7 @@ confidence concept is introduced.
   Leakage-safe: same-date, all inputs causal (no look-ahead); purge guards the
   target side; NaN→neutral 0. Auto-included as features by `build_pooled_features`
   (numeric, non-`target_*`). 2 tests (8 total in cross_sectional).
-  - **Full-universe 3-variant run** (`tools/e2_faz35_cs_ic_study.py`, boost=400):
+  - **Full-universe 3-variant run** (`tools/archive/e2_faz35_cs_ic_study.py`, boost=400):
     ABSOLUTE IC +0.044 / ICIR 0.718 / %IC>0 74; CROSS-SECTIONAL IC +0.105 /
     ICIR 1.418 / %IC>0 91; **CS+CSFEAT IC +0.099 / ICIR 1.550 / %IC>0 93.4.**
     cs-features mainly cut IC variance (ICIR 1.42→1.55, %positive 91→93) — a more
@@ -224,7 +224,7 @@ confidence concept is introduced.
   rows (vs the current per-symbol `best_models`).
 - **Faz 6 — Stratified segment IC. ✅ DONE 2026-06-03.**
   `src/validation/segment_ic.py` (`symbol_segments`, `segment_cross_sectional_ic`,
-  `attach_segments`) + `tools/e2_faz6_segment_ic.py`. Splits best-config OOS
+  `attach_segments`) + `tools/archive/e2_faz6_segment_ic.py`. Splits best-config OOS
   predictions into liquidity / volatility quintiles + GICS sector and computes
   per-segment daily cross-sectional IC. 5 tests. Reproduced overall ICIR 1.550
   exactly (determinism holds across this run too).
@@ -292,7 +292,7 @@ confidence concept is introduced.
 
 ## Faz 7 — Confidence-stratified ABSOLUTE direction (2026-06-03)
 
-`tools/e2_faz7_confidence_diracc.py`. Question: does the serving confidence
+`tools/archive/e2_faz7_confidence_diracc.py`. Question: does the serving confidence
 label track real absolute up/down accuracy? Full-universe OOS (CS+CSFEAT, h=5,
 589 syms, 217,444 rows, ICIR 1.55). Absolute target (`target`, log-return)
 joined back; per (fold,date) `y_pred` quintile; per-row composite_icir +
@@ -391,13 +391,13 @@ kıyas için LightGBM baseline her koşuda yeniden hesaplandı (data/ CSV'leri
 tazelendiği için tarihsel 1.55 ile kıyas haksız olurdu).
 
 Araçlar (tools/, gitignore whitelist'li, src'ye/teste dokunmaz):
-- `tools/e2_poc_deep_ic.py` — `TorchMLPModel` (embedding'li feedforward MLP,
+- `e2_poc_deep_ic.py` (silindi, git geçmişinde) — `TorchMLPModel` (embedding'li feedforward MLP,
   sklearn-vari fit/predict → harness uyumlu). Kategorik `symbol_id`/`sector_code`
   öğrenilen embedding (LGB native categorical'a adil karşılık); sayısal feature
   train-only standardize (leakage yok, fit içinde). LGB vs DEEP-MLP tek koşu.
-- `tools/e2_poc_deep_seedvar.py` — MLP'yi N seed koşar, ICIR dağılımı vs
+- `e2_poc_deep_seedvar.py` (silindi, git geçmişinde) — MLP'yi N seed koşar, ICIR dağılımı vs
   deterministik LGB; kazanç gerçek mi gürültü mü verdict.
-- `tools/e2_poc_deep_ensemble.py` — LGB pred + çok-seed MLP avg pred → tarih-içi
+- `e2_poc_deep_ensemble.py` (silindi, git geçmişinde) — LGB pred + çok-seed MLP avg pred → tarih-içi
   pct-rank ağırlıklı blend; 50/50, 30/70, 70/30 kıyas.
 
 Neden MLP, LSTM değil: mevcut feature'lar zaten zamansal özet (lag/momentum/MA).
@@ -469,7 +469,7 @@ göremediği zamansal yapıdan ek cross-sectional sinyal çıkarır mı? Decorre
 bacak = ensemble değeri (bireysel olarak geçmese bile).
 
 Araçlar (tools/, gitignore whitelist'li, src'ye/teste dokunmaz):
-- `tools/e2_poc_deep_lstm.py` — `SeqLSTMModel` (pooled sequence LSTM, GPU). Panel
+- `e2_poc_deep_lstm.py` (silindi, git geçmişinde) — `SeqLSTMModel` (pooled sequence LSTM, GPU). Panel
   `[Date, symbol]` sıralı → sembol filtreleyince date-artan; `build_lookback_index`
   her satır için W-gün geçmiş pencere (global pozisyon) kurar, yetersiz geçmişli
   satır atlanır. Sayısal feature train-only standardize (leakage yok; lookback
@@ -477,7 +477,7 @@ Araçlar (tools/, gitignore whitelist'li, src'ye/teste dokunmaz):
   döngüsü** gerekti: `evaluate_per_symbol` fit/predict'e yalnız satır-bazlı X/y
   geçer, symbol/Date kimliğini siler; LSTM per-symbol pencere ister. LGB de aynı
   döngüde, aynı geçerli-satır evreninde (W history olan satırlar) → birebir adil IC.
-- `tools/e2_poc_deep_ens3.py` — karar kapısı: tek fold döngüsünde LGB + MLP(3-seed)
+- `e2_poc_deep_ens3.py` (silindi, git geçmişinde) — karar kapısı: tek fold döngüsünde LGB + MLP(3-seed)
   + LSTM(2-seed), aynı satır evreni, within-date pct-rank blend; 2-bacak vs çeşitli
   3-bacak kombolar.
 
@@ -551,7 +551,7 @@ Kapsam: backend-only. Kod: `src/serving/peer_xai.py` (yeni),
 
 ## Faz 0 Findings (2026-06-02)
 
-Audit of all 592 stock CSVs in `data/` via `tools/e2_faz0_universe_audit.py`.
+Audit of all 592 stock CSVs in `data/` via `tools/archive/e2_faz0_universe_audit.py`.
 
 - **Scale confirmed:** 592 symbols, **1,097,481** pooled (symbol, date) rows.
   History buckets: `<1y` 22, `1-2y` 49, `2-5y` 136, `5-8y` 22, `8y+` **363**.

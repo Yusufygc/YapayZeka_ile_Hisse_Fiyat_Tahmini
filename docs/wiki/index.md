@@ -2,7 +2,7 @@
 title: Wiki Index
 type: index
 status: active
-last_updated: 2026-11-10
+last_updated: 2026-11-15
 owner: llm
 ---
 
@@ -116,6 +116,14 @@ linked pages below.
   güncel piyasa gününe yapılır, holdout/örtüşmesiz/tradable IC raporlanır, segment kovaları
   nedensel, `/health.serving_pool` tazelik gösterir. Ayrıntı:
   [E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md) (Kol-B Denetim bölümü).
+
+- **Derin denetim (2026-11-15, dal `fix/deep-audit-2026-11`):** rapor
+  `../analizler/derin_denetim_2026-11-15.md`. P0 sızıntılar (Optuna paylaşımı, WF ensemble
+  in-sample ağırlık, makro yayın gecikmesi, ABD aynı gün verisi, holdout kapısı) ve P1 ölçüm
+  hataları (Sortino, DSR, rf, Dir_Acc, Composite, embargo, maliyet, interval kalibrasyonu,
+  Kol-B NW/örtüşmesiz IC) düzeltildi; seçim Diebold–Mariano kapılı; varsayılan adaylar
+  XGBoost + Ridge Return + LightGBM Return; Python 3.13; ~2.800 satır ölü kod silindi.
+  **Mevcut DB skorları eski semantikle üretildi, yeniden koşu gerekir.**
 
 ## Navigation Rules for Agents
 

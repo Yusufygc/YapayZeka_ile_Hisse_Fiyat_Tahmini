@@ -2,13 +2,19 @@
 title: E1 Owner-Forward Removal Epic
 type: plan
 status: done
-last_updated: 2026-06-01
+last_updated: 2026-11-15
 owner: llm
 source_count: 9
 branch: refactor/e1-owner-forward-di
 ---
 
 # E1 — Owner-Forward Kaldırma Epiği (Tam DI'ya Geçiş)
+
+> **Güncelleme (2026-11-15):** E1 mixin'leri servis adına taşımış ama yönlendirme
+> katmanını (EvaluationManager'da ~56 property/setter çifti, ~23 delegasyon) korumuştu. Derin
+> denetim Faz 4b (`d9ec389`) bu katmanı kaldırdı: EvaluationManager 1003 -> 134 satır,
+> ModelTrainer 452 -> 274 satır. `tests/test_owner_forward_contract.py` artık alias değil
+> davranış kilitler. Aşağıdaki içerik tarihsel plandır.
 
 Bu sayfa, [Staged Refactor Plan](refactor-plan.md)'in **Tier 3 / E1** kalan
 kısmının kendi odaklı epiğidir. Tier 3'te yapılan güvenli dilim (fail-loud
