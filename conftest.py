@@ -87,11 +87,6 @@ def _stub_ta() -> None:
     setattr(ta_module, "add_all_ta_features", MagicMock(return_value=MagicMock()))
 
 
-def _stub_xgboost() -> None:
-    module = _stub("xgboost")
-    setattr(module, "XGBRegressor", MagicMock)
-
-
 def _stub_lightgbm() -> None:
     module = _stub("lightgbm")
     setattr(module, "LGBMRegressor", MagicMock)
@@ -101,8 +96,7 @@ def _stub_sklearn() -> None:
     """Stub sklearn for minimal test envs.
 
     Yalnizca preprocessing alt-modulu MagicMock olarak yerlestirilir
-    (preprocessor.py StandardScaler/RobustScaler vb. kullanir; testlerde
-    cagrilmaz). sklearn.metrics BILEREK stub edilmez — financial_metrics
+    (StandardScaler/RobustScaler vb.; testlerde cagrilmaz). sklearn.metrics BILEREK stub edilmez — financial_metrics
     icindeki try/except yedek implementasyona dusebilsin.
     """
     module = _stub("sklearn")
@@ -112,21 +106,11 @@ def _stub_sklearn() -> None:
         setattr(preprocessing, symbol, MagicMock)
 
 
-def _stub_optuna() -> None:
-    module = _stub("optuna")
-    setattr(module, "create_study", MagicMock())
-    setattr(module, "Trial", MagicMock)
-    _stub("optuna.integration")
-    _stub("optuna.samplers")
-
-
 def _install_optional_dependency_stubs() -> None:
     optional_modules = {
         "yfinance": lambda: _stub("yfinance"),
-        "xgboost": _stub_xgboost,
         "ta": _stub_ta,
         "lightgbm": _stub_lightgbm,
-        "optuna": _stub_optuna,
         # Sprint 4 (2026-05-25): joblib eklenmesi -> data_services/preprocessor
         # ic chain testlerde import olabilsin (Sprint 0+1+2+3 pattern uyumu).
         "joblib": lambda: _stub("joblib"),

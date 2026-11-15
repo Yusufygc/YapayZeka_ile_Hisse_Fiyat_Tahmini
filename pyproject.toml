@@ -30,8 +30,6 @@ strict_optional = true
 
 [[tool.mypy.overrides]]
 module = [
-    "optuna.*",
-    "xgboost.*",
     "lightgbm.*",
     "torch.*",
     "sklearn.*",
