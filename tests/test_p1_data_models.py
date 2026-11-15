@@ -1,150 +1,17 @@
 # -*- coding: utf-8 -*-
-"""P1 derin denetim (2026-11) — veri + model katmani duzeltmeleri.
+"""P1 derin denetim (2026-11) — veri katmani duzeltmeleri.
 
-1. Ham OHLCV seviyeleri tek-sembol modellerinin X'ine girmez.
-2. WF embargo varsayilani `target_horizon + 5`; explicit embargo < h reddedilir;
-   embargo yalnizca etiket ufkuna baglidir.
-3. ExecutionConfig maliyet varsayilanlari BIST gercegine hizali (sifir degil).
-4. DataUpdater: overlap'li indirme; split/temettu sonrasi tam yeniden indirme.
-5. data_loader: Close=Adj_Close iken O/H/L ayni faktorle olceklenir.
-6. LightGBM bagging gercekten aktif (subsample_freq).
-7. (kaldirildi: LSTM Lite silindi)
-8. Varsayilan uretim adaylari: XGBoost + Ridge Return + LightGBM Return.
+1. DataUpdater: overlap'li indirme; split/temettu sonrasi tam yeniden indirme.
+2. data_loader: Close=Adj_Close iken O/H/L ayni faktorle olceklenir.
 
 Ag erisimi yok: indirici sahte provider ile enjekte edilir.
 """
 from __future__ import annotations
 
-import inspect
-import os
 from datetime import datetime
 
 import numpy as np
 import pandas as pd
-import pytest
-
-from src.pipeline.config import DataConfig, ExecutionConfig, ValidationConfig
-from src.pipeline.data_manager import DataManager
-from src.utils.data_splitter import TimeSeriesSplitter, _resolve_wf_embargo_size
-
-
-# --------------------------------------------------------------------------- #
-#  Yardimcilar                                                                 #
-# --------------------------------------------------------------------------- #
-def _ohlcv_frame(n: int = 60) -> pd.DataFrame:
-    dates = pd.date_range("2022-01-03", periods=n, freq="B")
-    close = 100.0 + np.cumsum(np.sin(np.arange(n) / 3.0))
-    return pd.DataFrame({
-        "Date": dates,
-        "Open": close * 0.99,
-        "High": close * 1.01,
-        "Low": close * 0.98,
-        "Close": close,
-        "Adj_Close": close,
-        "Volume": np.linspace(1e6, 2e6, n),
-        "Feat_A": np.sin(np.arange(n) / 5.0),
-        "Feat_B": np.cos(np.arange(n) / 7.0),
-    })
-
-
-def _manager(tmp_path, *, val_cfg=None, target_horizon=1) -> DataManager:
-    return DataManager(
-        data_cfg=DataConfig(
-            data_file=os.path.join(str(tmp_path), "TEST.csv"),
-            use_macro=False,
-            prune_correlated_features=False,
-            target_horizon=target_horizon,
-        ),
-        val_cfg=val_cfg or ValidationConfig(),
-        models_dir=os.path.join(str(tmp_path), "models"),
-    )
-
-
-# --------------------------------------------------------------------------- #
-#  1) Ham OHLCV seviyeleri X'te yok                                            #
-# --------------------------------------------------------------------------- #
-RAW_LEVELS = {"Open", "High", "Low", "Volume", "Adj_Close", "Close", "Date"}
-
-
-def test_prepare_tensors_excludes_raw_ohlcv_levels(tmp_path):
-    manager = _manager(tmp_path)
-    df = _ohlcv_frame(40)
-
-    tensors = manager.prepare_tensors(df.iloc[:25].copy(), df.iloc[25:].copy())
-
-    assert tensors["features"] == ["Feat_A", "Feat_B"]
-    assert not RAW_LEVELS & set(tensors["features"])
-    assert tensors["X_train"].shape[1] == 2
-
-
-def test_model_feature_names_drop_raw_levels():
-    from src.pipeline.data_services import model_feature_names
-
-    names = ["Open", "High", "Low", "Volume", "Adj_Close", "Adj Close", "RSI", "Log_Return"]
-    assert model_feature_names(names) == ["RSI", "Log_Return"]
-
-
-# --------------------------------------------------------------------------- #
-#  2) Embargo                                                                  #
-# --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("h", [1, 5, 10])
-def test_default_embargo_is_horizon_plus_five(h):
-    assert _resolve_wf_embargo_size(None, target_horizon=h) == h + 5
-    assert _resolve_wf_embargo_size(0, target_horizon=h) == h + 5
-
-
-def test_default_embargo_no_longer_200():
-    assert _resolve_wf_embargo_size(None) == 6  # h=1 -> 6, SMA200 tamponu degil
-
-
-def test_explicit_embargo_below_horizon_raises():
-    with pytest.raises(ValueError):
-        _resolve_wf_embargo_size(3, target_horizon=5)
-    assert _resolve_wf_embargo_size(5, target_horizon=5) == 5
-    assert _resolve_wf_embargo_size(50, target_horizon=5) == 50
-
-
-def test_split_data_uses_horizon_aware_default_embargo(tmp_path):
-    val_cfg = ValidationConfig(
-        wf_n_splits=2, wf_min_train_size=40, wf_test_size=10,
-        wf_max_train_size=None, wf_embargo_size=None, final_holdout_size=0,
-    )
-    manager = _manager(tmp_path, val_cfg=val_cfg, target_horizon=5)
-    manager.df = _ohlcv_frame(150)
-
-    manager.split_data("walk_forward")
-
-    assert manager.validation_config["wf_embargo_size"] == 10
-    assert all(s["embargo_size"] == 10 for s in manager.wf_splits)
-    assert all(len(s["embargo_context"]) == 10 for s in manager.wf_splits)
-
-
-def test_split_data_rejects_explicit_embargo_below_horizon(tmp_path):
-    val_cfg = ValidationConfig(
-        wf_n_splits=2, wf_min_train_size=40, wf_test_size=10,
-        wf_max_train_size=None, wf_embargo_size=3, final_holdout_size=0,
-    )
-    # DataManager kurulumda embargoyu gercek horizon ile cozer -> erken reddeder.
-    with pytest.raises(ValueError, match="embargo"):
-        manager = _manager(tmp_path, val_cfg=val_cfg, target_horizon=5)
-        manager.df = _ohlcv_frame(150)
-        manager.split_data("walk_forward")
-
-
-# --------------------------------------------------------------------------- #
-#  3) Maliyet varsayilanlari                                                   #
-# --------------------------------------------------------------------------- #
-def test_execution_config_cost_defaults_are_bist_realistic():
-    from src.forecasting.bist_rules import BistMarketRules
-
-    sig = inspect.signature(BistMarketRules.trend_threshold)
-    comm = sig.parameters["commission_bps"].default
-    slip = sig.parameters["slippage_bps"].default
-    cfg = ExecutionConfig()
-    # BSMV (%5, komisyon uzerinden) komisyona katlanir: 10 * 1.05
-    assert cfg.commission_bps == pytest.approx(comm * 1.05)
-    assert cfg.slippage_bps == pytest.approx(slip)
-    assert cfg.commission_bps > 0 and cfg.slippage_bps > 0
 
 
 # --------------------------------------------------------------------------- #
@@ -269,27 +136,3 @@ def test_loader_scales_ohl_with_adj_close_factor(tmp_path):
     np.testing.assert_allclose(out["Volume"], 1000.0)  # hacim olceklenmez
     # tutarlilik: Low <= Close <= High korunur
     assert (out["Low"] <= out["Close"]).all() and (out["Close"] <= out["High"]).all()
-
-
-# --------------------------------------------------------------------------- #
-#  6) LightGBM bagging                                                         #
-# --------------------------------------------------------------------------- #
-def test_lightgbm_bagging_is_active():
-    from src.models.gradient_boosting_model import LightGBMReturnModel
-
-    model = LightGBMReturnModel()
-    assert model.params["subsample"] < 1.0
-    assert model.params.get("subsample_freq", 0) >= 1
-    lgb_model = model._build_model()
-    assert lgb_model.get_params()["subsample_freq"] >= 1
-
-
-# --------------------------------------------------------------------------- #
-#  8) Varsayilan uretim adaylari                                               #
-# --------------------------------------------------------------------------- #
-def test_default_candidate_set_is_production_safe():
-    from src.pipeline.model_scope import default_candidate_models
-
-    assert set(default_candidate_models()) == {"XGBoost", "Ridge Return", "LightGBM Return"}
-    for removed in ("LSTM", "DLinear", "NLinear", "Prophet", "ARIMA"):
-        assert removed not in default_candidate_models()

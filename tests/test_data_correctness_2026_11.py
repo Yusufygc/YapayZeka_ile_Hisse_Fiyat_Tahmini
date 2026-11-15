@@ -12,7 +12,6 @@ from src.data.dates import parse_dates
 from src.data.freshness import check_freshness, stale_symbols
 from src.data.ohlcv_clean import read_ohlcv_csv
 from src.data.pooled_loader import PooledLoaderConfig, PooledPanelLoader
-from src.database.repositories.forecast_resolution import ForecastResolutionRepository
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_ROOT, "tools"))
@@ -52,27 +51,6 @@ def test_parse_dates_timestamp_passthrough():
 def test_parse_dates_errors_raise():
     with pytest.raises(ValueError):
         parse_dates(["not a date"], errors="raise")
-
-
-# ------------------------------------------------------- forecast_resolution CSV
-def test_forecast_resolution_csv_iso_dates_not_swapped(tmp_path):
-    csv_path = tmp_path / "X.csv"
-    csv_path.write_text("Date,Close\n2024-01-02,10.5\n2024-03-04,11.0\n", encoding="utf-8")
-    repo = ForecastResolutionRepository(db=object())
-    captured = {}
-    repo.resolve_forecasts = lambda sym, actuals: captured.update(actuals) or len(actuals)
-    repo.resolve_forecasts_from_csv("X", str(csv_path))
-    assert captured == {"2024-01-02": 10.5, "2024-03-04": 11.0}
-
-
-def test_forecast_resolution_csv_dmy_dates_unchanged(tmp_path):
-    csv_path = tmp_path / "X.csv"
-    csv_path.write_text("Tarih,Kapanış\n02/01/2024,10.5\n04/03/2024,11.0\n", encoding="utf-8")
-    repo = ForecastResolutionRepository(db=object())
-    captured = {}
-    repo.resolve_forecasts = lambda sym, actuals: captured.update(actuals) or len(actuals)
-    repo.resolve_forecasts_from_csv("X", str(csv_path))
-    assert captured == {"2024-01-02": 10.5, "2024-03-04": 11.0}
 
 
 # ----------------------------------------------------------------- pooled loader

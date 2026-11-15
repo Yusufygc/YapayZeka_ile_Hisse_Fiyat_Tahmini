@@ -1,15 +1,4 @@
-/* Custom Component Styles: Log Viewer, Status Cards, and Indicators */
-
-/* Log Viewer Styles */
-QPlainTextEdit#log_viewer {
-    background-color: #020617; /* Very dark slate */
-    color: #e2e8f0; /* Light gray */
-    font-family: "Consolas", "Courier New", monospace;
-    font-size: 12px;
-    border: 1px solid #334155;
-    border-radius: 6px;
-    padding: 8px;
-}
+/* Custom Component Styles: Status Cards, and Indicators */
 
 /* Info and Metric Cards */
 QFrame#status_card {

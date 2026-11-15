@@ -18,8 +18,11 @@ import pytest
 
 from src.data.panel_columns import PIPELINE_RAW_COLS
 from src.features.feature_pipeline import FeaturePipeline
-from src.pipeline.config import DataConfig
-from src.pipeline.data_services import model_feature_names
+
+
+def model_feature_names(columns) -> list[str]:
+    """Kolon listesinden model girdisi olacak ozellikler (ham OHLCV/yardimci haric)."""
+    return [c for c in columns if c not in PIPELINE_RAW_COLS and c != "Adj_Close"]
 
 # stationary_features + makro var + takvim acik -> model ozellikleri
 CURATED_STATIONARY_FEATURES = [
@@ -138,7 +141,6 @@ def test_default_lag_feature_count_is_one_everywhere(tmp_path):
     from src.features.feature_cache import FeatureCache
 
     assert FeaturePipeline().lag_feature_count == 1
-    assert DataConfig(data_file="x.csv").lag_feature_count == 1
 
     # lag_feature_count verilmeyen config, cache anahtarinda 1 olarak sayilir.
     cache = FeatureCache(cache_dir=str(tmp_path / "cache"))
@@ -150,106 +152,3 @@ def test_default_lag_feature_count_is_one_everywhere(tmp_path):
     explicit_five = SimpleNamespace(**base, lag_feature_count=5)
     assert cache.make_key(str(data_file), implicit) == cache.make_key(str(data_file), explicit_one)
     assert cache.make_key(str(data_file), implicit) != cache.make_key(str(data_file), explicit_five)
-
-
-# --------------------------------------------------------------------------- #
-#  Artifact ozellik listesi uyusmazligi -> acik hata (migrasyon yok)           #
-# --------------------------------------------------------------------------- #
-class _ScalerStub:
-    def __init__(self, n):
-        self.n_features_in_ = n
-
-
-def test_old_artifact_feature_list_fails_loudly():
-    from src.forecasting.artifacts import ForecastArtifactError
-    from src.forecasting.workflows import ProductionTrainingWorkflow
-
-    old_features = ["Return", "EMA_7_rel", "VIX_Level", "Rate_Level", "RSI_14"]
-    with pytest.raises(ForecastArtifactError) as excinfo:
-        ProductionTrainingWorkflow._validate_artifact_features(
-            model_name="XGBoost",
-            features=old_features,
-            frame_columns=["Date", "Close", *CURATED_STATIONARY_FEATURES],
-            current_features=CURATED_STATIONARY_FEATURES,
-            scaler_X=_ScalerStub(len(old_features)),
-        )
-    msg = str(excinfo.value)
-    assert "feature mismatch" in msg
-    assert "EMA_7_rel" in msg and "VIX_Level" in msg
-    assert "yeniden egitin" in msg
-
-
-def test_scaler_feature_count_mismatch_fails_loudly():
-    from src.forecasting.artifacts import ForecastArtifactError
-    from src.forecasting.workflows import ProductionTrainingWorkflow
-
-    # Metadata listesi mevcut setle ayni isimde ama scaler baska sayida ozellikle egitilmis
-    with pytest.raises(ForecastArtifactError, match="scaler"):
-        ProductionTrainingWorkflow._validate_artifact_features(
-            model_name="XGBoost",
-            features=CURATED_STATIONARY_FEATURES,
-            frame_columns=["Date", "Close", *CURATED_STATIONARY_FEATURES],
-            current_features=CURATED_STATIONARY_FEATURES,
-            scaler_X=_ScalerStub(63),
-        )
-
-
-def test_matching_artifact_feature_list_passes():
-    from src.forecasting.workflows import ProductionTrainingWorkflow
-
-    ProductionTrainingWorkflow._validate_artifact_features(
-        model_name="XGBoost",
-        features=CURATED_STATIONARY_FEATURES,
-        frame_columns=["Date", "Close", *CURATED_STATIONARY_FEATURES, "Market_Regime_SMA200"],
-        current_features=CURATED_STATIONARY_FEATURES,
-        scaler_X=_ScalerStub(len(CURATED_STATIONARY_FEATURES)),
-    )
-    # n_features_in_ olmayan scaler (ozel/eski): yalniz isim kontrolu
-    ProductionTrainingWorkflow._validate_artifact_features(
-        model_name="XGBoost",
-        features=CURATED_STATIONARY_FEATURES,
-        frame_columns=CURATED_STATIONARY_FEATURES,
-        current_features=CURATED_STATIONARY_FEATURES,
-        scaler_X=object(),
-    )
-
-
-# --------------------------------------------------------------------------- #
-#  Recursive satir: LogRet_Lag_1 onceki adimin log-getirisi                    #
-# --------------------------------------------------------------------------- #
-def test_recursive_row_lag1_is_previous_step_log_return_not_new_step():
-    from src.forecasting.workflows import ForecastPointGenerator
-
-    frame = pd.DataFrame({
-        "Date": pd.bdate_range("2026-01-01", periods=3),
-        "Close": [100.0, 102.0, 101.0],
-        "Return": [0.0, 0.02, -1 / 102.0],
-        "LogRet_Lag_1": [0.0, 0.0, float(np.log(102.0 / 100.0))],
-    })
-    out = ForecastPointGenerator._append_recursive_row(
-        frame=frame,
-        target_date=pd.Timestamp("2026-01-06"),
-        bounded_close=110.0,
-        previous_close=101.0,
-    )
-    new = out.iloc[-1]
-    assert new["Return"] == pytest.approx(110.0 / 101.0 - 1.0)
-    # lag-1 = son gercek adimin (101/102) log-getirisi; yeni adimin (110/101) DEGIL
-    assert new["LogRet_Lag_1"] == pytest.approx(np.log(101.0 / 102.0))
-    assert new["LogRet_Lag_1"] != pytest.approx(np.log(110.0 / 101.0))
-
-
-def test_recursive_row_lag_k_shifts_previous_lags():
-    from src.forecasting.workflows import ForecastPointGenerator
-
-    frame = pd.DataFrame({
-        "Date": pd.bdate_range("2026-01-01", periods=3),
-        "Close": [100.0, 102.0, 101.0],
-        "LogRet_Lag_1": [0.0, 0.0, 0.0196],
-        "LogRet_Lag_2": [0.0, 0.0, 0.0],
-    })
-    out = ForecastPointGenerator._append_recursive_row(
-        frame=frame, target_date=pd.Timestamp("2026-01-06"),
-        bounded_close=103.0, previous_close=101.0,
-    )
-    assert out["LogRet_Lag_2"].iloc[-1] == pytest.approx(0.0196)

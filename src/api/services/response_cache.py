@@ -4,7 +4,7 @@ Sprint 9 (2026-05-26) A9.2 — Analysis API response cache.
 
 In-memory TTL cache by `symbol` (horizon implicit — default per pipeline).
 Default TTL 1 saat. Her girdi bir "tazelik parmak izi" (fingerprint) tasir:
-nightly batch best model / forecast run / serving-pool run'ini degistirirse
+nightly batch serving-pool run'ini ya da piyasa verisi CSV'sini degistirirse
 parmak izi uyusmaz ve girdi cache-miss sayilir (24 saat eski yanit sorunu).
 Ayrica manuel `invalidate(symbol)` desteklenir.
 """
@@ -15,7 +15,7 @@ import os
 import sqlite3
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -52,46 +52,43 @@ def _readonly_fetch_one(db_path: Optional[str], sql: str, params: Tuple = ()) ->
     return None if row is None else tuple(row)
 
 
-def default_stock_db_path() -> str:
-    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-    return os.path.join(root, "data", "stock_models.db")
-
-
 def default_serving_db_path() -> str:
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
     return os.path.join(root, "data", "serving_pool.db")
 
 
+def default_data_dir() -> str:
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    return os.path.join(root, "data")
+
+
 def compute_freshness_fingerprint(
     symbol: str,
-    stock_db_path: Optional[str] = None,
     serving_db_path: Optional[str] = None,
+    data_dir: Optional[str] = None,
+    today: Optional[date] = None,
 ) -> Tuple:
-    """Sembol icin ucuz tazelik parmak izi (3 kucuk salt-okunur sorgu).
+    """Sembol icin ucuz tazelik parmak izi.
 
-    (best_models.experiment_id + updated_at,
-     son forecast_runs.id + run_at,
-     serving_pool son global_model_runs.run_id).
-    Kaynak DB/tablo yoksa ilgili bilesen None.
+    (serving_pool son global_model_runs.run_id,
+     sembol piyasa CSV'sinin (mtime_ns, boyut),
+     takvim gunu).  Kaynak yoksa ilgili bilesen None. Takvim gunu, bayatlik
+    durumunun gun donumunde yeniden hesaplanmasini saglar.
     """
     sym = str(symbol).upper().strip()
-    stock_db = stock_db_path if stock_db_path is not None else default_stock_db_path()
     serving_db = serving_db_path if serving_db_path is not None else default_serving_db_path()
-    best = _readonly_fetch_one(
-        stock_db,
-        "SELECT experiment_id, updated_at FROM best_models WHERE stock_symbol = ?",
-        (sym,),
-    )
-    forecast = _readonly_fetch_one(
-        stock_db,
-        "SELECT id, run_at FROM forecast_runs WHERE stock_symbol = ? "
-        "ORDER BY run_at DESC, id DESC LIMIT 1",
-        (sym,),
-    )
+    base = data_dir if data_dir is not None else default_data_dir()
     pool = _readonly_fetch_one(
         serving_db, "SELECT run_id FROM global_model_runs ORDER BY run_id DESC LIMIT 1"
     )
-    return (best, forecast, None if pool is None else pool[0])
+    csv_sig: Optional[Tuple[int, int]] = None
+    try:
+        st = os.stat(os.path.join(base, f"{sym}.csv"))
+        csv_sig = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        csv_sig = None
+    day = (today or datetime.now(tz=timezone.utc).date()).isoformat()
+    return (None if pool is None else pool[0], csv_sig, day)
 
 
 class ResponseCache:
