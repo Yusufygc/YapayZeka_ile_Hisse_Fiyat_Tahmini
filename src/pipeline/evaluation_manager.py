@@ -118,7 +118,7 @@ class EvaluationManager:
         # Interval kalibrasyonu (final holdout artifact sidecar'i) walk-forward
         # target residual'larini kullanir; owner'a stash et ki FinalHoldout workflow
         # (_build_interval_calibration) okuyabilsin.
-        self.wf_backtest_inputs = wf_backtest_inputs or {}
+        self.state.wf_backtest_inputs = wf_backtest_inputs or {}
         self.state.wf_xai_records = wf_xai_records or {}
         return self.walk_forward_workflow.run(
             wf_results,

@@ -144,6 +144,8 @@ class EvaluationState:
     latest_backtest_metrics: Dict[str, Any] = field(default_factory=dict)
     latest_model_metrics: Dict[str, Any] = field(default_factory=dict)
     wf_xai_records: Dict[str, Any] = field(default_factory=dict)
+    # Final holdout artifact sidecar'i interval kalibrasyonunu WF OOS residual'larindan uretir.
+    wf_backtest_inputs: Dict[str, Any] = field(default_factory=dict)
     ensemble_weights: Dict[str, Dict[str, float]] = field(default_factory=dict)
     ensemble_weight_scope: Dict[str, str] = field(default_factory=dict)
     # Hizalanmis tahmin/gerçek diziler (None = henüz üretilmedi).

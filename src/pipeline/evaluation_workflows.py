@@ -60,7 +60,11 @@ def _build_interval_calibration(owner, model_name: str) -> dict | None:
     birlikte hesaplanır; aktif üreteç top-level ``method`` ile belirlenir (B2).
     WF girdisi yoksa None (interval atlanır, geriye uyumlu).
     """
-    inputs = getattr(owner, "wf_backtest_inputs", {}) or {}
+    # Workflow owner WF girdisini kendisi tutmaz; paylasilan EvaluationState'ten okunur.
+    state = getattr(owner, "state", None)
+    inputs = (getattr(state, "wf_backtest_inputs", None) if state is not None else None) or getattr(
+        owner, "wf_backtest_inputs", {}
+    ) or {}
     entry = inputs.get(model_name)
     if not entry:
         return None
