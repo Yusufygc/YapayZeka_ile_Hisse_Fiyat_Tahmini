@@ -33,12 +33,40 @@ artifact manifests so a "train all models" run can be reviewed model by model
 without launching separate manual runs. The forecast-serving contract still uses
 the canonical model paths under `models/` and their sidecars.
 
-After a successful run, `_sync_latest_output()` copies the run directory to
-`outputs/{SYMBOL}/latest/`. This is a convenience copy only; run-level analysis
-must read `outputs/{SYMBOL}/runs/{RUN_ID}` as the source of truth. The sync step
-copies into a temporary `latest.__tmp__{RUN_ID}` directory first, then replaces
-`latest/` under a symbol-local `.latest_sync.lock` file so nearby runs do not
-delete the target while another run is copying into it.
+After a successful run, `_sync_latest_output()` (-> `src/utils/output_paths.py::sync_latest_output`)
+refreshes `outputs/{SYMBOL}/latest/` as a LIGHTWEIGHT view (2026-11-15): only small
+report files (`.json/.csv/.png/.md/.txt/.html`, <= 5 MB) are copied, and model
+artifacts (`.pkl`, `.keras`, ...) are NOT duplicated. `latest/LATEST_RUN.json`
+(`{run_id, path: "runs/{RUN_ID}", created_at}`) points to the real run. Readers that
+need a model/artifact from `latest/` use
+`resolve_latest_artifact(symbol_root, "models/x.pkl")` (checks `latest/` first, then
+the pointer's run dir; rejects `..`/absolute names). Run-level analysis must still
+read `outputs/{SYMBOL}/runs/{RUN_ID}` as the source of truth. The sync step builds a
+temporary `latest.__tmp__{RUN_ID}` directory first, then replaces `latest/` under a
+symbol-local `.latest_sync.lock` so nearby runs do not delete the target while
+another run is writing into it. Only known `latest/` reader in `src/` is
+`src/xai/product_summary.py` (small xai CSVs; still copied, run-dir candidates
+are tried first).
+
+### Model compression, run manifest status, retention (2026-11-15)
+
+- Every `joblib.dump` of a model/scaler (`src/models/*`, `src/forecasting/artifacts.py`)
+  uses `compress=3` (RandomForest ~50 MB -> ~7 MB). `joblib.load` reads both
+  compressed and legacy uncompressed files; Keras saves are unchanged.
+- `run_manifest.json` is written at run START with `status="running"` and
+  `started_at`, and rewritten at the end as `completed` (plus `finished_at`), or
+  `failed`/`interrupted` with `error{type,message}` when a Python exception /
+  Ctrl-C escapes `run_all`. A hard kill/crash leaves `status="running"`. A failed
+  run never touches `latest/`.
+- `tools/prune_outputs.py` (logic in `src/utils/output_retention.py`): per symbol keeps
+  the N newest runs (`--keep`, default 5), runs referenced by SQLite
+  `best_models`/`experiments.model_path` (matched by the `runs/{RUN_ID}` segment,
+  Windows or POSIX separators; DB opened read-only), the `LATEST_RUN.json` run, and
+  recent `running` runs (24 h). Default is dry-run; `--apply` deletes.
+  `--slim-latest` converts legacy full-copy `latest/` dirs to the pointer layout,
+  `--compress-existing` rewrites uncompressed `.pkl` >= 1 MB with `compress=3`
+  (reload + `joblib.hash` equality check, atomic `os.replace`), `--clean-tmp`
+  removes `.codex_tmp`.
 
 As of the 2026-06-14 XAI audit, `xai/` also carries machine-readable run
 metadata:
@@ -153,6 +181,18 @@ holdout records `status=success` and the selected model. If final-holdout
 evaluation fails, the manifest records `status=failed`, `model_name`,
 `error_type`, and `error` so the failure is visible after the warning scrolls
 past in the console.
+
+## Persistence Hardening (2026-11)
+
+- **Önbellekli DB**: `src/database/stock_model_db.py::get_db(path)` yol başına tek, thread-safe `StockModelDB` döner; API (`main._get_db`, `AnalysisService._get_db`) bunu kullanır. Şema/migrasyon/`best_models` yeniden inşası süreçte yol başına bir kez çalışır (`StockModelDB.ensure_schema(force=False)`; DB dosya kimliği değişirse yeniden kurulur). DDL sabitleri `src/database/schema_ddl.py`.
+- **Pragma**: `src/database/connection.py::open_db` her bağlantıda `busy_timeout=5000`, `foreign_keys=ON` ve WAL değilse bir kez `journal_mode=WAL` ayarlar. `StockModelDB`, `PeerStore` ve GUI `DBHelper` bunu kullanır.
+- **Atomiklik**: `log_experiment` deney satırı + `best_models` güncellemesini tek transaction'da yazar (hata -> ikisi de geri alınır). `PeerStore.write_run(meta, scored)` run başlığı + peer skorlarını tek transaction'da yazar (`insert_run`/`insert_peer_scores` opsiyonel `conn=` alır).
+- **forecast_points upsert**: yeniden kayıt çözümlenmiş kolonları (`actual_close`, `actual_return`, `abs_error`, `direction_correct`, `resolved_at`) artık silmez.
+- **resolve_forecasts**: sembolün tüm noktaları tek sorguda çekilir (N+1 yok), zaten çözülmüş noktalar atlanır, accuracy özeti yalnızca değişen run'lar için yenilenir; dönüş değeri YENİ çözülen nokta sayısıdır.
+- **forecast_runs.status**: `pending` = "tahmin üretildi, gerçekleşme bekleniyor"; hiçbir yazıcı `completed` yazmaz. GUI (`DBHelper.get_forecasts_by_symbol`) `status IN ('pending','completed')` okur.
+- **Taşınabilir model yolu**: `src/database/paths.py` (`to_storable_path`, `resolve_model_path`, `migrate_stored_path`). `experiments/best_models.model_path` proje köküne göreceli (`outputs/...`, `/` ayraçlı) yazılır; okurken (`get_best_model`, `get_experiments`, workflows, analysis_service, xai product_summary) proje köküne çözülür. Başka makineden kalan mutlak yol yerelde yoksa son `outputs` segmenti üzerinden yerel outputs köküne yeniden eşlenir. `SchemaRepository.migrate_model_paths` idempotent migrasyonu mutlak `.../outputs/...` yollarını göreceliye çevirir (bu makinede var olan, proje dışı mutlak yollara dokunmaz).
+- `compute_psi_30d` (analysis_service çağırır) artık ortak `src/data/ohlcv_clean.clean_ohlcv_csv` ile okur; `Tarih/Kapanış` başlıkları eşlenir. Önceden hep `missing_required_columns` dönüyor, PSI kapısı fiilen kapalıydı. Açıldıktan sonra ilk 200 sembolde dağılım: major_drift 86, moderate 66, stable 48 — `major_drift` güven etiketini `low` yapar (yanıt reddedilmez). Eşik/bin kalibrasyonu (30 gün, 3 bin) gözden geçirilmeli (açık karar).
+- Test: `tests/test_persistence_fixes_2026_11.py`.
 
 ## Analysis Refresh Jobs
 

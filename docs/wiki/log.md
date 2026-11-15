@@ -1,3 +1,34 @@
+## [2026-11-15] Fix | Veri yönetimi entegrasyonu: nightly toplu tazeleme, PSI kapısı, outputs sıkıştırma uygulandı
+
+- `src/serving/nightly.py::refresh_universe` artık `DataUpdater.update_many` (chunk + retry + kilit) kullanır; toplu çağrı patlarsa sembol başına tekli yola düşer. `--sleep-s` varsayılanı 0 (yalnız düşüş yolunda).
+- Nightly PeerStore yazımı `PeerStore.write_run` ile tek transaction (yetim run kalmaz).
+- `compute_psi_30d` TR başlıklı CSV'leri okuyamıyordu (PSI kapısı hep kapalı); ortak temizleyiciye bağlandı. Kalibrasyon açık karar (bkz. persistence-and-api).
+- `tools/prune_outputs.py --compress-existing`: RandomForest'ta `joblib.hash` aynı dosyanın iki yüklemesinde bile farklı; doğrulamaya ağaç dizisi eşitliği eklendi (tahminler `n_jobs=1` ile birebir aynı doğrulandı).
+- Uygulandı (silmesiz): `latest/` inceltme 17 sembol, 40 model dosyası sıkıştırıldı; `outputs/` 1,2 GB -> ~594 MB. Run silme (24 run, ~117 MB) ve `.codex_tmp` (~121 MB) kullanıcı onayı bekliyor.
+- Veri: `data/ASELS.csv`, `data/EREGL.csv` ve `data/yedek/` altındaki 8 dosyanın 6 alanlı satırları onarıldı (yedekler `data/yedek/*.bak_20261115`, `data/yedek_bak_20261115/`).
+- 985 test geçiyor.
+
+## [2026-11-15] Fix | outputs/ sikistirma, hafif latest/, baslangic manifesti, retention araci
+
+Bkz. [Persistence and API](persistence-and-api.md#model-compression-run-manifest-status-retention-2026-11-15). Model joblib kayitlari `compress=3` (RF ~50 MB -> ~7 MB). `latest/` artik tam kopya degil: kucuk raporlar + `LATEST_RUN.json` isaretcisi (`src/utils/output_paths.py`: `sync_latest_output`, `resolve_latest_artifact`, `run_id_from_path`). `run_manifest.json` run basinda `status=running`, sonda `completed`/`failed`/`interrupted` (sert cokme `running` kalir). Yeni `tools/prune_outputs.py` (+ `src/utils/output_retention.py`): sembol basina son N run + DB referansli + latest korunur; varsayilan dry-run, `--apply`, `--slim-latest`, `--compress-existing`, `--clean-tmp`. Test: tests/test_outputs_retention_2026_11.py.
+
+## [2026-11-15] Fix | SQLite kalicilik sertlestirme (get_db cache, WAL/busy_timeout, atomiklik, tasinabilir model_path)
+
+Bkz. [Persistence and API](persistence-and-api.md#persistence-hardening-2026-11). Yeni: src/database/paths.py, schema_ddl.py; connection.open_db; StockModelDB.get_db/ensure_schema; PeerStore.write_run; SchemaRepository.migrate_model_paths; forecast_runs.status semantigi ('pending' = gerceklesme bekleniyor, GUI okuyucusu duzeltildi). Test: tests/test_persistence_fixes_2026_11.py.
+
+## [2026-11-15] Fix | Tarih ayristirma, bozuk sembol CSV, veri tazelik kapisi
+
+- `src/data/dates.py::parse_dates`: ISO yil-ilk, dd/mm/yyyy ve dd.mm.yyyy gun-ilk, Timestamp aynen; eleman bazli, takassiz. `dayfirst=True` kullanan forecast_resolution, run_leaderboard, data_refresh_service, data_loader, universe_sync, macro_pipeline (TCMB) ve pooled_loader buna tasindi (ISO 2024-01-02 artik 2024-02-01 olmaz).
+- `src/data/ohlcv_clean.py`: tek-sembol (`data_loader`) ve panel (`pooled_loader`) ortak okuma/temizleme: satir-alan-sayisi dogrulamasi (bozuk satir karantina + uyari, kolon kaymasi yok), tekrar tarih son satir, Open/High/Low Adj/Close faktoru, sifir-hacim atma. Eski bug: 6 alanli satirda Hacim Close'a kayiyordu (ASELS/EREGL).
+- `tools/repair_symbol_csv.py` (`--dry-run`): eksik Adj Close = Close ekler, tarih bicimini cogunluga normalize eder, yedek `data/yedek/<SYM>.csv.bak_<tarih>`. data/ASELS.csv (55 satir) ve data/EREGL.csv (84 satir) onarildi.
+- `src/data/freshness.py::check_freshness`: is gunu bazli bayatlik. Pooled panel build uyarir (`stale_symbols`), `nightly` bugune gore bayat sembolleri `stale` isaretler (`--stale-business-days`, kosu durmaz).
+- Sektor: `bist_universe.csv` Sector kolonu 592 sembolun 584'unde bos (lookup bozuk degil, veri yok; `tools/backfill_sectors.py` yfinance gerektirir).
+- Test: tests/test_data_correctness_2026_11.py.
+
+## [2026-11-15] Fix | DataUpdater seans-bilincli bayatlik, kismi mum, toplu indirme, kilit, yedek
+
+Bkz. [Data Pipeline](data-pipeline.md#dataupdater-2026-11-hardening). Yeni: session_clock.py, csv_safety.py, market_providers.py, updater_frames.py; test: tests/test_data_updater_2026_11.py.
+
 ## [2026-11-15] Bugfix | Sinyal yürütme kalibrasyonu bayrağı config'e uyuyor
 
 - `ExecutionConfig.enable_signal_execution_calibration` (varsayılan `False`) `EvaluationContext`'te

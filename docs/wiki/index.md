@@ -46,6 +46,7 @@ linked pages below.
 ## Current Project State
 
 - The project is a production-oriented research platform for BIST equity forecasting.
+- **Veri yönetimi düzeltmeleri (2026-11-15, `fix/deep-audit-2026-11`):** ortak tarih ayrıştırıcı (`src/data/dates.py`), ortak OHLCV temizleyici (`src/data/ohlcv_clean.py`), tazelik kapısı, seans-bilinçli + toplu + kilitli `DataUpdater` (nightly `update_many` kullanır), SQLite `get_db` önbelleği + WAL/busy_timeout + atomik yazımlar + göreli `model_path`, sıkıştırılmış model kayıtları + hafif `latest/` + `tools/prune_outputs.py`. Bkz. [Data Pipeline](data-pipeline.md), [Persistence and API](persistence-and-api.md).
 - The active orchestration facade is `ForecastingPipeline` in `src/pipeline/orchestrator.py`.
 - Main orchestration responsibilities are split across `DataManager`, `ModelTrainer`, and `EvaluationManager`.
 - Evaluation logic is now service-composed via `PredictionService`, `BacktestService`, `SignalCalibrationService`, and `MetricsReportingService`.

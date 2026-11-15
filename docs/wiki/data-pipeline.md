@@ -30,6 +30,22 @@ testable without direct network calls.
 When target BIST stock CSV files are in YYYY-MM-DD format (e.g., `2026-06-02`), passing `dayfirst=True` to `pd.to_datetime` causes pandas to parse month and day incorrectly if both are $\le 12$ (e.g., `2026-05-12` becomes `2026-12-05`). This resulted in incorrect future dates, negative `diff_days` calculation, and silent skipping of data updates during pipeline execution. The fix introduces format-detection logic in `_parse_last_date`: if the date string starts with a 4-digit year, `dayfirst` is set to `False`, allowing correct date parsing and data updates.
 
 
+### DataUpdater 2026-11 Hardening
+
+- **Bayatlik:** `diff_days <= 1` kaldirildi. CSV, yalniz son *tamamlanmis* BIST seansina
+  (`src/data/session_clock.py::latest_completed_session`, 18:10 Europe/Istanbul sonrasi;
+  takvim `data/meta/bist_calendar.csv`, yoksa/kapsam disiysa hafta ici) esit veya ilerideyse
+  `up_to_date` sayilir. `check_and_update(..., now=...)` ile zaman enjekte edilebilir.
+- **Kismi mum:** `_prepare_provider_rows` son tamamlanmis seanstan sonraki satirlari atar
+  (append ve full refetch).
+- **Toplu indirme:** `DataUpdater.update_many([(csv, sym), ...])` -> `yf.download(tickers=[...],
+  group_by="ticker", threads=True, auto_adjust=AUTO_ADJUST)` 50'lik chunk'lar, bos/basarisiz
+  ticker icin ustel backoff'lu retry (`src/data/market_providers.py`). Sembol basina dogrulama/append
+  tekli yolla ayni kod.
+- **Kilit/atomiklik:** `src/data/csv_safety.py` - `filelock` ile `<csv>.lock`; append ve full
+  refetch gecici dosya + `os.replace`. Kilit alininca CSV yeniden okunur.
+- **Yedek:** full refetch oncesi `data/yedek/<SYM>.csv.bak_YYYYMMDD`, sembol basina en fazla 3.
+
 **Universe-wide nightly refresh (E2 Faz 8):** there is no single
 `data_updater` CLI; the E2 nightly orchestrator `tools/e2_nightly_pipeline.py`
 (`refresh_universe`) loops every `data/*.csv` (excluding `bist_universe` /
