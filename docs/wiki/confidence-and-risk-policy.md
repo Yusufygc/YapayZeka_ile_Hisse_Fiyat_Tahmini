@@ -134,8 +134,13 @@ Computed by `src/data/quality.py`:
 `src/api/services/data_quality_monitor.py:compute_psi_30d()` performs an
 on-the-fly PSI check at API request time on stationary OHLCV-derived
 features (`log_return`, `range_pct`, `volume_log_change`). The holdout is the
-last 30 trading days; the train window is the prior 252 trading days. Bins=3
-keeps the small-sample noise floor below `0.10` for iid distributions.
+last 30 trading days; the train window is the prior 252 trading days. The
+statistic is the **mean** over features of a reference-quantile-bin PSI (edges
+at the 10/35/65/90th percentiles of the 252d window, open-ended, +1 Laplace
+smoothing). Tiers (2026-11-15, empirical placebo null over 581 symbols,
+50.6k windows): `stable` < 0.40 (null q90), `moderate_drift` 0.40..0.80,
+`major_drift` >= 0.80 (null q99). The old 0.10/0.25 thresholds sat below the
+null median on real BIST data.
 
 The result is published in `data_quality.psi_30d` / `psi_status` on the
 analysis response. `major_drift` forces confidence to `low` and appends a

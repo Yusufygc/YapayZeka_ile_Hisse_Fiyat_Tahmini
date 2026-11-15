@@ -24,7 +24,11 @@ from src.api.schemas.analysis import (
     XaiGroupSummary,
 )
 from src.api.services.analysis_freshness import compute_freshness
-from src.api.services.data_quality_monitor import compute_psi_30d
+from src.api.services.data_quality_monitor import (
+    _PSI_MAJOR_MIN,
+    _PSI_STABLE_MAX,
+    compute_psi_30d,
+)
 from src.api.services.data_refresh_service import DataRefreshService, read_latest_market_row
 from src.database.paths import resolve_model_path
 from src.pipeline.confidence_calculator import compute_confidence
@@ -310,7 +314,7 @@ def _build_forecast_response(
     elif _early_dq.psi_status == "major_drift" and _early_dq.psi_30d is not None:
         # compute_confidence zaten low veriyor; richer warning string ekle.
         warnings.append(
-            f"data_drift_major:psi_30d={_early_dq.psi_30d:.3f}_>=0.25"
+            f"data_drift_major:psi_30d={_early_dq.psi_30d:.3f}_>={_PSI_MAJOR_MIN:.2f}"
         )
     conf_block = ConfidenceBlock(
         label=conf_label,
@@ -421,7 +425,7 @@ def _build_positive_reasons(
         )
 
     if data_quality_block.psi_status == "stable":
-        reasons.append("Veri dagilimi stabil (PSI 30g < 0.10)")
+        reasons.append(f"Veri dagilimi stabil (PSI 30g < {_PSI_STABLE_MAX:.2f})")
 
     return reasons
 

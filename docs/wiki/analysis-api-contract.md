@@ -295,7 +295,7 @@ generator (`analysis_service._build_positive_reasons`) emits a subset of:
 | `stability_score >= 0.5` | `Fold istikrari yuksek (stability_score=0.65)` |
 | `composite_score` present | `Composite score: 78.0/100` |
 | `ensemble_direction_agreement >= 5/7` | `Ensemble yon uzlasisi yuksek (0.83)` |
-| `data_quality.psi_status == "stable"` | `Veri dagilimi stabil (PSI 30g < 0.10)` |
+| `data_quality.psi_status == "stable"` | `Veri dagilimi stabil (PSI 30g < 0.40)` |
 
 Negative reasons come from `compute_confidence` directly (e.g. signal
 diagnosis flags, low stability, low ensemble agreement). The two lists
@@ -305,7 +305,7 @@ share the same `reasons` array.
 
 - Stale data: `Veri guncel degil; tahmin yorumlanirken dikkatli olunmali.`
 - `data_drift_moderate:psi_30d=<value>` (Sprint 7)
-- `data_drift_major:psi_30d=<value>_>=0.25` (Sprint 7; also forces `low`)
+- `data_drift_major:psi_30d=<value>_>=0.80` (Sprint 7; also forces `low`)
 - Other compute_confidence warnings (PSI hard block, corporate-action,
   degraded model status, etc.)
 
@@ -321,20 +321,21 @@ soft signal — `< 0.5` degrades to medium, `>= 5/7` allows high.
 
 `data_quality` carries on-the-fly PSI drift between the last 30 trading days
 of stationary OHLCV-derived features (log_return, range_pct, volume_log_change)
-and the prior 252-day window. Bins=3 (chosen to keep the noise floor low at
-30-sample holdout).
+and the prior 252-day window. Estimator: reference-quantile bins + Laplace
+smoothing, mean over features; thresholds calibrated on the empirical
+placebo null (2026-11-15).
 
 | Field | Type | Description |
 |---|---|---|
-| `psi_30d` | float \| null | Max per-feature PSI; null when unavailable |
-| `psi_status` | enum | `stable` (<0.10) / `moderate_drift` (0.10..0.25) / `major_drift` (>=0.25) / `unavailable` |
+| `psi_30d` | float \| null | Mean per-feature PSI; null when unavailable |
+| `psi_status` | enum | `stable` (<0.40) / `moderate_drift` (0.40..0.80) / `major_drift` (>=0.80) / `unavailable` |
 | `stale_warning` | bool | True when CSV is missing |
 | `reason` | string \| null | Diagnostic when status is `unavailable` |
 
 Confidence interactions (`src/api/services/analysis_service.py`):
 
 - `major_drift` → confidence label forced to `low`; warning
-  `data_drift_major:psi_30d=<value>_>=0.25` appended.
+  `data_drift_major:psi_30d=<value>_>=0.80` appended.
 - `moderate_drift` → confidence `high` is downgraded to `medium`; warning
   `data_drift_moderate:psi_30d=<value>` appended.
 - `stable` / `unavailable` → no confidence change.

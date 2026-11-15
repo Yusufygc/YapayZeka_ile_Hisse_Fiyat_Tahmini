@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """
 Sprint 7 (2026-05-25) A7.3 — Analysis API icin on-the-fly PSI 30g monitor.
+2026-11-15: tahmin edici + esikler gercek veride bos-dagilimdan (placebo)
+kalibre edildi.
 
 `compute_psi_30d(symbol_csv_path)` son 30 isgunundeki OHLCV-turevli feature
-dagilimlarini, onceki 252 isgunlu pencereyle karsilastirir; max PSI doner.
+dagilimlarini, onceki 252 isgunlu pencereyle karsilastirir; feature basina
+PSI'nin ORTALAMASINI doner (`psi_30d`).
 Tier:
-  - < 0.10            -> "stable"
-  - 0.10 <= x < 0.25  -> "moderate_drift"
-  - >= 0.25           -> "major_drift"  (hard block)
+  - < 0.40            -> "stable"
+  - 0.40 <= x < 0.80  -> "moderate_drift"
+  - >= 0.80           -> "major_drift"  (confidence -> low)
 
 Cikti analysis API `data_quality` blogunda yayinlanir.
 """
@@ -20,17 +23,35 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from src.data.quality import _psi_one_feature
-
 _HOLDOUT_DAYS = 30
 _TRAIN_DAYS = 252
-_PSI_STABLE_MAX = 0.10
-_PSI_MAJOR_MIN = 0.25
-# 30-gun holdout sample-variance noise floor'u yuksek; coarser bin'ler
-# (>=5 yanlis pozitif uretiyor). Bins=3, holdout=30 emipirik olarak
-# ortalama PSI ~0.10 noise altinda kaliyor; gerek shift'lerde
-# rahatlikla 0.25 esigini geciyor.
-_PSI_BINS_30D = 3
+
+# ---------------------------------------------------------------------------
+# Kalibrasyon (2026-11-15, tools: scratch psi_calib.py)
+# Evren: data/*.csv, 581 sembol; placebo bitis tarihleri her 21 isgununde bir
+# (sembol basina ~87 pencere), toplam 50.600 placebo pencere; her biri gercek
+# "30g vs onceki 252g" istatistigi. Bu istatistigin gercek veride NULL
+# dagilimi (rejim kumelenmesi/volatilite kalicilik dahil) soyle:
+#   mean-PSI (3 feature ortalamasi), secilen tahmin edici:
+#     q50=0.171  q75=0.263  q90=0.399  q95=0.512  q99=0.795
+#   (max-PSI: q50=0.277 q90=0.763 q99=1.554; ham feature q99: log_return 0.94,
+#    range_pct 1.51, volume_log_change 0.42)
+# Eski tahmin edici (esit-genislik 3 bin, eps=1e-4, max) icin ayni null:
+#   q50=0.295 q90=0.921 q99=2.103 -> eski esikler 0.10/0.25 null MEDYANININ
+#   bile altindaydi; sembollerin ~%60+'i "drift" isaretleniyordu (hepsi gurultu).
+# Esikler: moderate ~ null q90 (0.399 -> 0.40), major ~ null q99 (0.795 -> 0.80).
+# Not: gercek veride null, iid varsayimindan cok yuksektir (volatilite
+# kumelenmesi); iid gurultude bu tahmin edici ~0.05-0.15 verir.
+# ---------------------------------------------------------------------------
+_PSI_STABLE_MAX = 0.40
+_PSI_MAJOR_MIN = 0.80
+# Referans (252g) dagiliminin 10/35/65/90. yuzdelik kesimleri -> 5 acik uclu
+# bin. Esit-genislik bin'ler combined araligi uc degerlerle (fat tail) gerer ve
+# 30 orneklikte bos bin'e 1e-4 eps ile log-patlamasi uretir; referans-kantil
+# bin + additif (Laplace) yumusatma ikisini de giderir. Kuyruk-agirlikli
+# kesimler (10/90) olcek (volatilite) kaymalarini da yakalar.
+_PSI_QUANTILE_EDGES = (0.10, 0.35, 0.65, 0.90)
+_PSI_SMOOTHING = 1.0  # her bin'e eklenen sahte sayim (Laplace)
 
 
 @dataclass(frozen=True)
@@ -39,6 +60,27 @@ class DataQualityResult:
     psi_status: str  # "stable" | "moderate_drift" | "major_drift" | "unavailable"
     stale_warning: bool
     reason: Optional[str] = None
+
+
+def _psi_smoothed(ref_vals: np.ndarray, cur_vals: np.ndarray) -> float:
+    """
+    Referans-kantil bin + Laplace yumusatmali PSI (30 orneklik pencere icin).
+
+    Bin kenarlari yalniz referans pencereden (cur sizintisi yok) alinir; uclar
+    aciktir (cur'daki aykiri deger son bine duser). Referansta ties varsa
+    kenarlar tekillestirilir. Yetersiz/sonlu olmayan veri -> 0.0.
+    """
+    ref = ref_vals[np.isfinite(ref_vals)]
+    cur = cur_vals[np.isfinite(cur_vals)]
+    if len(ref) < 2 * len(_PSI_QUANTILE_EDGES) or len(cur) == 0:
+        return 0.0
+    edges = np.unique(np.quantile(ref, _PSI_QUANTILE_EDGES))
+    k = len(edges) + 1
+    f_ref = np.bincount(np.searchsorted(edges, ref, side="right"), minlength=k)
+    f_cur = np.bincount(np.searchsorted(edges, cur, side="right"), minlength=k)
+    p_ref = (f_ref + _PSI_SMOOTHING) / (f_ref.sum() + k * _PSI_SMOOTHING)
+    p_cur = (f_cur + _PSI_SMOOTHING) / (f_cur.sum() + k * _PSI_SMOOTHING)
+    return max(0.0, float(np.sum((p_cur - p_ref) * np.log(p_cur / p_ref))))
 
 
 def _tier(psi: float) -> str:
@@ -69,7 +111,7 @@ def _build_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def compute_psi_30d(symbol_csv_path: str) -> DataQualityResult:
     """
-    Sembolun CSV'sini okur; son 30 gun vs onceki 252 gun PSI doner.
+    Sembolun CSV'sini okur; son 30 gun vs onceki 252 gun PSI (feature ortalamasi) doner.
     Veri yok / yetersiz ise psi_status='unavailable'.
     """
     if not os.path.exists(symbol_csv_path):
@@ -128,7 +170,7 @@ def compute_psi_30d(symbol_csv_path: str) -> DataQualityResult:
         for col in train.columns:
             t_vals = train[col].values.astype(float)
             h_vals = holdout[col].values.astype(float)
-            psi_scores[col] = _psi_one_feature(t_vals, h_vals, n_bins=_PSI_BINS_30D)
+            psi_scores[col] = _psi_smoothed(t_vals, h_vals)
     except Exception as exc:  # pragma: no cover - defensive
         return DataQualityResult(
             psi_30d=None,
@@ -145,10 +187,10 @@ def compute_psi_30d(symbol_csv_path: str) -> DataQualityResult:
             reason="no_numeric_columns",
         )
 
-    psi_max = float(max(psi_scores.values()))
+    psi_mean = float(np.mean(list(psi_scores.values())))
     return DataQualityResult(
-        psi_30d=psi_max,
-        psi_status=_tier(psi_max),
+        psi_30d=psi_mean,
+        psi_status=_tier(psi_mean),
         stale_warning=False,
         reason=None,
     )
