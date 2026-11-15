@@ -59,7 +59,7 @@ def test_status_corrupt_file_raises_value_error(tmp_path):
 def test_main_status_is_incomplete_while_scoring_runs_and_crash_keeps_false(monkeypatch, tmp_path):
     seen = {}
 
-    def _scoring(a):
+    def _scoring(a, status=None):
         seen["during"] = read_status(str(tmp_path / "st.json"))
         raise RuntimeError("OOM benzeri")
 
@@ -73,7 +73,7 @@ def test_main_status_is_incomplete_while_scoring_runs_and_crash_keeps_false(monk
 
 
 def test_main_success_marks_completed(monkeypatch, tmp_path):
-    monkeypatch.setattr(nl, "run_scoring", lambda a: 0)
+    monkeypatch.setattr(nl, "run_scoring", lambda a, status=None: 0)
     assert nl.main(_args(tmp_path, "--skip-data")) == 0
     data = read_status(str(tmp_path / "st.json"))
     assert data["completed"] is True and data["exit_code"] == 0 and data["scoring"] == "done"
@@ -96,7 +96,7 @@ def _counts(total, stale):
 def test_stale_refresh_skips_scoring_and_exits_3(monkeypatch, tmp_path):
     monkeypatch.setattr(nl, "refresh_universe", lambda *a, **k: _counts(100, 73))
     monkeypatch.setattr(nl, "run_scoring",
-                        lambda a: (_ for _ in ()).throw(AssertionError("skorlama atlanmaliydi")))
+                        lambda a, status=None: (_ for _ in ()).throw(AssertionError("skorlama atlanmaliydi")))
     assert nl.main(_args(tmp_path)) == nl.EXIT_STALE_REFRESH == 3
     data = read_status(str(tmp_path / "st.json"))
     assert data["completed"] is True and data["exit_code"] == 3
@@ -106,13 +106,13 @@ def test_stale_refresh_skips_scoring_and_exits_3(monkeypatch, tmp_path):
 def test_small_stale_share_still_scores(monkeypatch, tmp_path):
     monkeypatch.setattr(nl, "refresh_universe", lambda *a, **k: _counts(100, 5))
     ran = []
-    monkeypatch.setattr(nl, "run_scoring", lambda a: ran.append(1) or 0)
+    monkeypatch.setattr(nl, "run_scoring", lambda a, status=None: ran.append(1) or 0)
     assert nl.main(_args(tmp_path)) == 0 and ran == [1]
 
 
 def test_threshold_is_cli_overridable(monkeypatch, tmp_path):
     monkeypatch.setattr(nl, "refresh_universe", lambda *a, **k: _counts(100, 40))
-    monkeypatch.setattr(nl, "run_scoring", lambda a: 0)
+    monkeypatch.setattr(nl, "run_scoring", lambda a, status=None: 0)
     assert nl.main(_args(tmp_path, "--max-stale-fraction", "0.5")) == 0
     assert nl.main(_args(tmp_path, "--max-stale-fraction", "0.3")) == 3
 

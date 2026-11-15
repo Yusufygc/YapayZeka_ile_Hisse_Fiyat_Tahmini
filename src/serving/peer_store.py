@@ -18,7 +18,7 @@ import json
 import os
 import sqlite3
 
-from src.database.connection import open_db
+from src.database.connection import open_db, open_readonly
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -138,12 +138,30 @@ class GlobalRunMeta:
 
 
 class PeerStore:
-    def __init__(self, db_path: str) -> None:
+    """Yazar (nightly) ve okuyucular (API/GUI) icin PeerStore.
+
+    `PeerStore(path)`: yazar modu — dizini/DB'yi olusturur, sema + migrasyon + WAL.
+    `PeerStore.open_readonly(path)`: OKUYUCU modu — `mode=ro` URI; dosya olusturmaz,
+    migrasyon/journal_mode degistirmez. Eski semali DB'lerde eksik kolonlar satirda
+    hic yer almaz (cagiran `.get()` ile None okur). Yazan metotlar readonly'de
+    sqlite hatasi verir.
+    """
+
+    def __init__(self, db_path: str, *, readonly: bool = False) -> None:
         self.db_path = db_path
-        os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
-        self._init()
+        self.readonly = bool(readonly)
+        if not self.readonly:
+            os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+            self._init()
+
+    @classmethod
+    def open_readonly(cls, db_path: str) -> "PeerStore":
+        """Salt-okunur erisim; DB yoksa/okunamazsa sorgu aninda sqlite3.Error firlar."""
+        return cls(db_path, readonly=True)
 
     def _connect(self) -> sqlite3.Connection:
+        if self.readonly:
+            return open_readonly(self.db_path)
         # WAL (bir kez) + busy_timeout + foreign_keys: src.database.connection.open_db.
         return open_db(self.db_path)
 
@@ -173,7 +191,7 @@ class PeerStore:
                 return self.insert_run(meta, created_at, conn=own)
         import datetime as _dt
 
-        created_at = created_at or _dt.datetime.now().isoformat(timespec="seconds")
+        created_at = created_at or _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
         cur = conn.execute(
             """INSERT INTO global_model_runs
                (created_at, as_of_date, model_name, data_snapshot_hash,
@@ -240,6 +258,14 @@ class PeerStore:
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM global_model_runs ORDER BY run_id DESC LIMIT 1"
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_run(self, run_id: int) -> Optional[dict]:
+        """Verilen run_id'nin baslik satiri (yok -> None)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM global_model_runs WHERE run_id=?", (int(run_id),)
             ).fetchone()
             return dict(row) if row else None
 

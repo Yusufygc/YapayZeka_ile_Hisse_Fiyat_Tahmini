@@ -133,7 +133,7 @@ def test_main_skips_on_non_trading_day(monkeypatch):
     monkeypatch.setattr(nl, "is_trading_day", lambda d, calendar="XIST": False)
     called = {"score": False}
     monkeypatch.setattr(nl, "run_scoring",
-                        lambda args: called.__setitem__("score", True) or 0)
+                        lambda args, status=None: called.__setitem__("score", True) or 0)
     rc = nl.main(["--skip-data"])
     assert rc == 0
     assert called["score"] is False  # skip -> skorlama cagrilmadi
@@ -142,7 +142,7 @@ def test_main_skips_on_non_trading_day(monkeypatch):
 def test_main_runs_scoring_on_trading_day(monkeypatch):
     seen = {}
     monkeypatch.setattr(nl, "run_scoring",
-                        lambda a: seen.update(db=a.db, boost=a.boost, model=a.model,
+                        lambda a, status=None: seen.update(db=a.db, boost=a.boost, model=a.model,
                                               fb=a.fallback_dir, qj=a.quarantine_jumps) or 0)
     rc = nl.main(["--skip-data", "--skip-trading-gate"])
     assert rc == 0
@@ -151,7 +151,7 @@ def test_main_runs_scoring_on_trading_day(monkeypatch):
 
 
 def test_main_skip_data_does_not_refresh(monkeypatch):
-    monkeypatch.setattr(nl, "run_scoring", lambda a: 0)
+    monkeypatch.setattr(nl, "run_scoring", lambda a, status=None: 0)
     monkeypatch.setattr(nl, "refresh_universe",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("cagrilmamali")))
     assert nl.main(["--skip-data", "--skip-trading-gate"]) == 0

@@ -13,6 +13,8 @@ egitime GIRMEZ (labeled_rows hedefi sonlu olmayi sart kosar).
 """
 from __future__ import annotations
 
+import json
+import logging
 import time
 from typing import Any, Callable, Optional
 
@@ -25,6 +27,9 @@ from src.risk.validation import (
     GATE_COVERAGE_MAX, GATE_COVERAGE_MIN, GATE_MAX_MSE_RATIO, GATE_MIN_DM_T,
     RiskValidationConfig, RiskValidationResult, run_risk_validation)
 
+logger = logging.getLogger(__name__)
+
+RISK_STATUS_OK, RISK_STATUS_FALLBACK, RISK_STATUS_FAILED = "ok", "fallback", "failed"
 RISK_LEVELS = ("düşük", "orta", "yüksek")
 RISK_COLUMNS = (
     "risk_sigma_5d", "risk_sigma_naive_5d", "risk_vol_percentile", "risk_level",
@@ -145,3 +150,42 @@ def compute_risk_safe(
     if not summary["gate_passed"]:
         log("UYARI risk kabul kapisi gecmedi -> naive_fallback (naive persistence sigma + konformal z)")
     return table, summary
+
+
+def risk_run_status(summary: dict[str, Any]) -> dict[str, Any]:
+    """Risk adiminin makine-okunur durumu (nightly_status.json `risk` alani).
+
+    `failed`: hesaplama patladi (summary['error']); risk_*/fiyat bandi BOS kalir.
+    `fallback`: kabul kapisi gecmedi, naive persistence servis edildi. `ok`: HAR-X Ridge.
+    """
+    err = summary.get("error")
+    if err:
+        return {"status": RISK_STATUS_FAILED, "method": None, "error": str(err)[:300]}
+    method = summary.get("method")
+    status = RISK_STATUS_OK if method == METHOD_MODEL else RISK_STATUS_FALLBACK
+    return {"status": status, "method": method, "error": None}
+
+
+def previous_risk_method(prev_run: Optional[dict[str, Any]]) -> Optional[str]:
+    """Bir onceki kosunun config_json['risk']['method'] degeri (yok/bozuk/hata kosusu -> None)."""
+    if not prev_run:
+        return None
+    try:
+        cfg = json.loads(prev_run.get("config_json") or "{}")
+    except (ValueError, TypeError) as exc:
+        logger.warning("onceki kosunun config_json'u okunamadi: %s", exc)
+        return None
+    risk = cfg.get("risk") if isinstance(cfg, dict) else None
+    method = risk.get("method") if isinstance(risk, dict) else None
+    return str(method) if method else None
+
+
+def gate_flip_warning(prev_method: Optional[str], new_method: Optional[str]) -> Optional[str]:
+    """Kabul kapisi bir onceki geceye gore yon degistirdiyse uyari metni; aksi halde None.
+
+    Gece-gece har_x_ridge <-> naive_fallback gecisi sessiz olmamali (esige yakin metrik).
+    Onceki/yeni yontem bilinmiyorsa (ilk kosu, hata kosusu) karsilastirma yapilmaz.
+    """
+    if not prev_method or not new_method or prev_method == new_method:
+        return None
+    return f"risk kapisi degisti: {prev_method} -> {new_method} (onceki gece -> bu gece)"

@@ -2,11 +2,12 @@
 """Peer enrichment service tests — E2 Faz 5 API integration."""
 
 import os
+import sqlite3
 
 import pandas as pd
+import pytest
 
-from src.api.schemas.analysis import AnalysisResponse
-from src.api.services.peer_service import PeerEnrichmentService
+from src.api.services.peer_service import PeerEnrichmentService, PeerStoreUnavailable
 from src.serving.peer_store import GlobalRunMeta, PeerStore
 
 
@@ -68,32 +69,28 @@ def _seed_no_xai(tmp_path) -> str:
     return db
 
 
-def _resp(symbol="TUPRS") -> AnalysisResponse:
-    return AnalysisResponse(symbol=symbol, generated_at="2026-06-03T00:00:00")
-
-
-def test_enrich_attaches_peer_block(tmp_path):
+def test_peer_block_attaches_peer_block(tmp_path):
     svc = PeerEnrichmentService(_seed(tmp_path))
-    out = svc.enrich(_resp("TUPRS"))
-    assert out.peer is not None and out.peer.available
-    assert out.peer.peer_label == "outperform"
-    assert out.peer.confidence_label == "high"
-    assert out.peer.segment_icir == 1.35
-    assert out.peer.icir_overall == 1.55
-    assert out.peer.confidence_reasons == ["Segment sinyali guclu"]
-    assert out.peer.trend_label == "yukarı"
-    assert abs(out.peer.trend_prob_up - 0.541) < 1e-9
-    assert abs(out.peer.trend_expected_return - 0.0090) < 1e-9
-    assert abs(out.peer.kolb_price_p50 - 100.90) < 1e-9
-    assert abs(out.peer.kolb_price_low - 98.10) < 1e-9
-    assert abs(out.peer.kolb_price_high - 103.78) < 1e-9
-    assert out.peer.kolb_horizon_days == 5
-    assert abs(out.peer.kolb_band_level - 0.8) < 1e-9
+    peer = svc.get_peer_block("TUPRS")
+    assert peer is not None and peer.available
+    assert peer.peer_label == "outperform"
+    assert peer.confidence_label == "high"
+    assert peer.segment_icir == 1.35
+    assert peer.icir_overall == 1.55
+    assert peer.confidence_reasons == ["Segment sinyali guclu"]
+    assert peer.trend_label == "yukarı"
+    assert abs(peer.trend_prob_up - 0.541) < 1e-9
+    assert abs(peer.trend_expected_return - 0.0090) < 1e-9
+    assert abs(peer.kolb_price_p50 - 100.90) < 1e-9
+    assert abs(peer.kolb_price_low - 98.10) < 1e-9
+    assert abs(peer.kolb_price_high - 103.78) < 1e-9
+    assert peer.kolb_horizon_days == 5
+    assert abs(peer.kolb_band_level - 0.8) < 1e-9
 
 
-def test_enrich_attaches_peer_xai(tmp_path):
+def test_peer_block_attaches_peer_xai(tmp_path):
     svc = PeerEnrichmentService(_seed(tmp_path))
-    peer = svc.enrich(_resp("TUPRS")).peer
+    peer = svc.get_peer_block("TUPRS")
     assert peer.xai_available
     assert peer.xai_method == "shap_tree"
     assert "LightGBM" in peer.xai_caveat
@@ -107,38 +104,65 @@ def test_enrich_attaches_peer_xai(tmp_path):
     assert "akran siralamasini yukari" in peer.xai_group_summaries[0].reason
 
 
-def test_enrich_no_xai_graceful(tmp_path):
+def test_peer_block_no_xai_graceful(tmp_path):
     """xai_top_features NULL -> xai_available False, blok yine doner."""
     svc = PeerEnrichmentService(_seed_no_xai(tmp_path))
-    peer = svc.enrich(_resp("TUPRS")).peer
+    peer = svc.get_peer_block("TUPRS")
     assert peer is not None and peer.available
     assert peer.xai_available is False
     assert peer.xai_top_positive == [] and peer.xai_top_negative == []
     assert peer.xai_group_summaries == []
 
 
-def test_enrich_case_insensitive(tmp_path):
+def test_peer_block_case_insensitive(tmp_path):
     svc = PeerEnrichmentService(_seed(tmp_path))
-    assert svc.enrich(_resp("tuprs")).peer.available
+    assert svc.get_peer_block("tuprs").available
 
 
 def test_unknown_symbol_no_block(tmp_path):
     svc = PeerEnrichmentService(_seed(tmp_path))
-    out = svc.enrich(_resp("ZZZZ"))
-    assert out.peer is None
+    assert svc.get_peer_block("ZZZZ") is None  # sembol yok -> None (no_data)
 
 
-def test_missing_db_is_noop(tmp_path):
-    svc = PeerEnrichmentService(os.path.join(str(tmp_path), "nope.db"))
-    out = svc.enrich(_resp("TUPRS"))
-    assert out.peer is None  # mevcut yanit bozulmaz
+def test_missing_db_raises_unavailable_and_creates_nothing(tmp_path):
+    path = os.path.join(str(tmp_path), "nope.db")
+    svc = PeerEnrichmentService(path)
+    with pytest.raises(PeerStoreUnavailable):
+        svc.get_peer_block("TUPRS")
+    assert not os.path.exists(path)
 
 
-def test_existing_response_untouched(tmp_path):
-    """peer enrichment mevcut alanlari degistirmez (additive)."""
+def test_corrupt_db_raises_unavailable(tmp_path):
+    path = os.path.join(str(tmp_path), "bad.db")
+    with open(path, "wb") as fh:
+        fh.write(b"this is not an sqlite database" * 50)
+    with pytest.raises(PeerStoreUnavailable):
+        PeerEnrichmentService(path).get_peer_block("TUPRS")
+
+
+def test_locked_db_raises_unavailable_not_none(tmp_path, monkeypatch):
+    """Kilitli/okunamaz DB sessizce None (no_data) olmaz; hata log'lanir ve yukselir."""
     svc = PeerEnrichmentService(_seed(tmp_path))
-    r = _resp("TUPRS")
-    r.analysis_status = "ok"
-    out = svc.enrich(r)
-    assert out.analysis_status == "ok"
-    assert out.confidence.label == "low"  # mevcut confidence dokunulmaz
+
+    def _locked(self, symbol, run_id=None):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(PeerStore, "get_peer_score", _locked)
+    with pytest.raises(PeerStoreUnavailable):
+        svc.get_peer_block("TUPRS")
+
+
+def test_run_metadata_comes_from_rows_run_id(tmp_path):
+    """Satir run 1'e aitken sonradan yazilan run 2'nin ICIR'i karismamali (latest_run yarisi)."""
+    db = _seed(tmp_path)
+    store = PeerStore(db)
+    store.insert_run(GlobalRunMeta(model_name="newer", as_of_date="2026-06-04", icir=9.99))
+    svc = PeerEnrichmentService(db)
+    real = PeerStore.get_peer_score
+    # get_peer_score "bayat" okuma: run 1'in satirini dondurur, latest_run ise 2'dir.
+    PeerStore.get_peer_score = lambda self, sym, run_id=None: real(self, sym, run_id=1)
+    try:
+        peer = svc.get_peer_block("TUPRS")
+    finally:
+        PeerStore.get_peer_score = real
+    assert peer.model_run_id == 1 and peer.icir_overall == 1.55

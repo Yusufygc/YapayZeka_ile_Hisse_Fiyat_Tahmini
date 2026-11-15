@@ -3,25 +3,22 @@
 src.gui.core.peer_reader - Gecelik havuz (PeerStore) icin salt-okunur okuyucu.
 
 `data/serving_pool.db` son kosusunu ve `data/nightly_status.json` durumunu okur.
-Dosya yoksa PeerStore OLUSTURULMAZ; bos goruntu doner. Risk kolonlari (risk_*)
+PeerStore SALT-OKUNUR acilir (`open_readonly`): dosya olusturulmaz, migrasyon/journal_mode
+degismez; dosya yoksa bos goruntu doner. Risk kolonlari (risk_*)
 henuz yazilmamis eski DB'lerde `None` gelir.
 """
 from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from src.serving.paths import default_serving_db_path
 from src.serving.run_status import read_status, status_path_for_db
 
 logger = logging.getLogger(__name__)
-
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-
-def default_serving_db_path() -> str:
-    return os.path.join(_PROJECT_ROOT, "data", "serving_pool.db")
 
 
 @dataclass(frozen=True)
@@ -54,13 +51,13 @@ class PeerReader:
         try:
             from src.serving.peer_store import PeerStore
 
-            store = PeerStore(self.db_path)
+            store = PeerStore.open_readonly(self.db_path)
             run = store.latest_run()
             if run is None:
                 return PeerSnapshot(nightly=nightly, nightly_error=nightly_error,
                                     error="Serving veritabaninda kosu yok.")
             df = store.get_run_peer_scores(int(run["run_id"]))
-        except Exception as exc:  # noqa: BLE001 - GUI acilisini bozma
+        except (sqlite3.Error, OSError) as exc:  # GUI acilisini bozma
             logger.warning("PeerStore okunamadi (%s): %s", self.db_path, exc)
             return PeerSnapshot(nightly=nightly, nightly_error=nightly_error,
                                 error=f"Serving veritabani okunamadi: {type(exc).__name__}")

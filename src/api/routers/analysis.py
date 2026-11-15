@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+from typing import Any
 
 try:
     from fastapi import APIRouter, HTTPException
+    from fastapi.responses import JSONResponse
 except ImportError:
     raise ImportError("FastAPI yüklü değil: pip install fastapi")
 
@@ -31,14 +34,24 @@ def _freshness_fingerprint(symbol: str):
     )
 
 
+# Onbellege ALINMAYAN durumlar: no_data (bilinmeyen sembol sozlugu sinirsiz buyumesin; gece
+# kosusu sembolu getirirse hemen gorunsun) ve unavailable (gecici hizmet hatasi, 1 saat kalmasin).
+_UNCACHED_STATUSES = frozenset({"no_data", "unavailable"})
+_INTERNAL_ERROR_DETAIL = "Internal server error"
+_SYMBOL_RE = re.compile(r"^[A-Z0-9]{1,10}$")
+
+
 @router.get("/v1/analysis/{symbol}", response_model=AnalysisResponse)
-def get_analysis_v1(symbol: str) -> AnalysisResponse:
+def get_analysis_v1(symbol: str) -> Any:
     """/analysis ile ayni sozlesme; versiyonlu alias (api_version=2)."""
     return get_analysis(symbol)
 
 
-@router.get("/analysis/{symbol}", response_model=AnalysisResponse)
-def get_analysis(symbol: str) -> AnalysisResponse:
+@router.get(
+    "/analysis/{symbol}", response_model=AnalysisResponse,
+    responses={503: {"model": AnalysisResponse, "description": "Gecelik havuz veritabani kullanilamiyor"}},
+)
+def get_analysis(symbol: str) -> Any:
     """Belirtilen hisse icin gecelik havuzdan (Kol-B + risk) analiz payload'u doner.
 
     - **symbol**: BIST hisse kodu (buyuk/kucuk harf duyarsiz, or. ``TUPRS``)
@@ -48,12 +61,16 @@ def get_analysis(symbol: str) -> AnalysisResponse:
     - ``stale_data``: Piyasa verisi veya gecelik kosu bayat.
     - ``low_confidence``: Sonuc var ama guven etiketi ``low``.
     - ``no_data``: Sembol son gecelik kosuda yok.
+    - ``unavailable``: Havuz veritabani yok/kilitli/bozuk (HTTP 503; onbellege alinmaz).
 
     Kirici degisiklik (api_version=2): ``model``, ``forecast``, ``performance``,
     ``xai`` ve refresh-job alanlari kaldirildi.
     """
+    normalized = str(symbol).upper().strip()
+    # Dosya yolu / sorgu parametresi olmadan ONCE dogrula (RULES.md giris dogrulama).
+    if not _SYMBOL_RE.match(normalized):
+        raise HTTPException(status_code=400, detail="Gecersiz sembol bicimi")
     try:
-        normalized = str(symbol).upper().strip()
         # Parmak izi build'den ONCE alinir: build sirasinda kaynak degisirse bir
         # sonraki istek miss olur (bayat yanit servis edilmez).
         fingerprint = _freshness_fingerprint(normalized)
@@ -72,12 +89,14 @@ def get_analysis(symbol: str) -> AnalysisResponse:
             run_id=None if result.serving_run is None else result.serving_run.run_id,
             risk_method=None if peer is None else getattr(peer, "risk_method", None),
         )
+        if result.analysis_status in _UNCACHED_STATUSES:
+            if result.analysis_status == "unavailable":
+                return JSONResponse(status_code=503, content=result.model_dump(mode="json"))
+            return result
         _cache.set(normalized, result, fingerprint)
         return result
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
     except HTTPException:
         raise
-    except Exception as exc:  # noqa: BLE001 - istemciye 500 + log
+    except Exception:  # noqa: BLE001 - istemciye genel 500; ayrinti yalniz sunucu logunda
         logger.exception("analysis build failed for %s", symbol)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=_INTERNAL_ERROR_DETAIL)

@@ -11,7 +11,6 @@ import pandas as pd
 import pytest
 
 from risk_synth import make_panel
-from src.api.schemas.analysis import AnalysisResponse
 from src.api.services.peer_service import PeerEnrichmentService
 from src.risk.features import RISK_FEATURE_COLS, build_risk_frame, labeled_rows
 from src.risk.model import PooledVolModel, VolModelConfig
@@ -116,8 +115,11 @@ def test_price_band_formula():
     b = out.loc["B"]                                  # exp_ret=0 -> merkez Close
     assert b["kolb_price_p50"] == pytest.approx(50.0)
     assert b["kolb_price_high"] / 50.0 == pytest.approx(50.0 / b["kolb_price_low"])
-    c = out.loc["C"]                                  # exp_ret NaN -> bant yok
-    assert np.isnan(c["kolb_price_p50"]) and np.isnan(c["kolb_price_low"])
+    c = out.loc["C"]          # exp_ret NaN (belirsiz) -> p50 yok, bant merkez 0 ile dolu
+    assert np.isnan(c["kolb_price_p50"])
+    assert c["kolb_price_low"] == pytest.approx(10 * np.exp(-1.2 * 0.04))
+    assert c["kolb_price_high"] == pytest.approx(10 * np.exp(1.2 * 0.04))
+    assert c["kolb_horizon_days"] == 5 and c["kolb_band_level"] == 0.8
 
 
 def test_price_band_missing_risk_or_close_is_empty():
@@ -145,9 +147,7 @@ def test_peer_service_maps_risk_fields_and_validation(tmp_path):
         "risk_sigma_5d": [0.052], "risk_sigma_naive_5d": [0.061], "risk_vol_percentile": [82.0],
         "risk_level": ["yüksek"], "risk_z": [1.12], "risk_band_level": [0.8],
         "risk_horizon_days": [5], "risk_method": ["har_x_ridge"]}))
-    out = PeerEnrichmentService(db).enrich(
-        AnalysisResponse(symbol="TUPRS", generated_at="2026-06-01T00:00:00"))
-    p = out.peer
+    p = PeerEnrichmentService(db).get_peer_block("TUPRS")
     assert p.risk_sigma_5d == pytest.approx(0.052) and p.risk_level == "yüksek"
     assert p.risk_z == pytest.approx(1.12) and p.risk_horizon_days == 5
     assert p.risk_method == "har_x_ridge" and p.risk_vol_percentile == 82.0

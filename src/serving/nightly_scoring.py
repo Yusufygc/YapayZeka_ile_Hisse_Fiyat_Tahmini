@@ -82,8 +82,12 @@ def attach_risk_and_band(
     """risk_* kolonlarini ekle + fiyat bandi: Close * exp(exp_ret -/+ risk_z * risk_sigma_5d).
 
     p50 = Close * exp(exp_ret) (exp_ret Kol-B'den). Band genisligi YALNIZ risk modelinden
-    (src/risk): eski quintile-std tablosu ve vol-orani kaldirildi. Close/exp_ret/risk eksikse
-    ilgili band alanlari None (p50 yalniz Close+exp_ret ile dolar).
+    (src/risk): eski quintile-std tablosu ve vol-orani kaldirildi.
+
+    exp_ret sonlu degilse (trend `belirsiz`) band merkezi 0 alinir: aralik Close etrafinda
+    simetrik log-aralik olur (genislik yine risk_sigma_5d ve risk_z). Bu durum icin ayri bir
+    PeerStore kolonu YOK (sema degismez); p50 yon gorusu olmadigindan None kalir, bant dolu
+    olur. Close/risk eksikse band alanlari None.
     """
     out = merged.drop(columns=[c for c in RISK_COLUMNS if c in merged.columns])
     if risk_table is not None and not risk_table.empty:
@@ -96,10 +100,11 @@ def attach_risk_and_band(
     half = (pd.to_numeric(out["risk_z"], errors="coerce")
             * pd.to_numeric(out["risk_sigma_5d"], errors="coerce"))
     ok_p = (close > 0) & np.isfinite(exp_ret)
-    ok_b = ok_p & np.isfinite(half)
+    centre = exp_ret.where(np.isfinite(exp_ret), 0.0)   # belirsiz trend -> merkez 0
+    ok_b = (close > 0) & np.isfinite(half)
     out["kolb_price_p50"] = (close * np.exp(exp_ret)).where(ok_p)
-    out["kolb_price_low"] = (close * np.exp(exp_ret - half)).where(ok_b)
-    out["kolb_price_high"] = (close * np.exp(exp_ret + half)).where(ok_b)
+    out["kolb_price_low"] = (close * np.exp(centre - half)).where(ok_b)
+    out["kolb_price_high"] = (close * np.exp(centre + half)).where(ok_b)
     out["kolb_horizon_days"] = pd.to_numeric(out["risk_horizon_days"], errors="coerce").where(ok_b)
     out["kolb_band_level"] = pd.to_numeric(out["risk_band_level"], errors="coerce").where(ok_b)
     return out

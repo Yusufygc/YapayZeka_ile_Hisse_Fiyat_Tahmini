@@ -13,8 +13,10 @@ bağlantıyı kapatır. Bağlantıyı `with` olmadan kullanan çağıranlar yine
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
+from pathlib import Path
 
 BUSY_TIMEOUT_MS = 5000
 
@@ -55,4 +57,23 @@ def open_db(path: str, *, foreign_keys: bool = True, row_factory=sqlite3.Row) ->
             conn.execute("PRAGMA journal_mode=WAL")
     if foreign_keys:
         conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+def readonly_uri(path: str) -> str:
+    """`file:` URI (`?mode=ro`); bosluk/#/? gibi karakterler yuzde-kodlanir."""
+    return Path(os.path.abspath(path)).as_uri() + "?mode=ro"
+
+
+def open_readonly(path: str, *, row_factory=sqlite3.Row) -> sqlite3.Connection:
+    """Gercek salt-okunur baglanti: dosya OLUSTURMAZ, sema/journal_mode DEGISTIRMEZ.
+
+    Dosya yoksa `sqlite3.OperationalError` (unable to open database file). `PRAGMA
+    journal_mode=WAL` / `foreign_keys` / CREATE / ALTER calistirilmaz; yalniz
+    `busy_timeout` ayarlanir. Yazma girisimi `attempt to write a readonly database` verir.
+    """
+    conn = sqlite3.connect(readonly_uri(path), uri=True, factory=ClosingConnection,
+                           timeout=BUSY_TIMEOUT_MS / 1000.0)
+    conn.row_factory = row_factory
+    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     return conn

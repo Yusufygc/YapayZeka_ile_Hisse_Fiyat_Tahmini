@@ -1,24 +1,25 @@
 # -*- coding: utf-8 -*-
-"""`/symbols` icin: son gecelik havuz kosusundaki semboller (PeerStore, salt-okunur kullanim)."""
+"""`/symbols` icin: son gecelik havuz kosusundaki semboller (PeerStore, SALT-OKUNUR)."""
 from __future__ import annotations
 
 import os
 from typing import Optional
 
-from src.api.services.serving_health import default_serving_db_path
+from src.serving.paths import default_serving_db_path
 
 
 def list_serving_symbols(db_path: Optional[str] = None) -> list[str]:
     """PeerStore'un SON kosusundaki sembolleri alfabetik dondurur.
 
-    DB yok / kosu yok -> bos liste. PeerStore dosya yoksa OLUSTURULMAZ (once varlik kontrolu).
+    DB yok / kosu yok -> bos liste. Okuma `PeerStore.open_readonly` ile: dosya olusturulmaz,
+    sema/journal_mode degismez. Kilitli/bozuk DB -> sqlite3.Error cagiriciya yayilir.
     """
     path = db_path or default_serving_db_path()
     if not os.path.exists(path):
         return []
     from src.serving.peer_store import PeerStore
 
-    store = PeerStore(path)
+    store = PeerStore.open_readonly(path)
     run = store.latest_run()
     if not run:
         return []

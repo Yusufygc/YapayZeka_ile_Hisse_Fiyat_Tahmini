@@ -3,7 +3,7 @@
 Sprint 9 (2026-05-26) A9.2 — Analysis API response cache.
 
 In-memory TTL cache by `symbol` (horizon implicit — default per pipeline).
-Default TTL 1 saat. Her girdi bir "tazelik parmak izi" (fingerprint) tasir:
+Default TTL 1 saat; en fazla 1024 girdi (LRU). Her girdi bir "tazelik parmak izi" (fingerprint) tasir:
 nightly batch serving-pool run'ini ya da piyasa verisi CSV'sini degistirirse
 parmak izi uyusmaz ve girdi cache-miss sayilir (24 saat eski yanit sorunu).
 Ayrica manuel `invalidate(symbol)` desteklenir.
@@ -14,13 +14,19 @@ import logging
 import os
 import sqlite3
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
+
+from src.database.connection import open_readonly
+from src.serving.paths import default_data_dir, default_serving_db_path
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TTL_SECONDS = int(os.getenv("AI_CORE_RESPONSE_CACHE_TTL_SECONDS", "3600"))
+_DEFAULT_MAX_ENTRIES = int(os.getenv("AI_CORE_RESPONSE_CACHE_MAX_ENTRIES", "1024"))
+_ISTANBUL = timezone(timedelta(hours=3))  # Turkiye sabit UTC+3 (servis tarihi ile ayni)
 _DISABLED = os.getenv("AI_CORE_RESPONSE_CACHE_DISABLED", "0") in {"1", "true", "True"}
 
 
@@ -40,8 +46,7 @@ def _readonly_fetch_one(db_path: Optional[str], sql: str, params: Tuple = ()) ->
     if not db_path or not os.path.exists(db_path):
         return None
     try:
-        uri = "file:" + str(db_path).replace("\\", "/") + "?mode=ro"
-        conn = sqlite3.connect(uri, uri=True, timeout=2)
+        conn = open_readonly(str(db_path))
         try:
             row = conn.execute(sql, params).fetchone()
         finally:
@@ -50,16 +55,6 @@ def _readonly_fetch_one(db_path: Optional[str], sql: str, params: Tuple = ()) ->
         logger.debug("freshness fingerprint query failed (%s): %s", db_path, exc)
         return None
     return None if row is None else tuple(row)
-
-
-def default_serving_db_path() -> str:
-    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-    return os.path.join(root, "data", "serving_pool.db")
-
-
-def default_data_dir() -> str:
-    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-    return os.path.join(root, "data")
 
 
 def compute_freshness_fingerprint(
@@ -72,8 +67,9 @@ def compute_freshness_fingerprint(
 
     (serving_pool son global_model_runs.run_id,
      sembol piyasa CSV'sinin (mtime_ns, boyut),
-     takvim gunu).  Kaynak yoksa ilgili bilesen None. Takvim gunu, bayatlik
-    durumunun gun donumunde yeniden hesaplanmasini saglar.
+     Istanbul takvim gunu).  Kaynak yoksa ilgili bilesen None. Takvim gunu, bayatlik
+    durumunun gun donumunde yeniden hesaplanmasini saglar; servis de Istanbul tarihi
+    kullandigi icin gun donumu ikisinde ayni anda olur (UTC gunu 3 saat farkli olurdu).
     """
     sym = str(symbol).upper().strip()
     serving_db = serving_db_path if serving_db_path is not None else default_serving_db_path()
@@ -87,7 +83,7 @@ def compute_freshness_fingerprint(
         csv_sig = (st.st_mtime_ns, st.st_size)
     except OSError:
         csv_sig = None
-    day = (today or datetime.now(tz=timezone.utc).date()).isoformat()
+    day = (today or datetime.now(tz=_ISTANBUL).date()).isoformat()
     return (None if pool is None else pool[0], csv_sig, day)
 
 
@@ -101,10 +97,12 @@ class ResponseCache:
         self,
         ttl_seconds: int = _DEFAULT_TTL_SECONDS,
         clock: Optional[Callable[[], datetime]] = None,
+        max_entries: int = _DEFAULT_MAX_ENTRIES,
     ) -> None:
         self._clock = clock or _utcnow
         self._ttl = max(0, int(ttl_seconds))
-        self._store: Dict[str, _Entry] = {}
+        self._max = max(1, int(max_entries))
+        self._store: "OrderedDict[str, _Entry]" = OrderedDict()  # LRU: sondaki en yeni
         self._lock = threading.Lock()
 
     @staticmethod
@@ -133,6 +131,7 @@ class ResponseCache:
                 # source DBs changed since the entry was cached -> stale
                 self._store.pop(key, None)
                 return None
+            self._store.move_to_end(key)  # LRU: kullanilan girdi en yeniye tasinir
             return entry.value
 
     def set(self, symbol: str, value: Any, fingerprint: Any = None) -> None:
@@ -143,6 +142,9 @@ class ResponseCache:
         expires_at = self._clock() + timedelta(seconds=self._ttl)
         with self._lock:
             self._store[key] = _Entry(value=value, expires_at=expires_at, fingerprint=fingerprint)
+            self._store.move_to_end(key)
+            while len(self._store) > self._max:
+                self._store.popitem(last=False)  # en az yakin kullanilani at (sinirli bellek)
 
     def invalidate(self, symbol: str) -> bool:
         """Sembolün önbellek girdisini siler; girdi vardıysa True döner.
@@ -159,6 +161,10 @@ class ResponseCache:
             n = len(self._store)
             self._store.clear()
             return n
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._store)
 
     @property
     def ttl_seconds(self) -> int:

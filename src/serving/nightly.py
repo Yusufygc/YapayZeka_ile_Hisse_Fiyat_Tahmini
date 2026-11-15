@@ -31,7 +31,7 @@ import logging
 import os
 import sys
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional, Sequence
 
 import pandas as pd
@@ -39,6 +39,7 @@ import pandas as pd
 from src.data.data_updater import DataUpdater
 from src.data.freshness import check_freshness, warn_if_stale
 from src.data.market_providers import DEFAULT_REFRESH_DEADLINE_S, abandoned_call_count
+from src.serving.nightly_risk import horizon_arg
 from src.serving.run_status import NightlyRunStatus, status_path_for_db
 from src.serving.nightly_scoring import (
     assemble_peer_table,
@@ -49,8 +50,7 @@ from src.serving.nightly_scoring import (
     segment_neff_from_table,
 )
 
-# BIST seans kapanisi ~18:00. Bundan sonraki kosular AYNI gunun seansini hedefler;
-# daha erken (sabah) kosular bir ONCEKI seansi (dun) hedefler.
+# BIST kapanisi ~18:00: sonraki kosular ayni gunu, daha erkenkiler dunu hedefler.
 _MARKET_CLOSE_HOUR = 19
 
 # Loader ile ayni: panel disi yardimci CSV'ler sembol degil.
@@ -94,7 +94,7 @@ def gate_target_date(now: Optional[datetime] = None) -> date:
     Aksam kosusu (>= _MARKET_CLOSE_HOUR, or. 21:00): bugunun seansi kapandi ve
     verisi hazir -> bugun. Sabah kosusu (< close): en son seans dun -> dun.
     """
-    now = now or datetime.now()
+    now = now or datetime.now(timezone(timedelta(hours=3)))  # Istanbul (UTC+3, DST yok)
     return now.date() if now.hour >= _MARKET_CLOSE_HOUR else (now.date() - timedelta(days=1))
 
 
@@ -181,7 +181,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--data-dir", default="data")
     ap.add_argument("--universe", default="data/bist_universe.csv")
     ap.add_argument("--db", default="data/serving_pool.db")
-    ap.add_argument("--horizon", type=int, default=5)
+    ap.add_argument("--horizon", type=horizon_arg, default=5,
+                    help="yalniz 5 (risk modeli ve Kol-B ceyreklik tablosu 5 gunluktur)")
     ap.add_argument("--min-rows", type=int, default=300)
     ap.add_argument("--min-names", type=int, default=15)
     ap.add_argument("--boost", type=int, default=400)
@@ -200,8 +201,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "ornek: --fallback-dir data/yedek (K7)")
     ap.add_argument("--quarantine-jumps", action=argparse.BooleanOptionalAction, default=True,
                     help="|1g log-getiri|>0.30 olcek kiriklari etrafindaki satirlari at (K8)")
-    # Gece isinde veri her gun degisir -> her sembol iska + ~11 sn yazma maliyeti.
-    # Bu yuzden varsayilan KAPALI; ayni gun tekrar kosularinda --feature-cache ile ac.
+    # Gece isinde veri her gun degisir -> onbellek varsayilan KAPALI (ayni gun tekrarinda ac).
     ap.add_argument("--feature-cache", action="store_true",
                     help="sembol basi Parquet ozellik onbellegini ac (ayni veride tekrar kosular icin)")
     ap.add_argument("--feature-cache-dir", default=os.path.join("data", "feature_cache", "pooled"),
@@ -226,7 +226,7 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
-def run_scoring(args: argparse.Namespace) -> int:
+def run_scoring(args: argparse.Namespace, status: Optional[NightlyRunStatus] = None) -> int:
     """Global modeli tum gecmise egit, en guncel evreni skorla, PeerStore'a yaz (surec-ici)."""
     # Agir bagimliliklar (lightgbm/torch) yalniz skorlamada yuklenir (--help / kapi hizli kalir).
     from src.data.clean_store import panel_content_hash
@@ -236,7 +236,7 @@ def run_scoring(args: argparse.Namespace) -> int:
     from src.models.global_pooled_model import (
         GlobalPooledConfig, GlobalPooledModel, make_global_model_factory)
     from src.models.torch_mlp_model import TorchMLPConfig
-    from src.risk.serving import compute_risk_safe
+    from src.serving.nightly_risk import run_risk_step
     from src.serving.peer_store import GlobalRunMeta, PeerStore
     from src.validation.pooled_cv import PooledCVConfig, PooledPurgedWalkForward
     from src.validation.pooled_oos import PerSymbolOOSConfig, evaluate_per_symbol
@@ -352,7 +352,10 @@ def run_scoring(args: argparse.Namespace) -> int:
         return (last is None or s in stale_now
                 or (latest_global - last).days > args.stale_days)
 
-    risk_table, risk_summary = compute_risk_safe(full_aug, as_of, log=_log)
+    store = PeerStore(args.db)
+    risk_table, risk_summary, risk_warns = run_risk_step(
+        full_aug, as_of, store.latest_run(), log=_log, status=status)
+    warns = [*warns, *risk_warns]
     table = assemble_peer_table(
         model, latest_rows, feats, seg_table, icir_maps=icir_maps, neff_maps=neff_maps,
         tradable_for=tradable_for, stale_for=stale_for, risk_table=risk_table)
@@ -364,7 +367,6 @@ def run_scoring(args: argparse.Namespace) -> int:
     data_hash = cs.get("content_hash") if cs.get("enabled") else None
     data_hash = data_hash or panel_content_hash(aug)
     snap = data_hash[:16]
-    store = PeerStore(args.db)
     # probability_source PeerStore kolonu degil (peer_store.py disinda) -> run config'inde.
     prob_src = (sorted(table["probability_source"].dropna().unique().tolist())
                 if "probability_source" in table.columns else [])
@@ -428,7 +430,7 @@ def _run_pipeline(args: argparse.Namespace, status: NightlyRunStatus) -> int:
 
     _log(f"skorlama baslatiliyor: model={args.model} boost={args.boost} db={args.db}")
     status.update(phase="scoring")
-    rc = run_scoring(args)
+    rc = run_scoring(args, status)
     status.update(scoring="done" if rc == 0 else "failed")
     return rc
 

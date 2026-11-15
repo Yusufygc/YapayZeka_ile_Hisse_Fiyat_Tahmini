@@ -133,7 +133,8 @@ class AnalysisResponse(BaseModel):
 
     api_version: str = "2"
     symbol: str
-    # ok | stale_data | low_confidence | no_data
+    # ok | stale_data | low_confidence | no_data (sembol son kosuda yok) |
+    # unavailable (serving DB yok/kilitli/bozuk; HTTP 503)
     analysis_status: str = "ok"
     generated_at: str
     data: DataBlock = DataBlock()

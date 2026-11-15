@@ -2,6 +2,7 @@
 """Veri tazelik kontrolu."""
 from __future__ import annotations
 
+import logging
 import os
 from datetime import date, datetime, timedelta, timezone
 from typing import NamedTuple, Optional
@@ -9,6 +10,8 @@ from typing import NamedTuple, Optional
 import pandas as pd
 
 from src.api.constants import DATA_STALENESS_MAX_TRADING_DAYS
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_CALENDAR_PATH = os.path.join(
     os.path.dirname(__file__), "..", "..", "..", "data", "meta", "bist_calendar.csv"
@@ -42,7 +45,8 @@ def _load_trading_calendar(calendar_path: Optional[str]) -> TradingCalendar:
             min_date=min(all_dates) if all_dates else None,
             max_date=max(all_dates) if all_dates else None,
         )
-    except Exception:
+    except (OSError, ValueError, KeyError) as exc:
+        logger.warning("BIST takvimi okunamadi (%s): %s; hafta-ici yedegi kullanilacak", path, exc)
         return TradingCalendar(days=set(), min_date=None, max_date=None)
 
 
@@ -85,17 +89,37 @@ def compute_freshness(
     if last_date >= today_date:
         return FreshnessResult(status="fresh", staleness_days=0)
 
+    staleness, warning = _staleness_between(last_date, today_date, calendar_path)
+    status = "fresh" if staleness <= max_trading_days else "stale_data"
+    return FreshnessResult(status=status, staleness_days=staleness, warning=warning)
+
+
+def _staleness_between(start: date, end: date, calendar_path: Optional[str]) -> tuple[int, str]:
+    """(start, end] araligindaki BIST islem gunu sayisi + takvim kapsama uyarisi.
+
+    Takvim araligi kapsamiyorsa / okunamazsa hafta-ici yedegi kullanilir (uyari doner).
+    """
     calendar = _load_trading_calendar(calendar_path)
     warning = ""
     trading_days = calendar.days
     if calendar.min_date is not None and calendar.max_date is not None:
-        if last_date < calendar.min_date or today_date > calendar.max_date:
+        if start < calendar.min_date or end > calendar.max_date:
             warning = (
                 "BIST calendar range does not fully cover the freshness window; "
                 "weekday fallback was used."
             )
             trading_days = set()
+    return _count_trading_days_between(start, end, trading_days), warning
 
-    staleness = _count_trading_days_between(last_date, today_date, trading_days)
-    status = "fresh" if staleness <= max_trading_days else "stale_data"
-    return FreshnessResult(status=status, staleness_days=staleness, warning=warning)
+
+def trading_days_between(
+    start: str | date, end: str | date, calendar_path: Optional[str] = None
+) -> int:
+    """`start` sonrasi ile `end` dahil arasindaki BIST islem gunu sayisi (start >= end -> 0).
+
+    Gecersiz tarih -> ValueError. Gecelik havuz `as_of_date` ile piyasa CSV son tarihi
+    arasindaki geriligi olcmek icin kullanilir.
+    """
+    a = pd.Timestamp(start).date()
+    b = pd.Timestamp(end).date()
+    return _staleness_between(a, b, calendar_path)[0]

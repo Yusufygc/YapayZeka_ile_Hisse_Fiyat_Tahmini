@@ -6,17 +6,19 @@ PeerStore'u ACMAZ/OLUSTURMAZ (salt-okunur sqlite); dosya yok / bozuk ise
 """
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
+from src.database.connection import open_readonly
+from src.serving.paths import default_serving_db_path
+
+logger = logging.getLogger(__name__)
+
+_ISTANBUL = timezone(timedelta(hours=3))  # Turkiye sabit UTC+3 (DST yok)
 _DEFAULT_STALE_DAYS = 7
-
-
-def default_serving_db_path() -> str:
-    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-    return os.path.join(root, "data", "serving_pool.db")
 
 
 def serving_pool_status(
@@ -32,15 +34,15 @@ def serving_pool_status(
     if not os.path.exists(path):
         return {"available": False, "reason": "no_db"}
     try:
-        uri = "file:" + path.replace("\\", "/") + "?mode=ro"
-        conn = sqlite3.connect(uri, uri=True, timeout=2)
+        conn = open_readonly(path)
         try:
             row = conn.execute(
                 "SELECT run_id, model_name, as_of_date, n_symbols, n_rows, created_at "
                 "FROM global_model_runs ORDER BY run_id DESC LIMIT 1").fetchone()
         finally:
             conn.close()
-    except Exception:  # noqa: BLE001 - /health asla patlamasin, detay sizmasin
+    except (sqlite3.Error, OSError) as exc:  # /health asla patlamasin, detay sizmasin
+        logger.warning("serving havuzu okunamadi (%s): %s", path, exc)
         return {"available": False, "reason": "unreadable"}
     if row is None:
         return {"available": False, "reason": "no_runs"}
@@ -49,7 +51,7 @@ def serving_pool_status(
         as_of = datetime.fromisoformat(str(as_of_raw)[:10]).date()
     except ValueError:
         return {"available": False, "reason": "bad_as_of_date"}
-    age = ((today or date.today()) - as_of).days
+    age = ((today or datetime.now(_ISTANBUL).date()) - as_of).days
     return {
         "available": True,
         "run_id": int(run_id),
@@ -75,7 +77,8 @@ def nightly_run_status(
     """Son gecelik kosunun durum dosyasi (`nightly_status.json`, serving DB'nin yaninda) ozeti.
 
     `interrupted=True`: kosu bitmedi (completed=false) ve ya cokme kaydi var ya da
-    ``_RUNNING_MAX_HOURS``'tan eski -> surec oldurulmus/donmus. `healthy`: tamamlandi, cikis 0.
+    ``_RUNNING_MAX_HOURS``'tan eski -> surec oldurulmus/donmus. `healthy`: tamamlandi, cikis 0. `risk`: risk adiminin durumu
+    (`{status: ok|fallback|failed, method, error}`; eski durum dosyalarinda None).
     Dosya yok/bozuk ise `available=False`; istisna metni sizdirilmaz.
     """
     # Yalniz stdlib modul (agir bagimlilik yuklemez); durum dosyasi serving DB'nin yaninda.
@@ -112,5 +115,6 @@ def nightly_run_status(
         "stale_symbols_after_refresh": data.get("stale_symbols_after_refresh"),
         "stale_fraction": data.get("stale_fraction"),
         "refresh": data.get("refresh"),
+        "risk": data.get("risk"),
         "error": data.get("error"),
     }

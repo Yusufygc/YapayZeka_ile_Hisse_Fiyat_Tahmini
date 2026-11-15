@@ -43,7 +43,7 @@ def test_tool_wrappers_delegate(name, attr):
 
 def test_score_main_runs_scoring_only(monkeypatch):
     seen = {}
-    monkeypatch.setattr(nl, "run_scoring", lambda a: seen.update(fb=a.fallback_dir, qj=a.quarantine_jumps) or 0)
+    monkeypatch.setattr(nl, "run_scoring", lambda a, status=None: seen.update(fb=a.fallback_dir, qj=a.quarantine_jumps) or 0)
     monkeypatch.setattr(nl, "refresh_universe",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("tazeleme yok")))
     monkeypatch.setattr(nl, "is_trading_day",

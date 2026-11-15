@@ -35,6 +35,7 @@ def _peer_row(symbol: str, label: str = "high", **extra) -> dict:
         "confidence_warnings": [], "trend_label": "yukarı", "trend_prob_up": 0.56,
         "trend_expected_return": 0.004, "kolb_price_p50": 101.0, "kolb_price_low": 97.0,
         "kolb_price_high": 105.0, "kolb_horizon_days": 5, "kolb_band_level": 0.8,
+        "risk_method": "har_x_ridge", "risk_sigma_5d": 0.03, "risk_z": 1.6,
     }
     row.update(extra)
     return row
@@ -131,9 +132,12 @@ def test_symbol_not_in_latest_run_is_no_data(env):
     assert body["serving_run"]["run_id"] == 1
 
 
-def test_missing_serving_db_is_no_data_and_not_created(env):
-    body = env.client().get("/analysis/TUPRS").json()
-    assert body["analysis_status"] == "no_data" and body["serving_run"] is None
+def test_missing_serving_db_is_unavailable_503_and_not_created(env):
+    resp = env.client().get("/analysis/TUPRS")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["analysis_status"] == "unavailable" and body["serving_run"] is None
+    assert body["confidence"]["label"] == "low" and body["confidence"]["warnings"]
     assert not (env.tmp / "serving_pool.db").exists()
 
 

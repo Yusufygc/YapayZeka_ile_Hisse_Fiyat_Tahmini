@@ -1,22 +1,29 @@
 # -*- coding: utf-8 -*-
-"""E2 Faz 5 — peer (cross-sectional) enrichment for /analysis/{symbol}.
+"""Gecelik havuz (PeerStore) satirini API `PeerBlock`'una ceviren servis.
 
-Nightly batch'in yazdigi PeerStore'dan sembolun peer skorunu okur ve
-AnalysisResponse'a additive `peer` blogu ekler. PeerStore yok / sembol yok /
-herhangi bir hata -> sessizce no-op (mevcut yanit korunur, asla bozulmaz).
+Okuma SALT-OKUNURDUR (`PeerStore.open_readonly`): API dosya olusturmaz, sema
+migrasyonu/journal_mode degisikligi yapmaz; eski semali DB'de eksik risk kolonlari None.
+
+Sonuc ayrimi:
+  - sembol son kosuda yok            -> `None` (cagiran `no_data` der)
+  - DB yok / kilitli / bozuk / okunamaz -> `PeerStoreUnavailable` (cagiran `unavailable` / HTTP 503)
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
+import sqlite3
 from typing import Optional
 
-from src.api.schemas.analysis import AnalysisResponse, PeerBlock, XaiFactorItem, XaiGroupSummary
+from src.api.schemas.analysis import PeerBlock, XaiFactorItem, XaiGroupSummary
+from src.serving.paths import default_serving_db_path
+
+logger = logging.getLogger(__name__)
 
 
-def _default_db_path() -> str:
-    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-    return os.path.join(root, "data", "serving_pool.db")
+class PeerStoreUnavailable(RuntimeError):
+    """Serving DB yok/okunamiyor (sembolun yoklugundan AYRI: bu bir hizmet hatasidir)."""
 
 
 def _json_list(v) -> list[str]:
@@ -103,68 +110,70 @@ def _run_risk_validation(run: dict) -> Optional[dict]:
 
 class PeerEnrichmentService:
     def __init__(self, db_path: Optional[str] = None) -> None:
-        self._db_path = db_path or _default_db_path()
+        self._db_path = db_path or default_serving_db_path()
 
     def get_peer_block(self, symbol: str) -> Optional[PeerBlock]:
+        """Sembolun son-kosu blogu; sembol yoksa None; DB sorunu -> PeerStoreUnavailable."""
         if not os.path.exists(self._db_path):
-            return None
-        try:
-            from src.serving.peer_store import PeerStore
+            logger.error("serving DB bulunamadi: %s", self._db_path)
+            raise PeerStoreUnavailable("serving_db_missing")
+        from src.serving.peer_store import PeerStore
 
-            store = PeerStore(self._db_path)
+        try:
+            store = PeerStore.open_readonly(self._db_path)
             row = store.get_peer_score(str(symbol).upper().strip())
             if row is None:
                 return None
-            run = store.latest_run() or {}
-            xai = _parse_peer_xai(row.get("xai_top_features"))
-            return PeerBlock(
-                available=True,
-                as_of_date=row.get("as_of_date"),
-                peer_score=row.get("peer_score"),
-                peer_percentile=row.get("peer_percentile"),
-                peer_label=row.get("peer_label"),
-                universe_size=row.get("universe_size"),
-                segment_liq=row.get("segment_liq"),
-                segment_vol=row.get("segment_vol"),
-                segment_sector=row.get("segment_sector"),
-                segment_icir=row.get("segment_icir"),
-                confidence_label=row.get("confidence_label"),
-                confidence_reasons=_json_list(row.get("confidence_reasons")),
-                confidence_warnings=_json_list(row.get("confidence_warnings")),
-                model_run_id=row.get("run_id"),
-                icir_overall=run.get("icir"),
-                trend_label=row.get("trend_label"),
-                trend_prob_up=row.get("trend_prob_up"),
-                trend_expected_return=row.get("trend_expected_return"),
-                kolb_price_p50=row.get("kolb_price_p50"),
-                kolb_price_low=row.get("kolb_price_low"),
-                kolb_price_high=row.get("kolb_price_high"),
-                kolb_horizon_days=row.get("kolb_horizon_days"),
-                kolb_band_level=row.get("kolb_band_level"),
-                risk_sigma_5d=row.get("risk_sigma_5d"),
-                risk_sigma_naive_5d=row.get("risk_sigma_naive_5d"),
-                risk_vol_percentile=row.get("risk_vol_percentile"),
-                risk_level=row.get("risk_level"),
-                risk_z=row.get("risk_z"),
-                risk_band_level=row.get("risk_band_level"),
-                risk_horizon_days=row.get("risk_horizon_days"),
-                risk_method=row.get("risk_method"),
-                risk_validation=_run_risk_validation(run),
-                xai_available=xai is not None,
-                xai_method=str(row.get("xai_method") or ("" if xai is None else xai["method"])),
-                xai_caveat="" if xai is None else xai["caveat"],
-                xai_approximate=row.get("xai_approximate"),
-                xai_error=row.get("xai_error"),
-                xai_generated_at=row.get("xai_generated_at"),
-                xai_top_positive=[] if xai is None else xai["top_positive"],
-                xai_top_negative=[] if xai is None else xai["top_negative"],
-                xai_group_summaries=[] if xai is None else xai["group_summaries"],
-            )
-        except Exception:  # serving katmani API'yi asla bozmasin
-            return None
+            # Calisma basligi SATIRIN run_id'sinden (satir ile latest_run arasinda yeni kosu yazilabilir).
+            run = store.get_run(int(row["run_id"])) or {}
+        except (sqlite3.Error, OSError) as exc:
+            logger.error("serving DB okunamadi (%s): %s: %s", self._db_path, type(exc).__name__, exc)
+            raise PeerStoreUnavailable(f"serving_db_unreadable:{type(exc).__name__}") from exc
+        return self._to_block(row, run)
 
-    def enrich(self, response: AnalysisResponse) -> AnalysisResponse:
-        block = self.get_peer_block(response.symbol)
-        if block is not None:
-            response.peer = block
-        return response
+    @staticmethod
+    def _to_block(row: dict, run: dict) -> PeerBlock:
+        xai = _parse_peer_xai(row.get("xai_top_features"))
+        return PeerBlock(
+            available=True,
+            as_of_date=row.get("as_of_date"),
+            peer_score=row.get("peer_score"),
+            peer_percentile=row.get("peer_percentile"),
+            peer_label=row.get("peer_label"),
+            universe_size=row.get("universe_size"),
+            segment_liq=row.get("segment_liq"),
+            segment_vol=row.get("segment_vol"),
+            segment_sector=row.get("segment_sector"),
+            segment_icir=row.get("segment_icir"),
+            confidence_label=row.get("confidence_label"),
+            confidence_reasons=_json_list(row.get("confidence_reasons")),
+            confidence_warnings=_json_list(row.get("confidence_warnings")),
+            model_run_id=row.get("run_id"),
+            icir_overall=run.get("icir"),
+            trend_label=row.get("trend_label"),
+            trend_prob_up=row.get("trend_prob_up"),
+            trend_expected_return=row.get("trend_expected_return"),
+            kolb_price_p50=row.get("kolb_price_p50"),
+            kolb_price_low=row.get("kolb_price_low"),
+            kolb_price_high=row.get("kolb_price_high"),
+            kolb_horizon_days=row.get("kolb_horizon_days"),
+            kolb_band_level=row.get("kolb_band_level"),
+            risk_sigma_5d=row.get("risk_sigma_5d"),
+            risk_sigma_naive_5d=row.get("risk_sigma_naive_5d"),
+            risk_vol_percentile=row.get("risk_vol_percentile"),
+            risk_level=row.get("risk_level"),
+            risk_z=row.get("risk_z"),
+            risk_band_level=row.get("risk_band_level"),
+            risk_horizon_days=row.get("risk_horizon_days"),
+            risk_method=row.get("risk_method"),
+            risk_validation=_run_risk_validation(run),
+            xai_available=xai is not None,
+            xai_method=str(row.get("xai_method") or ("" if xai is None else xai["method"])),
+            xai_caveat="" if xai is None else xai["caveat"],
+            xai_approximate=row.get("xai_approximate"),
+            xai_error=row.get("xai_error"),
+            xai_generated_at=row.get("xai_generated_at"),
+            xai_top_positive=[] if xai is None else xai["top_positive"],
+            xai_top_negative=[] if xai is None else xai["top_negative"],
+            xai_group_summaries=[] if xai is None else xai["group_summaries"],
+        )

@@ -24,15 +24,19 @@ from src.api.schemas.analysis import (
     PeerBlock,
     ServingRunBlock,
 )
-from src.api.services.analysis_freshness import compute_freshness
+from src.api.services.analysis_freshness import compute_freshness, trading_days_between
 from src.api.services.data_quality_monitor import compute_psi_30d
-from src.api.services.peer_service import PeerEnrichmentService
-from src.api.services.serving_health import default_serving_db_path, serving_pool_status
+from src.api.services.peer_service import PeerEnrichmentService, PeerStoreUnavailable
+from src.api.services.serving_health import serving_pool_status
+from src.serving.paths import default_serving_db_path
 
 logger = logging.getLogger(__name__)
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 _ISTANBUL = timezone(timedelta(hours=3))  # Turkiye sabit UTC+3 (DST yok)
 _LEVELS = ("low", "medium", "high")
+# as_of (havuz) ile piyasa CSV son tarihi arasi izin verilen islem gunu farki (verinin
+# kendi bayatlik esigi ile ayni: 1 islem gunu).
+_AS_OF_LAG_MAX_TRADING_DAYS = 1
 _SYMBOL_RE = re.compile(r"^[A-Z0-9]{1,10}$")
 
 
@@ -103,7 +107,23 @@ class AnalysisService:
 
         pool = serving_pool_status(self._serving_db_path, today=today)
         serving_run = self._serving_block(pool)
-        peer = self._peers.get_peer_block(symbol)
+        try:
+            peer = self._peers.get_peer_block(symbol)
+        except PeerStoreUnavailable as exc:
+            # DB yok/kilitli/bozuk: hizmet hatasi (HTTP 503), sembol yoklugu (no_data) DEGIL.
+            logger.error("analiz kurulamadi, serving DB kullanilamiyor (%s): %s", symbol, exc)
+            return AnalysisResponse(
+                symbol=symbol,
+                analysis_status="unavailable",
+                generated_at=generated_at,
+                confidence=ConfidenceBlock(
+                    label="low",
+                    warnings=["Gecelik havuz veritabani su an okunamiyor (unavailable); "
+                              "daha sonra tekrar deneyin."],
+                ),
+                disclaimer=INVESTMENT_DISCLAIMER,
+                serving_run=serving_run,
+            )
         if peer is None:
             return AnalysisResponse(
                 symbol=symbol,
@@ -119,13 +139,14 @@ class AnalysisService:
 
         csv_path = os.path.join(self._data_dir, f"{symbol}.csv")
         last_date, last_close = _read_market_tail(csv_path)
+        csv_last_date = last_date  # fallback'ten ONCE: gercek piyasa verisi son tarihi
         if last_date is None:
             # Piyasa CSV'si yok: serving as_of_date'e dus (fiyat bilinmiyor).
             last_date = str(peer.as_of_date)[:10] if peer.as_of_date else None
         data_block = self._data_block(last_date, last_close, today.isoformat())
         dq = self._data_quality(symbol, csv_path)
 
-        conf, status = self._confidence(peer, data_block, pool, dq)
+        conf, status = self._confidence(peer, data_block, pool, dq, csv_last_date)
         return AnalysisResponse(
             symbol=symbol,
             analysis_status=status,
@@ -181,8 +202,9 @@ class AnalysisService:
         data: DataBlock,
         pool: dict,
         dq: DataQualityBlock,
+        csv_last_date: Optional[str] = None,
     ) -> Tuple[ConfidenceBlock, str]:
-        """Ust-seviye guven: Kol-B etiketi; bayat veri / yedek risk yontemi / drift dusurur."""
+        """Ust-seviye guven: Kol-B etiketi; bayat veri / as_of geriligi / risk durumu / drift dusurur."""
         label = peer.confidence_label if peer.confidence_label in _LEVELS else "low"
         reasons: List[str] = list(peer.confidence_reasons)
         warnings: List[str] = list(peer.confidence_warnings)
@@ -198,10 +220,17 @@ class AnalysisService:
                 f"Gecelik havuz kosusu {pool.get('age_days')} gun once "
                 f"({pool.get('as_of_date')}); sonuclar guncel olmayabilir."
             )
-        if data_stale or pool_stale:
+        as_of_lag = self._as_of_lag_warning(peer, csv_last_date)
+        if as_of_lag:
+            warnings.append(as_of_lag)
+        if data_stale or pool_stale or as_of_lag:
             label = "low"
 
-        if getattr(peer, "risk_method", None) == "naive_fallback":
+        risk_method = getattr(peer, "risk_method", None)
+        if risk_method is None:
+            warnings.append(self._missing_risk_warning(peer))
+            label = _lower(label)
+        elif risk_method == "naive_fallback":
             warnings.append(
                 "Risk modeli yedek (naive) yonteme dustu; risk seviyesi ve fiyat araligi "
                 "dusuk guvenlidir."
@@ -222,10 +251,43 @@ class AnalysisService:
         if risk_level and label != "low":
             reasons.append(f"Risk seviyesi: {risk_level}.")
 
-        if data_stale or pool_stale:
+        if data_stale or pool_stale or as_of_lag:
             status = "stale_data"
         elif label == "low":
             status = "low_confidence"
         else:
             status = "ok"
         return ConfidenceBlock(label=label, reasons=reasons, warnings=warnings), status
+
+    def _as_of_lag_warning(self, peer: PeerBlock, csv_last_date: Optional[str]) -> Optional[str]:
+        """Havuz as_of_date piyasa CSV'sinin son tarihinden > 1 islem gunu gerideyse uyari.
+
+        Fiyat bandi ve fiyat capasi (kolb_price_*) as_of kapanisina aittir; CSV ilerlediyse
+        band guncel fiyata gore yorumlanamaz. Tarih okunamazsa / karsilastirilamazsa None.
+        """
+        if not csv_last_date or not peer.as_of_date:
+            return None
+        as_of = str(peer.as_of_date)[:10]
+        try:
+            lag = trading_days_between(as_of, csv_last_date[:10], self._calendar_path)
+        except (ValueError, TypeError) as exc:
+            logger.warning("as_of/CSV tarih karsilastirmasi yapilamadi (%s, %s): %s",
+                           as_of, csv_last_date, exc)
+            return None
+        if lag <= _AS_OF_LAG_MAX_TRADING_DAYS:
+            return None
+        return (
+            f"Gecelik havuz {as_of} kapanisina gore uretildi; piyasa verisi {csv_last_date[:10]} "
+            f"tarihine ilerledi ({lag} islem gunu). Fiyat araligi ve fiyat capasi eski "
+            f"{as_of} kapanisina aittir."
+        )
+
+    @staticmethod
+    def _missing_risk_warning(peer: PeerBlock) -> str:
+        """risk_method None: kosu-duzeyi hata mi, sembolun kisa gecmisi mi?"""
+        val = peer.risk_validation if isinstance(peer.risk_validation, dict) else {}
+        if val.get("error"):
+            return ("Risk modeli bu gece calismadi (kosu-duzeyi hata); risk seviyesi ve "
+                    "fiyat araligi uretilemedi.")
+        return ("Bu sembol icin risk tahmini yok (yetersiz/kesintili fiyat gecmisi veya "
+                "olcek kirigi karantinasi); fiyat araligi uretilemedi.")

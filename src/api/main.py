@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import sys
 from datetime import datetime, timezone
 from typing import Any, Dict
@@ -48,11 +49,7 @@ from src.api.services.rate_limit import (
     get_default_limiter,
     rate_limit_middleware_factory,
 )
-from src.api.services.serving_health import (
-    default_serving_db_path,
-    nightly_run_status,
-    serving_pool_status,
-)
+from src.api.services.serving_health import nightly_run_status, serving_pool_status
 from src.api.services.symbols_service import list_serving_symbols
 
 logger = logging.getLogger(__name__)
@@ -96,23 +93,21 @@ def health_check() -> Dict[str, Any]:
     """Servis sağlık kontrolü: serving havuzu tazeliği ve son gecelik koşu durumu."""
     pool = serving_pool_status()
     nightly = nightly_run_status()
+    risk = nightly.get("risk") if isinstance(nightly.get("risk"), dict) else None
+    risk_failed = risk is not None and risk.get("status") == "failed"
     healthy = (
         bool(pool.get("available"))
         and not pool.get("stale")
         and not nightly.get("interrupted")
+        and not risk_failed  # risk adimi coktuyse fiyat bandi bos: servis "degraded"
     )
     return {
         "status": "ok" if healthy else "degraded",
         "api_version": API_VERSION,
-        "serving_db_path": default_serving_db_path(),
         "cors": {
             "mode": _CORS_SETTINGS.mode,
             "allow_origins": _CORS_SETTINGS.allow_origins,
             "allow_origin_regex": _CORS_SETTINGS.allow_origin_regex,
-        },
-        "runtime": {
-            "project_root": _PROJECT_ROOT,
-            "python": sys.executable,
         },
         "registered_symbols": int(pool.get("n_symbols", 0)) if pool.get("available") else 0,
         "serving_pool": pool,
@@ -126,19 +121,34 @@ def list_symbols() -> Dict[str, Any]:
     """Son gecelik havuz kosusundaki hisse kodlarini listeler."""
     try:
         symbols = list_serving_symbols()
-    except Exception as exc:  # noqa: BLE001 - istemciye 500 + log
+    except (sqlite3.Error, OSError):
+        logger.exception("symbols query failed (serving DB)")
+        raise HTTPException(status_code=503, detail="Serving database unavailable")
+    except Exception:  # noqa: BLE001 - istemciye genel 500; ayrinti yalniz sunucu logunda
         logger.exception("symbols query failed")
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="Internal server error")
     return {"count": len(symbols), "symbols": symbols}
+
+
+def _bind_address() -> tuple[str, int]:
+    """Varsayilan YALNIZ loopback (127.0.0.1); disariya acmak icin AI_CORE_API_HOST/PORT."""
+    host = os.getenv("AI_CORE_API_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    try:
+        port = int(os.getenv("AI_CORE_API_PORT", "8000"))
+    except ValueError:
+        logger.warning("AI_CORE_API_PORT gecersiz; 8000 kullaniliyor")
+        port = 8000
+    return host, port
 
 
 if __name__ == "__main__":
     try:
         import uvicorn
+        _host, _port = _bind_address()
         uvicorn.run(
             "src.api.main:app",
-            host="0.0.0.0",
-            port=8000,
+            host=_host,
+            port=_port,
             reload=True,
             reload_dirs=[_PROJECT_ROOT],
         )
