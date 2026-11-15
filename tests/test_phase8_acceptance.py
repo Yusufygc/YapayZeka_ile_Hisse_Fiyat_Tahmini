@@ -29,10 +29,14 @@ except Exception as exc:  # pragma: no cover - optional dependency guard
     DATA_MANAGER_IMPORT_ERROR = exc
 
 try:
-    from src.pipeline.evaluation_manager import EvaluationManager
+    from _eval_helpers import make_eval_services
+    from src.pipeline.evaluation_services import BacktestService
 except Exception as exc:  # pragma: no cover - optional dependency guard
-    EvaluationManager = None
+    make_eval_services = None
     EVALUATION_IMPORT_ERROR = exc
+
+from src.pipeline.signal_calibration import grid as calibration_grid
+from src.pipeline.signal_calibration import selection as calibration_selection
 
 try:
     from src.pipeline.orchestrator import ForecastingPipeline
@@ -162,14 +166,14 @@ class Phase8AcceptanceTests(unittest.TestCase):
         )
         self.assertTrue(set(frame["Volatility_Regime"]).issubset({"normal_vol", "low_vol", "high_vol"}))
 
-    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    @unittest.skipIf(make_eval_services is None, f"evaluation services import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_shadow_backtest_report_writes_three_modes_per_model(self):
-        manager = EvaluationManager.__new__(EvaluationManager)
-        manager.outputs_dir = self.tmp
-        manager.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=5)
-        manager.commission_bps = 10.0
-        manager.slippage_bps = 5.0
-        manager.initial_capital = 100000.0
+        svc = make_eval_services()
+        svc.ctx.outputs_dir = self.tmp
+        svc.state.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=5)
+        svc.ctx.commission_bps = 10.0
+        svc.ctx.slippage_bps = 5.0
+        svc.ctx.initial_capital = 100000.0
 
         dates = pd.date_range("2024-01-01", periods=10, freq="B")
         payload = {
@@ -180,8 +184,7 @@ class Phase8AcceptanceTests(unittest.TestCase):
             "prev_close": np.full(10, 100.0),
             "market_regime": np.zeros(10),
         }
-        EvaluationManager._run_shadow_backtests(
-            manager,
+        svc.backtest._run_shadow_backtests(
             backtest_inputs={"Candidate": payload},
             model_metrics_by_model={"Candidate": {"Dir_Acc": 40.0, "RMSE_vs_benchmark": 0.95, "Composite_Score": 55.0}},
             suffix="phase8",
@@ -196,19 +199,19 @@ class Phase8AcceptanceTests(unittest.TestCase):
         soft_row = report.loc[report["Shadow_Mode"] == "professional_soft_gate"].iloc[0]
         self.assertEqual(int(soft_row["Blocked_By_DirAcc"]), 0)
 
-    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    @unittest.skipIf(make_eval_services is None, f"evaluation services import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_run_backtests_disables_gate_and_shadow_by_default(self):
-        manager = EvaluationManager.__new__(EvaluationManager)
-        manager.outputs_dir = self.tmp
-        manager.backtest_enabled = True
-        manager.dataset_metadata = {"target_mode": "price"}
-        manager.signal_mode = "professional"
-        manager.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=5)
-        manager.commission_bps = 10.0
-        manager.slippage_bps = 5.0
-        manager.initial_capital = 100000.0
-        manager.latest_backtest_results = {}
-        manager.latest_backtest_metrics = {}
+        svc = make_eval_services()
+        svc.ctx.outputs_dir = self.tmp
+        svc.ctx.backtest_enabled = True
+        svc.ctx.dataset_metadata = {"target_mode": "price"}
+        svc.ctx.signal_mode = "professional"
+        svc.state.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=5)
+        svc.ctx.commission_bps = 10.0
+        svc.ctx.slippage_bps = 5.0
+        svc.ctx.initial_capital = 100000.0
+        svc.state.latest_backtest_results = {}
+        svc.state.latest_backtest_metrics = {}
 
         dates = pd.date_range("2024-01-01", periods=8, freq="B")
         payload = {
@@ -220,10 +223,9 @@ class Phase8AcceptanceTests(unittest.TestCase):
             "market_regime": np.zeros(8),
         }
 
-        with patch.object(EvaluationManager, "_get_signal_gate_diagnostics") as gate_probe, \
-             patch.object(EvaluationManager, "_get_shadow_backtests") as shadow_probe:
-            result = EvaluationManager._run_backtests(
-                manager,
+        with patch.object(BacktestService, "_get_signal_gate_diagnostics") as gate_probe, \
+             patch.object(BacktestService, "_get_shadow_backtests") as shadow_probe:
+            result = svc.backtest._run_backtests(
                 {"Candidate": payload},
                 suffix="default_diag",
                 model_metrics_by_model={"Candidate": {"Dir_Acc": 53.0, "RMSE_vs_benchmark": 0.95, "Composite_Score": 55.0}},
@@ -236,22 +238,22 @@ class Phase8AcceptanceTests(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "signal_gate_diagnostics_v1_default_diag.csv")))
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "shadow_backtest_comparison_v1_default_diag.csv")))
 
-    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    @unittest.skipIf(make_eval_services is None, f"evaluation services import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_run_backtests_writes_simple_order_report(self):
-        manager = EvaluationManager.__new__(EvaluationManager)
-        manager.outputs_dir = self.tmp
-        manager.backtest_enabled = True
-        manager.auto_signal_diagnostics = False
-        manager.enable_gate_diagnostics = False
-        manager.enable_shadow_backtests = False
-        manager.dataset_metadata = {"target_mode": "price"}
-        manager.signal_mode = "simple"
-        manager.signal_config = SignalConfig()
-        manager.commission_bps = 0.0
-        manager.slippage_bps = 0.0
-        manager.initial_capital = 100000.0
-        manager.latest_backtest_results = {}
-        manager.latest_backtest_metrics = {}
+        svc = make_eval_services()
+        svc.ctx.outputs_dir = self.tmp
+        svc.ctx.backtest_enabled = True
+        svc.ctx.auto_signal_diagnostics = False
+        svc.ctx.enable_gate_diagnostics = False
+        svc.ctx.enable_shadow_backtests = False
+        svc.ctx.dataset_metadata = {"target_mode": "price"}
+        svc.ctx.signal_mode = "simple"
+        svc.state.signal_config = SignalConfig()
+        svc.ctx.commission_bps = 0.0
+        svc.ctx.slippage_bps = 0.0
+        svc.ctx.initial_capital = 100000.0
+        svc.state.latest_backtest_results = {}
+        svc.state.latest_backtest_metrics = {}
 
         dates = pd.date_range("2024-01-01", periods=3, freq="B")
         payload = {
@@ -262,8 +264,7 @@ class Phase8AcceptanceTests(unittest.TestCase):
             "prev_close": np.full(3, 100.0),
             "market_regime": np.zeros(3),
         }
-        result = EvaluationManager._run_backtests(
-            manager,
+        result = svc.backtest._run_backtests(
             {"Candidate": payload},
             suffix="simple_orders",
             model_metrics_by_model={"Candidate": {"Dir_Acc": 50.0}},
@@ -277,21 +278,21 @@ class Phase8AcceptanceTests(unittest.TestCase):
         self.assertEqual(orders["Executable_Order_TR"].tolist(), ["AL", "SAT", "AL"])
         self.assertEqual(float(result["metrics"]["Candidate"]["Cost_Drag"]), 0.0)
 
-    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    @unittest.skipIf(make_eval_services is None, f"evaluation services import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_run_backtests_writes_gate_and_shadow_when_enabled(self):
-        manager = EvaluationManager.__new__(EvaluationManager)
-        manager.outputs_dir = self.tmp
-        manager.backtest_enabled = True
-        manager.enable_gate_diagnostics = True
-        manager.enable_shadow_backtests = True
-        manager.dataset_metadata = {"target_mode": "price"}
-        manager.signal_mode = "professional"
-        manager.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=5)
-        manager.commission_bps = 10.0
-        manager.slippage_bps = 5.0
-        manager.initial_capital = 100000.0
-        manager.latest_backtest_results = {}
-        manager.latest_backtest_metrics = {}
+        svc = make_eval_services()
+        svc.ctx.outputs_dir = self.tmp
+        svc.ctx.backtest_enabled = True
+        svc.ctx.enable_gate_diagnostics = True
+        svc.ctx.enable_shadow_backtests = True
+        svc.ctx.dataset_metadata = {"target_mode": "price"}
+        svc.ctx.signal_mode = "professional"
+        svc.state.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=5)
+        svc.ctx.commission_bps = 10.0
+        svc.ctx.slippage_bps = 5.0
+        svc.ctx.initial_capital = 100000.0
+        svc.state.latest_backtest_results = {}
+        svc.state.latest_backtest_metrics = {}
 
         dates = pd.date_range("2024-01-01", periods=8, freq="B")
         payload = {
@@ -302,8 +303,7 @@ class Phase8AcceptanceTests(unittest.TestCase):
             "prev_close": np.full(8, 100.0),
             "market_regime": np.zeros(8),
         }
-        result = EvaluationManager._run_backtests(
-            manager,
+        result = svc.backtest._run_backtests(
             {"Candidate": payload},
             suffix="enabled_diag",
             model_metrics_by_model={"Candidate": {"Dir_Acc": 53.0, "RMSE_vs_benchmark": 0.95, "Composite_Score": 55.0}},
@@ -314,23 +314,23 @@ class Phase8AcceptanceTests(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "signal_gate_diagnostics_v1_enabled_diag.csv")))
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "shadow_backtest_comparison_v1_enabled_diag.csv")))
 
-    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    @unittest.skipIf(make_eval_services is None, f"evaluation services import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_run_backtests_auto_writes_wf_and_final_diagnostics_with_underperform_label(self):
-        manager = EvaluationManager.__new__(EvaluationManager)
-        manager.outputs_dir = self.tmp
-        manager.backtest_enabled = True
-        manager.auto_signal_diagnostics = True
-        manager.enable_gate_diagnostics = False
-        manager.enable_shadow_backtests = False
-        manager.dataset_metadata = {"target_mode": "price"}
-        manager.signal_mode = "professional"
-        manager.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=5)
-        manager.commission_bps = 10.0
-        manager.slippage_bps = 5.0
-        manager.initial_capital = 100000.0
-        manager.signal_calibration_min_trades = 6
-        manager.latest_backtest_results = {}
-        manager.latest_backtest_metrics = {}
+        svc = make_eval_services()
+        svc.ctx.outputs_dir = self.tmp
+        svc.ctx.backtest_enabled = True
+        svc.ctx.auto_signal_diagnostics = True
+        svc.ctx.enable_gate_diagnostics = False
+        svc.ctx.enable_shadow_backtests = False
+        svc.ctx.dataset_metadata = {"target_mode": "price"}
+        svc.ctx.signal_mode = "professional"
+        svc.state.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=5)
+        svc.ctx.commission_bps = 10.0
+        svc.ctx.slippage_bps = 5.0
+        svc.ctx.initial_capital = 100000.0
+        svc.ctx.signal_calibration_min_trades = 6
+        svc.state.latest_backtest_results = {}
+        svc.state.latest_backtest_metrics = {}
 
         dates = pd.date_range("2024-01-01", periods=8, freq="B")
         payload = {
@@ -342,8 +342,7 @@ class Phase8AcceptanceTests(unittest.TestCase):
             "market_regime": np.zeros(8),
         }
 
-        result = EvaluationManager._run_backtests(
-            manager,
+        result = svc.backtest._run_backtests(
             {"Candidate": payload},
             suffix="final_holdout",
             model_metrics_by_model={"Candidate": {"Dir_Acc": 53.0, "RMSE_vs_benchmark": 0.95, "Composite_Score": 55.0}},
@@ -357,18 +356,18 @@ class Phase8AcceptanceTests(unittest.TestCase):
         self.assertIn("Signal_Diagnosis", report.columns)
         self.assertIn("underperform_buyhold", str(report.loc[0, "Signal_Diagnosis"]))
 
-    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    @unittest.skipIf(make_eval_services is None, f"evaluation services import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_walk_forward_signal_calibration_excludes_final_holdout_and_writes_reports(self):
-        manager = EvaluationManager.__new__(EvaluationManager)
-        manager.outputs_dir = self.tmp
-        manager.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=6)
-        manager.default_signal_config = manager.signal_config
-        manager.signal_threshold_source = "default_config"
-        manager.signal_threshold_calibration_summary = {"status": "applied", "final_holdout_used": False}
-        manager.dataset_metadata = {"target_mode": "price"}
-        manager.commission_bps = 10.0
-        manager.slippage_bps = 5.0
-        manager.initial_capital = 100000.0
+        svc = make_eval_services()
+        svc.ctx.outputs_dir = self.tmp
+        svc.state.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=6)
+        svc.ctx.default_signal_config = svc.state.signal_config
+        svc.state.signal_threshold_source = "default_config"
+        svc.state.signal_threshold_calibration_summary = {"status": "applied", "final_holdout_used": False}
+        svc.ctx.dataset_metadata = {"target_mode": "price"}
+        svc.ctx.commission_bps = 10.0
+        svc.ctx.slippage_bps = 5.0
+        svc.ctx.initial_capital = 100000.0
 
         dates = pd.date_range("2024-01-01", periods=12, freq="B")
         payload = {
@@ -391,21 +390,20 @@ class Phase8AcceptanceTests(unittest.TestCase):
             }
         ]
 
-        with patch.object(EvaluationManager, "_signal_calibration_grid", return_value=tiny_grid):
-            EvaluationManager._calibrate_walk_forward_signal_parameters(
-                manager,
+        with patch("src.pipeline.signal_calibration.grid.signal_calibration_grid", return_value=tiny_grid):
+            svc.signal_calibration._calibrate_walk_forward_signal_parameters(
                 wf_backtest_inputs={"Candidate": payload},
                 model_metrics_by_model={"Candidate": {"Dir_Acc": 53.0, "RMSE_vs_benchmark": 0.95, "Composite_Score": 55.0}},
             )
 
-        summary = manager.signal_threshold_calibration_summary
+        summary = svc.state.signal_threshold_calibration_summary
         self.assertEqual(summary["execution_calibration_set"], "walk_forward_backtest_inputs_only")
         self.assertFalse(summary["final_holdout_used"])
         self.assertEqual(summary["grid_size"], 1)
         self.assertEqual(summary["executed_trials"], 1)
         self.assertEqual(summary["trial_cap"], 64)
         self.assertEqual(summary["calibration_profile"], "production")
-        self.assertEqual(manager.signal_threshold_source, "walk_forward_signal_calibration")
+        self.assertEqual(svc.state.signal_threshold_source, "walk_forward_signal_calibration")
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "csv", "signal_calibration_v1.csv")))
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "md", "signal_calibration_decision_v1.md")))
         report = pd.read_csv(os.path.join(self.tmp, "csv", "signal_calibration_v1.csv"), sep=";")
@@ -442,18 +440,18 @@ class Phase8AcceptanceTests(unittest.TestCase):
         self.assertIn("OOS_Constraint_Passed", decision_md)
         self.assertIn("Active_For_Execution", decision_md)
 
-    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    @unittest.skipIf(make_eval_services is None, f"evaluation services import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_signal_calibration_production_sampler_is_stratified_and_deterministic(self):
-        manager = EvaluationManager.__new__(EvaluationManager)
-        manager.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=6)
-        manager.signal_calibration_profile = "production"
-        manager.signal_calibration_sampler = "adaptive_stratified"
-        manager.signal_calibration_seed = 42
-        manager.signal_calibration_max_trials = 64
+        svc = make_eval_services()
+        svc.state.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=6)
+        svc.ctx.signal_calibration_profile = "production"
+        svc.ctx.signal_calibration_sampler = "adaptive_stratified"
+        svc.ctx.signal_calibration_seed = 42
+        svc.ctx.signal_calibration_max_trials = 64
 
-        grid = EvaluationManager._signal_calibration_grid(manager.signal_config)
-        selected_a, metadata_a = EvaluationManager._apply_signal_calibration_trial_policy(manager, grid)
-        selected_b, metadata_b = EvaluationManager._apply_signal_calibration_trial_policy(manager, grid)
+        grid = calibration_grid.signal_calibration_grid(svc.state.signal_config)
+        selected_a, metadata_a = calibration_grid.apply_trial_policy(svc.ctx, grid)
+        selected_b, metadata_b = calibration_grid.apply_trial_policy(svc.ctx, grid)
 
         self.assertEqual(selected_a, selected_b)
         self.assertEqual(metadata_a["sampler"], "adaptive_stratified")
@@ -473,17 +471,15 @@ class Phase8AcceptanceTests(unittest.TestCase):
         ]:
             self.assertGreater(selected_df[column].nunique(), 1)
 
-    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    @unittest.skipIf(make_eval_services is None, f"evaluation services import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_signal_calibration_sampler_respects_exclusions_and_keeps_coverage(self):
-        manager = EvaluationManager.__new__(EvaluationManager)
-        manager.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=6)
-        grid = EvaluationManager._signal_calibration_grid(manager.signal_config)
-        from src.pipeline.evaluation_services import SignalCalibrationService
+        svc = make_eval_services()
+        svc.state.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=6)
+        grid = calibration_grid.signal_calibration_grid(svc.state.signal_config)
+        first_batch = calibration_grid.sample_signal_calibration_grid(grid, cap=32, seed=42)
+        excluded = {calibration_grid.grid_param_key(params) for params in first_batch}
 
-        first_batch = SignalCalibrationService._sample_signal_calibration_grid(grid, cap=32, seed=42)
-        excluded = {SignalCalibrationService._grid_param_key(params) for params in first_batch}
-
-        second_batch = SignalCalibrationService._sample_signal_calibration_grid(
+        second_batch = calibration_grid.sample_signal_calibration_grid(
             grid,
             cap=64,
             seed=43,
@@ -491,30 +487,30 @@ class Phase8AcceptanceTests(unittest.TestCase):
         )
 
         self.assertEqual(len(second_batch), 64)
-        self.assertTrue(all(SignalCalibrationService._grid_param_key(params) not in excluded for params in second_batch))
+        self.assertTrue(all(calibration_grid.grid_param_key(params) not in excluded for params in second_batch))
         self.assertEqual(
-            SignalCalibrationService._signal_calibration_coverage_status(grid, first_batch + second_batch),
+            calibration_grid.coverage_status(grid, first_batch + second_batch),
             "complete",
         )
 
-    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    @unittest.skipIf(make_eval_services is None, f"evaluation services import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_signal_calibration_adaptive_expands_when_selected_sharpe_is_weak(self):
-        manager = EvaluationManager.__new__(EvaluationManager)
-        manager.outputs_dir = self.tmp
-        manager.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=6)
-        manager.default_signal_config = manager.signal_config
-        manager.signal_threshold_source = "default_config"
-        manager.signal_threshold_calibration_summary = {}
-        manager.dataset_metadata = {"target_mode": "price"}
-        manager.commission_bps = 10.0
-        manager.slippage_bps = 5.0
-        manager.initial_capital = 100000.0
-        manager.signal_calibration_profile = "production"
-        manager.signal_calibration_sampler = "adaptive_stratified"
-        manager.signal_calibration_seed = 42
-        manager.signal_calibration_max_trials = 64
-        manager.signal_calibration_min_trades = 6
-        manager.signal_calibration_objective = "risk_adjusted"
+        svc = make_eval_services()
+        svc.ctx.outputs_dir = self.tmp
+        svc.state.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=6)
+        svc.ctx.default_signal_config = svc.state.signal_config
+        svc.state.signal_threshold_source = "default_config"
+        svc.state.signal_threshold_calibration_summary = {}
+        svc.ctx.dataset_metadata = {"target_mode": "price"}
+        svc.ctx.commission_bps = 10.0
+        svc.ctx.slippage_bps = 5.0
+        svc.ctx.initial_capital = 100000.0
+        svc.ctx.signal_calibration_profile = "production"
+        svc.ctx.signal_calibration_sampler = "adaptive_stratified"
+        svc.ctx.signal_calibration_seed = 42
+        svc.ctx.signal_calibration_max_trials = 64
+        svc.ctx.signal_calibration_min_trades = 6
+        svc.ctx.signal_calibration_objective = "risk_adjusted"
 
         dates = pd.date_range("2024-01-01", periods=8, freq="B")
         payload = {
@@ -538,54 +534,53 @@ class Phase8AcceptanceTests(unittest.TestCase):
 
         with patch("src.pipeline.signal_calibrator.run_backtest", return_value={}), \
              patch("src.pipeline.signal_calibrator.summarize_backtest", return_value=weak_summary):
-            result = EvaluationManager._calibrate_walk_forward_signal_parameters(
-                manager,
+            result = svc.signal_calibration._calibrate_walk_forward_signal_parameters(
                 wf_backtest_inputs={"Candidate": payload},
                 model_metrics_by_model={"Candidate": {"Dir_Acc": 53.0, "RMSE_vs_benchmark": 0.95, "Composite_Score": 55.0}},
             )
 
-        summary = manager.signal_threshold_calibration_summary
+        summary = svc.state.signal_threshold_calibration_summary
         self.assertTrue(summary["adaptive_expanded"])
         self.assertEqual(summary["executed_trials"], 128)
         self.assertEqual(len(result["calibration_df"]), 128)
         self.assertEqual(summary["coverage_status"], "complete")
 
-    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    @unittest.skipIf(make_eval_services is None, f"evaluation services import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_signal_calibration_research_profile_runs_full_grid(self):
-        manager = EvaluationManager.__new__(EvaluationManager)
-        manager.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=6)
-        manager.signal_calibration_profile = "research"
-        manager.signal_calibration_sampler = "adaptive_stratified"
-        manager.signal_calibration_seed = 42
-        manager.signal_calibration_max_trials = 2
-        grid = EvaluationManager._signal_calibration_grid(manager.signal_config)
+        svc = make_eval_services()
+        svc.state.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=6)
+        svc.ctx.signal_calibration_profile = "research"
+        svc.ctx.signal_calibration_sampler = "adaptive_stratified"
+        svc.ctx.signal_calibration_seed = 42
+        svc.ctx.signal_calibration_max_trials = 2
+        grid = calibration_grid.signal_calibration_grid(svc.state.signal_config)
 
-        selected, metadata = EvaluationManager._apply_signal_calibration_trial_policy(manager, grid)
+        selected, metadata = calibration_grid.apply_trial_policy(svc.ctx, grid)
 
         self.assertEqual(len(selected), len(grid))
         self.assertIsNone(metadata["trial_cap"])
         self.assertEqual(metadata["sampler"], "full_grid")
 
-    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    @unittest.skipIf(make_eval_services is None, f"evaluation services import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_oos_confirmation_rejects_high_calibration_return_with_negative_eval_sharpe(self):
-        manager = EvaluationManager.__new__(EvaluationManager)
-        manager.outputs_dir = self.tmp
-        manager.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=6)
-        manager.default_signal_config = manager.signal_config
-        manager.signal_threshold_source = "default_config"
-        manager.signal_threshold_calibration_summary = {}
-        manager.dataset_metadata = {"target_mode": "price"}
-        manager.commission_bps = 10.0
-        manager.slippage_bps = 5.0
-        manager.initial_capital = 100000.0
-        manager.signal_calibration_profile = "production"
-        manager.signal_calibration_sampler = "prefix"
-        manager.signal_calibration_max_trials = 2
-        manager.signal_calibration_min_trades = 6
-        manager.signal_calibration_require_oos_confirmation = True
-        manager.signal_calibration_min_eval_excess_return = 0.0
-        manager.signal_calibration_min_eval_sharpe = 0.0
-        manager.signal_calibration_reject_behavior = "no_trade"
+        svc = make_eval_services()
+        svc.ctx.outputs_dir = self.tmp
+        svc.state.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=6)
+        svc.ctx.default_signal_config = svc.state.signal_config
+        svc.state.signal_threshold_source = "default_config"
+        svc.state.signal_threshold_calibration_summary = {}
+        svc.ctx.dataset_metadata = {"target_mode": "price"}
+        svc.ctx.commission_bps = 10.0
+        svc.ctx.slippage_bps = 5.0
+        svc.ctx.initial_capital = 100000.0
+        svc.ctx.signal_calibration_profile = "production"
+        svc.ctx.signal_calibration_sampler = "prefix"
+        svc.ctx.signal_calibration_max_trials = 2
+        svc.ctx.signal_calibration_min_trades = 6
+        svc.ctx.signal_calibration_require_oos_confirmation = True
+        svc.ctx.signal_calibration_min_eval_excess_return = 0.0
+        svc.ctx.signal_calibration_min_eval_sharpe = 0.0
+        svc.ctx.signal_calibration_reject_behavior = "no_trade"
 
         dates = pd.date_range("2024-01-01", periods=8, freq="B")
         payload = {
@@ -623,11 +618,10 @@ class Phase8AcceptanceTests(unittest.TestCase):
             {"Model": "Candidate", "Net_Return": 0.03, "BuyHold_Return": 0.0, "Max_Drawdown": -0.01, "Trade_Count": 6, "Sharpe": 0.4, "Calmar": 3.0, "Beats_BuyHold_NetReturn": True},
         ]
 
-        with patch.object(EvaluationManager, "_signal_calibration_grid", return_value=grid), \
+        with patch("src.pipeline.signal_calibration.grid.signal_calibration_grid", return_value=grid), \
              patch("src.pipeline.signal_calibrator.run_backtest", return_value={}), \
              patch("src.pipeline.signal_calibrator.summarize_backtest", side_effect=summaries):
-            result = EvaluationManager._calibrate_walk_forward_signal_parameters(
-                manager,
+            result = svc.signal_calibration._calibrate_walk_forward_signal_parameters(
                 wf_backtest_inputs={"Candidate": payload},
                 wf_evaluation_backtest_inputs={"Candidate": payload},
                 model_metrics_by_model={"Candidate": {"Dir_Acc": 53.0, "RMSE_vs_benchmark": 0.95, "Composite_Score": 55.0}},
@@ -635,35 +629,35 @@ class Phase8AcceptanceTests(unittest.TestCase):
 
         self.assertEqual(result["best_row"]["Trial"], 2)
         self.assertTrue(result["best_row"]["OOS_Constraint_Passed"])
-        self.assertEqual(manager.signal_threshold_source, "walk_forward_signal_calibration")
+        self.assertEqual(svc.state.signal_threshold_source, "walk_forward_signal_calibration")
 
-    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    @unittest.skipIf(make_eval_services is None, f"evaluation services import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_oos_confirmation_rejects_all_trials_and_final_backtest_no_trades(self):
-        manager = EvaluationManager.__new__(EvaluationManager)
-        manager.outputs_dir = self.tmp
-        manager.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=6)
-        manager.default_signal_config = manager.signal_config
-        manager.signal_threshold_source = "default_config"
-        manager.signal_threshold_calibration_summary = {}
-        manager.dataset_metadata = {"target_mode": "price"}
-        manager.commission_bps = 10.0
-        manager.slippage_bps = 5.0
-        manager.initial_capital = 100000.0
-        manager.signal_mode = "professional"
-        manager.backtest_enabled = True
-        manager.auto_signal_diagnostics = True
-        manager.enable_gate_diagnostics = False
-        manager.enable_shadow_backtests = False
-        manager.latest_backtest_results = {}
-        manager.latest_backtest_metrics = {}
-        manager.signal_calibration_profile = "production"
-        manager.signal_calibration_sampler = "prefix"
-        manager.signal_calibration_max_trials = 1
-        manager.signal_calibration_min_trades = 6
-        manager.signal_calibration_require_oos_confirmation = True
-        manager.signal_calibration_min_eval_excess_return = 0.0
-        manager.signal_calibration_min_eval_sharpe = 0.0
-        manager.signal_calibration_reject_behavior = "no_trade"
+        svc = make_eval_services()
+        svc.ctx.outputs_dir = self.tmp
+        svc.state.signal_config = SignalConfig(quality_gate_mode="soft", min_holding_bars=1, max_holding_bars=6)
+        svc.ctx.default_signal_config = svc.state.signal_config
+        svc.state.signal_threshold_source = "default_config"
+        svc.state.signal_threshold_calibration_summary = {}
+        svc.ctx.dataset_metadata = {"target_mode": "price"}
+        svc.ctx.commission_bps = 10.0
+        svc.ctx.slippage_bps = 5.0
+        svc.ctx.initial_capital = 100000.0
+        svc.ctx.signal_mode = "professional"
+        svc.ctx.backtest_enabled = True
+        svc.ctx.auto_signal_diagnostics = True
+        svc.ctx.enable_gate_diagnostics = False
+        svc.ctx.enable_shadow_backtests = False
+        svc.state.latest_backtest_results = {}
+        svc.state.latest_backtest_metrics = {}
+        svc.ctx.signal_calibration_profile = "production"
+        svc.ctx.signal_calibration_sampler = "prefix"
+        svc.ctx.signal_calibration_max_trials = 1
+        svc.ctx.signal_calibration_min_trades = 6
+        svc.ctx.signal_calibration_require_oos_confirmation = True
+        svc.ctx.signal_calibration_min_eval_excess_return = 0.0
+        svc.ctx.signal_calibration_min_eval_sharpe = 0.0
+        svc.ctx.signal_calibration_reject_behavior = "no_trade"
 
         dates = pd.date_range("2024-01-01", periods=8, freq="B")
         payload = {
@@ -688,23 +682,21 @@ class Phase8AcceptanceTests(unittest.TestCase):
             {"Model": "Candidate", "Net_Return": 0.08, "BuyHold_Return": 0.0, "Max_Drawdown": -0.04, "Trade_Count": 6, "Sharpe": -0.1, "Calmar": 2.0, "Beats_BuyHold_NetReturn": True},
         ]
 
-        with patch.object(EvaluationManager, "_signal_calibration_grid", return_value=grid), \
+        with patch("src.pipeline.signal_calibration.grid.signal_calibration_grid", return_value=grid), \
              patch("src.pipeline.signal_calibrator.run_backtest", return_value={}), \
              patch("src.pipeline.signal_calibrator.summarize_backtest", side_effect=summaries):
-            result = EvaluationManager._calibrate_walk_forward_signal_parameters(
-                manager,
+            result = svc.signal_calibration._calibrate_walk_forward_signal_parameters(
                 wf_backtest_inputs={"Candidate": payload},
                 wf_evaluation_backtest_inputs={"Candidate": payload},
                 model_metrics_by_model={"Candidate": {"Dir_Acc": 53.0, "RMSE_vs_benchmark": 0.95, "Composite_Score": 55.0}},
             )
 
         self.assertTrue(result["rejected"])
-        self.assertEqual(manager.signal_threshold_source, "walk_forward_signal_rejected")
-        self.assertEqual(manager.signal_threshold_calibration_summary["execution_calibration_status"], "rejected_no_valid_oos_trial")
+        self.assertEqual(svc.state.signal_threshold_source, "walk_forward_signal_rejected")
+        self.assertEqual(svc.state.signal_threshold_calibration_summary["execution_calibration_status"], "rejected_no_valid_oos_trial")
         self.assertFalse(result["best_row"]["Active_For_Execution"])
 
-        bt = EvaluationManager._run_backtests(
-            manager,
+        bt = svc.backtest._run_backtests(
             {"Candidate": payload},
             suffix="final_holdout",
             model_metrics_by_model={"Candidate": {"Dir_Acc": 53.0, "RMSE_vs_benchmark": 0.95, "Composite_Score": 55.0}},
@@ -715,7 +707,7 @@ class Phase8AcceptanceTests(unittest.TestCase):
         report = pd.read_csv(os.path.join(self.tmp, "csv", "backtest_report_final_holdout.csv"), sep=";")
         self.assertIn("rejected_no_trade", str(report.loc[0, "Signal_Diagnosis"]))
 
-    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    @unittest.skipIf(make_eval_services is None, f"evaluation services import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_signal_calibration_prefers_traded_trial_over_zero_trade_when_min_not_met(self):
         rows = [
             {
@@ -744,12 +736,12 @@ class Phase8AcceptanceTests(unittest.TestCase):
             },
         ]
 
-        selected = EvaluationManager._select_signal_calibration_row(rows)
+        selected = calibration_selection.select_row(rows)
         self.assertEqual(selected["Trial"], 2)
 
-    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    @unittest.skipIf(make_eval_services is None, f"evaluation services import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_signal_calibration_prefers_risk_adjusted_trial_over_raw_return(self):
-        aggressive = EvaluationManager._summarize_signal_calibration_trial(
+        aggressive = calibration_selection.summarize_trial(
             trial_idx=1,
             params={},
             summaries=[{
@@ -763,7 +755,7 @@ class Phase8AcceptanceTests(unittest.TestCase):
             }],
             min_trade_count=6,
         )
-        balanced = EvaluationManager._summarize_signal_calibration_trial(
+        balanced = calibration_selection.summarize_trial(
             trial_idx=2,
             params={},
             summaries=[{
@@ -778,15 +770,15 @@ class Phase8AcceptanceTests(unittest.TestCase):
             min_trade_count=6,
         )
 
-        selected = EvaluationManager._select_signal_calibration_row([aggressive, balanced])
+        selected = calibration_selection.select_row([aggressive, balanced])
 
         self.assertGreater(aggressive["Mean_Net_Return"], balanced["Mean_Net_Return"])
         self.assertGreater(balanced["Risk_Adjusted_Score"], aggressive["Risk_Adjusted_Score"])
         self.assertEqual(selected["Trial"], 2)
 
-    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    @unittest.skipIf(make_eval_services is None, f"evaluation services import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_signal_calibration_prefers_excess_return_when_net_return_ties(self):
-        underperformer = EvaluationManager._summarize_signal_calibration_trial(
+        underperformer = calibration_selection.summarize_trial(
             trial_idx=1,
             params={},
             summaries=[{
@@ -800,7 +792,7 @@ class Phase8AcceptanceTests(unittest.TestCase):
             }],
             min_trade_count=6,
         )
-        outperformer = EvaluationManager._summarize_signal_calibration_trial(
+        outperformer = calibration_selection.summarize_trial(
             trial_idx=2,
             params={},
             summaries=[{
@@ -815,15 +807,15 @@ class Phase8AcceptanceTests(unittest.TestCase):
             min_trade_count=6,
         )
 
-        selected = EvaluationManager._select_signal_calibration_row([underperformer, outperformer])
+        selected = calibration_selection.select_row([underperformer, outperformer])
 
         self.assertEqual(underperformer["Mean_Net_Return"], outperformer["Mean_Net_Return"])
         self.assertGreater(outperformer["Mean_Excess_Return"], underperformer["Mean_Excess_Return"])
         self.assertEqual(selected["Trial"], 2)
 
-    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    @unittest.skipIf(make_eval_services is None, f"evaluation services import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_signal_calibration_rejects_under_min_trade_trial_when_valid_exists(self):
-        under_min = EvaluationManager._summarize_signal_calibration_trial(
+        under_min = calibration_selection.summarize_trial(
             trial_idx=1,
             params={},
             summaries=[{
@@ -837,7 +829,7 @@ class Phase8AcceptanceTests(unittest.TestCase):
             }],
             min_trade_count=6,
         )
-        valid = EvaluationManager._summarize_signal_calibration_trial(
+        valid = calibration_selection.summarize_trial(
             trial_idx=2,
             params={},
             summaries=[{
@@ -852,7 +844,7 @@ class Phase8AcceptanceTests(unittest.TestCase):
             min_trade_count=6,
         )
 
-        selected = EvaluationManager._select_signal_calibration_row([under_min, valid])
+        selected = calibration_selection.select_row([under_min, valid])
 
         self.assertFalse(under_min["Meets_Min_Trade_Count"])
         self.assertTrue(valid["Meets_Min_Trade_Count"])

@@ -9,7 +9,7 @@ from src.backtesting.metrics import summarize_backtest
 from src.database.stock_model_db import compute_composite_score
 from src.evaluation.financial_metrics import compute_financial_metrics, compute_quantile_metrics
 from src.evaluation.evaluator import enrich_with_benchmark_metrics
-from src.pipeline.evaluation_manager import EvaluationManager
+from _eval_helpers import make_eval_services
 
 
 class ReportingMetricsTests(unittest.TestCase):
@@ -173,20 +173,20 @@ class ReportingMetricsTests(unittest.TestCase):
         self.assertEqual(compute_composite_score(low_mape), compute_composite_score(high_mape))
 
     def test_single_split_ensemble_rows_are_derived_from_predictions(self):
-        manager = EvaluationManager.__new__(EvaluationManager)
-        manager.ensemble_enabled = True
-        manager.ensemble_weights = {}
-        manager.y_true_aligned = np.array([10.0, 11.0, 12.0])
-        manager.prev_close_aligned = np.array([9.5, 10.5, 11.5])
-        manager.predictions = {
+        svc = make_eval_services()
+        svc.ctx.ensemble_enabled = True
+        svc.state.ensemble_weights = {}
+        svc.state.y_true_aligned = np.array([10.0, 11.0, 12.0])
+        svc.state.prev_close_aligned = np.array([9.5, 10.5, 11.5])
+        svc.state.predictions = {
             "Model A": np.array([10.0, 11.0, 12.0]),
             "Model B": np.array([9.0, 10.0, 11.0]),
         }
-        manager.prediction_targets = {
+        svc.state.prediction_targets = {
             "Model A": np.array([0.01, 0.02, 0.03]),
             "Model B": np.array([0.00, 0.01, 0.02]),
         }
-        manager.single_backtest_inputs = {
+        svc.state.single_backtest_inputs = {
             "Model A": {
                 "dates": pd.date_range("2024-01-01", periods=3),
                 "prediction_dates": pd.date_range("2024-01-01", periods=3),
@@ -198,28 +198,28 @@ class ReportingMetricsTests(unittest.TestCase):
             }
         }
 
-        manager._add_single_split_ensembles()
+        svc.prediction._add_single_split_ensembles()
 
-        self.assertIn("Ensemble Equal Weight", manager.predictions)
-        self.assertIn("Ensemble Inverse RMSE", manager.predictions)
-        self.assertIn("Ensemble Equal Weight", manager.single_backtest_inputs)
-        np.testing.assert_allclose(manager.predictions["Ensemble Equal Weight"], np.array([9.5, 10.5, 11.5]))
+        self.assertIn("Ensemble Equal Weight", svc.state.predictions)
+        self.assertIn("Ensemble Inverse RMSE", svc.state.predictions)
+        self.assertIn("Ensemble Equal Weight", svc.state.single_backtest_inputs)
+        np.testing.assert_allclose(svc.state.predictions["Ensemble Equal Weight"], np.array([9.5, 10.5, 11.5]))
 
     def test_single_split_seq_attention_ensemble(self):
-        manager = EvaluationManager.__new__(EvaluationManager)
-        manager.ensemble_enabled = True
-        manager.ensemble_weights = {}
-        manager.y_true_aligned = np.array([10.0, 11.0, 12.0])
-        manager.prev_close_aligned = np.array([9.5, 10.5, 11.5])
-        manager.predictions = {
+        svc = make_eval_services()
+        svc.ctx.ensemble_enabled = True
+        svc.state.ensemble_weights = {}
+        svc.state.y_true_aligned = np.array([10.0, 11.0, 12.0])
+        svc.state.prev_close_aligned = np.array([9.5, 10.5, 11.5])
+        svc.state.predictions = {
             "LSTM": np.array([10.0, 11.0, 12.0]),
             "AttentionLSTM v2": np.array([9.0, 10.0, 11.0]),
         }
-        manager.prediction_targets = {
+        svc.state.prediction_targets = {
             "LSTM": np.array([0.01, 0.02, 0.03]),
             "AttentionLSTM v2": np.array([0.00, 0.01, 0.02]),
         }
-        manager.single_backtest_inputs = {
+        svc.state.single_backtest_inputs = {
             "LSTM": {
                 "dates": pd.date_range("2024-01-01", periods=3),
                 "prediction_dates": pd.date_range("2024-01-01", periods=3),
@@ -231,12 +231,12 @@ class ReportingMetricsTests(unittest.TestCase):
             }
         }
 
-        manager._add_single_split_ensembles()
+        svc.prediction._add_single_split_ensembles()
 
-        self.assertIn("Ensemble Seq-Attention Equal", manager.predictions)
-        self.assertIn("Ensemble Seq-Attention Inverse RMSE", manager.predictions)
-        self.assertIn("Ensemble Seq-Attention Equal", manager.single_backtest_inputs)
-        np.testing.assert_allclose(manager.predictions["Ensemble Seq-Attention Equal"], np.array([9.5, 10.5, 11.5]))
+        self.assertIn("Ensemble Seq-Attention Equal", svc.state.predictions)
+        self.assertIn("Ensemble Seq-Attention Inverse RMSE", svc.state.predictions)
+        self.assertIn("Ensemble Seq-Attention Equal", svc.state.single_backtest_inputs)
+        np.testing.assert_allclose(svc.state.predictions["Ensemble Seq-Attention Equal"], np.array([9.5, 10.5, 11.5]))
 
 
 if __name__ == "__main__":

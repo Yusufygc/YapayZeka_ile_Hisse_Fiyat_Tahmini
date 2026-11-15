@@ -7,9 +7,8 @@ Sorumluluklar:
   - _assert_wf_train_scope(): leakage guard — kalibrasyon yalnizca WF fold verisini kullanir
   - _calibrate_signal_quality_thresholds(): WF fold metriklerinden DIR/RMSE/Composite esik ayari
   - _calibrate_walk_forward_signal_parameters(): backtest grid search ile execution param tuning
-  - _signal_calibration_grid(): parametre kombinasyon listesi
-  - _summarize_signal_calibration_trial(): tek deneme ozeti
-  - _signal_calibration_sort_key(): siralama anahtari
+  - Grid/secim saf fonksiyonlari signal_calibration.grid / .selection paketinden
+    dogrudan cagrilir (kalibrator icinde forward metodu yok).
   - _get_signal_calibration_decision_md(): markdown raporu
 
 Leakage Korumasi (Faz 2.5):
@@ -264,8 +263,8 @@ class _SignalCalibratorMixin:
         rows = []
         config_by_trial: Dict[int, SignalConfig] = {}
 
-        full_grid = self._signal_calibration_grid(base_cfg)
-        grid, grid_metadata = self._apply_signal_calibration_trial_policy(full_grid)
+        full_grid = calibration_grid.signal_calibration_grid(base_cfg)
+        grid, grid_metadata = calibration_grid.apply_trial_policy(self.ctx, full_grid)
         trial_count_for_metrics = max(1, len(candidates) * int(grid_metadata["executed_trials"]))
 
         self._append_signal_calibration_trials(
@@ -316,8 +315,8 @@ class _SignalCalibratorMixin:
             min_trade_count=min_trade_count,
         )
 
-        best_row = self._select_signal_calibration_row(rows)
-        selected_row = self._select_confirmed_signal_calibration_row(rows) if require_oos and oos_status == "applied" else best_row
+        best_row = calibration_selection.select_row(rows)
+        selected_row = calibration_selection.select_confirmed_row(rows) if require_oos and oos_status == "applied" else best_row
         rejection_active = bool(require_oos and oos_status == "applied" and selected_row is None)
         active_row = selected_row if selected_row is not None else best_row
         best_config = (
@@ -392,7 +391,7 @@ class _SignalCalibratorMixin:
                 trial_count=trial_count_for_metrics,
                 validation_mode="walk_forward_signal_calibration",
             )
-            rows.append(self._summarize_signal_calibration_trial(
+            rows.append(calibration_selection.summarize_trial(
                 trial_idx=trial_idx,
                 params=params,
                 summaries=summaries,
@@ -415,15 +414,15 @@ class _SignalCalibratorMixin:
         trial_count_for_metrics: int,
         min_trade_count: int,
     ) -> list[Dict[str, float | int]]:
-        initial_best_row = self._select_signal_calibration_row(rows)
-        initial_coverage = self._signal_calibration_coverage_status(full_grid, selected_grid)
+        initial_best_row = calibration_selection.select_row(rows)
+        initial_coverage = calibration_grid.coverage_status(full_grid, selected_grid)
         adaptive_expanded = False
         if self._should_expand_signal_calibration(
             rows,
             initial_best_row,
             coverage_status=initial_coverage,
         ):
-            extra_grid = self._signal_calibration_expansion_grid(
+            extra_grid = calibration_grid.expansion_grid(
                 full_grid=full_grid,
                 selected_grid=selected_grid,
                 executed_trials=int(grid_metadata["executed_trials"]),
@@ -447,7 +446,7 @@ class _SignalCalibratorMixin:
                 )
 
         grid_metadata["adaptive_expanded"] = bool(adaptive_expanded)
-        grid_metadata["coverage_status"] = self._signal_calibration_coverage_status(full_grid, selected_grid)
+        grid_metadata["coverage_status"] = calibration_grid.coverage_status(full_grid, selected_grid)
         return selected_grid
 
     def _apply_oos_confirmation_to_signal_rows(
@@ -534,7 +533,7 @@ class _SignalCalibratorMixin:
 
     def _rank_signal_calibration_frame(self, calibration_df: pd.DataFrame) -> None:
         calibration_df["_sort_key"] = calibration_df.apply(
-            lambda row: self._signal_calibration_sort_key(row.to_dict()),
+            lambda row: calibration_selection.sort_key(row.to_dict()),
             axis=1,
         )
         calibration_df.sort_values(
@@ -646,63 +645,6 @@ class _SignalCalibratorMixin:
             "stop_loss_vol_multiplier": self.state.signal_config.stop_loss_vol_multiplier,
             "quality_gate_mode": self.state.signal_config.quality_gate_mode,
         }
-
-    # ------------------------------------------------------------------ #
-    #  Grid / trial helpers                                               #
-    # ------------------------------------------------------------------ #
-
-    @staticmethod
-    def _signal_calibration_grid(base_cfg: SignalConfig) -> list[Dict[str, float | int]]:
-        return calibration_grid.signal_calibration_grid(base_cfg)
-
-    def _apply_signal_calibration_trial_policy(
-        self,
-        grid: list[Dict[str, float | int]],
-    ) -> tuple[list[Dict[str, float | int]], Dict[str, Any]]:
-        return calibration_grid.apply_trial_policy(self.ctx, grid)
-
-    @staticmethod
-    def _grid_param_key(params: Dict[str, float | int]) -> tuple:
-        return calibration_grid.grid_param_key(params)
-
-    @classmethod
-    def _signal_calibration_coverage_status(
-        cls,
-        full_grid: list[Dict[str, float | int]],
-        selected_grid: list[Dict[str, float | int]],
-    ) -> str:
-        return calibration_grid.coverage_status(full_grid, selected_grid)
-
-    def _signal_calibration_expansion_grid(
-        self,
-        *,
-        full_grid: list[Dict[str, float | int]],
-        selected_grid: list[Dict[str, float | int]],
-        executed_trials: int,
-        seed: int,
-    ) -> list[Dict[str, float | int]]:
-        return calibration_grid.expansion_grid(
-            full_grid=full_grid,
-            selected_grid=selected_grid,
-            executed_trials=executed_trials,
-            seed=seed,
-        )
-
-    @classmethod
-    def _sample_signal_calibration_grid(
-        cls,
-        grid: list[Dict[str, float | int]],
-        *,
-        cap: int,
-        seed: int,
-        exclude_keys: Optional[set[tuple]] = None,
-    ) -> list[Dict[str, float | int]]:
-        return calibration_grid.sample_signal_calibration_grid(
-            grid,
-            cap=cap,
-            seed=seed,
-            exclude_keys=exclude_keys,
-        )
 
     @staticmethod
     def _should_expand_signal_calibration(
@@ -837,36 +779,6 @@ class _SignalCalibratorMixin:
             "Reject_Reason": "" if passed else ",".join(reasons),
             "Active_For_Execution": False,
         }
-
-    @classmethod
-    def _select_confirmed_signal_calibration_row(
-        cls,
-        rows: list[Dict[str, Any]],
-    ) -> Dict[str, Any] | None:
-        return calibration_selection.select_confirmed_row(rows)
-
-    @staticmethod
-    def _summarize_signal_calibration_trial(
-        *,
-        trial_idx: int,
-        params: Dict[str, float | int],
-        summaries: list[Dict[str, Any]],
-        min_trade_count: int,
-    ) -> Dict[str, Any]:
-        return calibration_selection.summarize_trial(
-            trial_idx=trial_idx,
-            params=params,
-            summaries=summaries,
-            min_trade_count=min_trade_count,
-        )
-
-    @staticmethod
-    def _signal_calibration_sort_key(row: Dict[str, Any]) -> tuple:
-        return calibration_selection.sort_key(row)
-
-    @classmethod
-    def _select_signal_calibration_row(cls, rows: list[Dict[str, Any]]) -> Dict[str, Any] | None:
-        return calibration_selection.select_row(rows)
 
     def _write_signal_calibration_reports(
         self,

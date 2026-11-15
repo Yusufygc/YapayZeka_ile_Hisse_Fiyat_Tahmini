@@ -332,11 +332,11 @@ def test_trial_count_for_metrics_reflects_final_trials_after_adaptive_expansion(
             model_metrics_by_model={},
         )
 
-    executed = manager.signal_threshold_calibration_summary["executed_trials"]
-    assert manager.signal_threshold_calibration_summary["adaptive_expanded"] is True
+    executed = manager.state.signal_threshold_calibration_summary["executed_trials"]
+    assert manager.state.signal_threshold_calibration_summary["adaptive_expanded"] is True
     assert executed > 64, "fixture sanity: adaptive expansion must have added trials"
     assert result["trial_count_for_metrics"] == executed * 1
-    assert manager.signal_threshold_calibration_summary["trial_count_for_metrics"] == executed * 1
+    assert manager.state.signal_threshold_calibration_summary["trial_count_for_metrics"] == executed * 1
     # OOS-confirmation backtests (run after expansion) must use the final count.
     assert seen[-1] == executed * 1, f"OOS confirmation used stale trial_count={seen[-1]}"
 

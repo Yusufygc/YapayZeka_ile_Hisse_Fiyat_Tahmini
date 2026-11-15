@@ -8,7 +8,8 @@ nesnelerine tasir. EvaluationManager public orkestrasyon yuzeyi olarak kalir.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
+import os
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -25,13 +26,11 @@ from src.pipeline.signal_calibrator import _SignalCalibratorMixin
 class EvaluationContext:
     """Salt-okunur bağımlılık/kimlik torbası (evaluation servisleri için).
 
-    Faz 2 (E1 owner-forward epiği): servislerin owner'dan OKUDUĞU tüm config/
-    identity attribute'ları burada toplanır. EvaluationManager bu alanları
-    property forward ile (`manager.X` <-> `manager.context.X`) açar.
-
-    Tüm alanlar default'ludur: `__init__`'i atlayan (`__new__`) mekanizma testleri
-    için boş `EvaluationContext()` kurulabilir olmalı (bkz. `manager.context` lazy
-    property). Gerçek `__init__` zaten tüm alanları explicit kurar.
+    Servislerin OKUDUĞU tüm config/identity attribute'ları burada toplanır.
+    Gerçek kurulum `EvaluationContext.from_config(...)` ile yapılır: ExecutionConfig
+    ile aynı isimli alanlar otomatik kopyalanır (tek tek atama yok). Tüm alanlar
+    default'ludur; servisleri izole test etmek için boş `EvaluationContext()` veya
+    yalnızca ilgili alanlarla kurulabilir.
     """
 
     stock_symbol: str = ""
@@ -80,6 +79,51 @@ class EvaluationContext:
     write_xai_tables: bool = False
     write_markdown_reports: bool = True
 
+    @classmethod
+    def from_config(
+        cls,
+        *,
+        stock_symbol: str,
+        outputs_dir: str,
+        models_dir: str,
+        feature_names: list,
+        dataset_hash: str,
+        dataset_metadata: Dict[str, Any],
+        exe_cfg: ExecutionConfig,
+        model_cfg: ModelConfig,
+        stock_db: Optional[StockModelDB] = None,
+    ) -> "EvaluationContext":
+        """Identity + ExecutionConfig/ModelConfig'ten context kurar.
+
+        ExecutionConfig'te AYNI isimle bulunan context alanları (backtest_enabled,
+        commission_bps, signal_calibration_* ...) olduğu gibi kopyalanır; yalnızca
+        isim değiştiren/türetilen alanlar (signal_config -> default_signal_config,
+        model_cfg.selected_models/ensemble_enabled, xai_dir) elle eşlenir.
+        """
+        exe_values = {
+            f.name: getattr(exe_cfg, f.name)
+            for f in fields(cls)
+            if hasattr(exe_cfg, f.name)
+        }
+        return cls(
+            stock_symbol=stock_symbol,
+            outputs_dir=outputs_dir,
+            models_dir=models_dir,
+            feature_names=feature_names,
+            dataset_hash=dataset_hash,
+            dataset_metadata=dataset_metadata,
+            exe_cfg=exe_cfg,
+            model_cfg=model_cfg,
+            stock_db=stock_db,
+            **{
+                **exe_values,
+                "selected_models": set(model_cfg.selected_models) if model_cfg.selected_models else None,
+                "ensemble_enabled": model_cfg.ensemble_enabled,
+                "default_signal_config": exe_cfg.signal_config,
+                "xai_dir": os.path.join(outputs_dir, "xai"),
+            },
+        )
+
 
 @dataclass
 class EvaluationState:
@@ -112,13 +156,11 @@ class EvaluationState:
     signal_threshold_calibration_summary: Dict[str, Any] = field(default_factory=dict)
 
 
-class PredictionService(_PredictionEngineMixin):
-    """Prediction, inverse-target conversion and ensemble coordination.
+class _EvaluationService:
+    """Ortak ctor: READ-ONLY ``ctx`` (EvaluationContext) + mutable ``state`` (EvaluationState).
 
-    Faz 3 (E1 owner-forward epiği): owner-forward kaldırıldı. Bağımlılıklar
-    açıkça enjekte edilir — READ-ONLY config/identity ``ctx`` (EvaluationContext),
-    mutable runtime çıktı ``state`` (EvaluationState). Mixin gövdesi artık
-    ``self.ctx.X`` / ``self.state.X`` kullanır (``self._owner`` forward yok).
+    Mixin gövdeleri ``self.ctx.X`` (config/identity) ve ``self.state.X`` (runtime
+    çıktı/durum) kullanır; owner-forward yoktur.
     """
 
     def __init__(self, ctx: EvaluationContext, state: EvaluationState) -> None:
@@ -126,45 +168,17 @@ class PredictionService(_PredictionEngineMixin):
         self.state = state
 
 
-class BacktestService(_BacktestRunnerMixin):
-    """Backtest execution, gate diagnostics and shadow scenarios.
-
-    Faz 3.2 (E1 owner-forward epiği): owner-forward kaldırıldı; ctor `(ctx, state)`
-    enjekte alır. Mixin gövdesi `self.ctx.X` (READ-ONLY config) / `self.state.X`
-    (mutable runtime) kullanır.
-    """
-
-    def __init__(self, ctx: EvaluationContext, state: EvaluationState) -> None:
-        self.ctx = ctx
-        self.state = state
+class PredictionService(_EvaluationService, _PredictionEngineMixin):
+    """Prediction, inverse-target conversion and ensemble coordination."""
 
 
-class SignalCalibrationService(_SignalCalibratorMixin):
-    """Signal quality threshold and execution-parameter calibration.
-
-    Faz 3.3 (E1 owner-forward epiği): owner-forward kaldırıldı; ctor `(ctx, state)`
-    enjekte alır. Mixin gövdesi `self.ctx.X` (READ-ONLY config: calibration_scope,
-    commission/slippage/initial_capital, outputs_dir, default_signal_config,
-    dataset_metadata, signal_calibration_* flag'leri) / `self.state.X` (mutable
-    runtime: signal_config, signal_threshold_source/calibration_summary) kullanır.
-    """
-
-    def __init__(self, ctx: EvaluationContext, state: EvaluationState) -> None:
-        self.ctx = ctx
-        self.state = state
+class BacktestService(_EvaluationService, _BacktestRunnerMixin):
+    """Backtest execution, gate diagnostics and shadow scenarios."""
 
 
-class MetricsReportingService(_MetricsReporterMixin):
-    """Metric enrichment, model selection and XAI report routing.
+class SignalCalibrationService(_EvaluationService, _SignalCalibratorMixin):
+    """Signal quality threshold and execution-parameter calibration."""
 
-    Faz 3.4 (E1 owner-forward epiği): owner-forward kaldırıldı; ctor `(ctx, state)`
-    enjekte alır. Mixin gövdesi `self.ctx.X` (READ-ONLY config: dataset_metadata,
-    commission/slippage_bps, stock_symbol, feature_names, xai_dir,
-    write_xai_tables, write_markdown_reports) / `self.state.X` (mutable runtime:
-    predictions, prediction_targets, quantile_predictions, y_true_aligned,
-    ensemble_weights, latest_backtest_results) kullanır.
-    """
 
-    def __init__(self, ctx: EvaluationContext, state: EvaluationState) -> None:
-        self.ctx = ctx
-        self.state = state
+class MetricsReportingService(_EvaluationService, _MetricsReporterMixin):
+    """Metric enrichment, model selection and XAI report routing."""

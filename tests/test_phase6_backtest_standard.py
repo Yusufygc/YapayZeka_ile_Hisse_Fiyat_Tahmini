@@ -14,9 +14,9 @@ from src.backtesting.signals import SignalConfig
 from src.utils.reporting_utils import with_output_extension
 
 try:
-    from src.pipeline.evaluation_manager import EvaluationManager
+    from _eval_helpers import make_eval_services
 except Exception as exc:  # pragma: no cover - optional runtime dependency guard
-    EvaluationManager = None
+    make_eval_services = None
     EVALUATION_IMPORT_ERROR = exc
 
 
@@ -88,22 +88,24 @@ class Phase6BacktestStandardTests(unittest.TestCase):
 
         self.assertIn("Multiple testing risk", report)
 
-    @unittest.skipIf(EvaluationManager is None, f"EvaluationManager import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
+    @unittest.skipIf(make_eval_services is None, f"evaluation services import failed: {globals().get('EVALUATION_IMPORT_ERROR')}")
     def test_signal_threshold_calibration_uses_walk_forward_folds_only(self):
-        manager = EvaluationManager.__new__(EvaluationManager)
-        manager.signal_config = SignalConfig(
+        signal_config = SignalConfig(
             min_directional_accuracy=52.0,
             max_rmse_vs_benchmark=1.05,
             min_composite_score=50.0,
         )
-        manager.default_signal_config = manager.signal_config
-        manager.signal_threshold_source = "default_config"
-        manager.signal_threshold_calibration_summary = {}
-        manager.dataset_metadata = {}
-        manager.commission_bps = 10.0
-        manager.slippage_bps = 5.0
+        svc = make_eval_services(
+            ctx={
+                "default_signal_config": signal_config,
+                "dataset_metadata": {},
+                "commission_bps": 10.0,
+                "slippage_bps": 5.0,
+            },
+            state={"signal_config": signal_config},
+        )
 
-        manager._calibrate_signal_quality_thresholds({
+        svc.signal_calibration._calibrate_signal_quality_thresholds({
             "Candidate": [
                 {"Fold": 0, "Dir_Acc": 53.0, "RMSE_vs_benchmark": 0.95, "Composite_Score": 55.0},
                 {"Fold": 1, "Dir_Acc": 58.0, "RMSE_vs_benchmark": 0.90, "Composite_Score": 62.0},
@@ -114,7 +116,7 @@ class Phase6BacktestStandardTests(unittest.TestCase):
             ],
         })
 
-        metadata = manager.dataset_metadata["signal_threshold_config"]
+        metadata = svc.ctx.dataset_metadata["signal_threshold_config"]
         self.assertEqual(metadata["source"], "walk_forward_calibration_folds")
         self.assertEqual(metadata["selection_scope"], "walk_forward_calibration_folds")
         self.assertFalse(metadata["final_holdout_optimized"])

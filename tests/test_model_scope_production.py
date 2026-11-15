@@ -25,11 +25,11 @@ def test_selected_lstm_scope_keeps_only_lstm_as_candidate_and_naive_as_benchmark
         dataset_metadata={"target_mode": "log_return"},
     )
 
-    assert trainer.candidate_models == {"LSTM"}
-    assert trainer.benchmark_models == set(BENCHMARK_MODELS)
+    assert trainer.training_context.candidate_models == {"LSTM"}
+    assert trainer.training_context.benchmark_models == set(BENCHMARK_MODELS)
     assert reportable_model_names(
         ["LSTM", "ElasticNet Return", "Naive Last Value", "Naive Zero Return"],
-        trainer.candidate_models,
+        trainer.training_context.candidate_models,
     ) == {"LSTM", "Naive Last Value", "Naive Zero Return"}
 
 
@@ -42,10 +42,10 @@ def test_selected_lstm_lite_scope_keeps_only_lstm_lite_as_candidate():
         dataset_metadata={"target_mode": "log_return"},
     )
 
-    assert trainer.candidate_models == {"LSTM Lite"}
+    assert trainer.training_context.candidate_models == {"LSTM Lite"}
     assert reportable_model_names(
         ["LSTM", "LSTM Lite", "Naive Last Value", "Naive Zero Return"],
-        trainer.candidate_models,
+        trainer.training_context.candidate_models,
     ) == {"LSTM Lite", "Naive Last Value", "Naive Zero Return"}
 
 
@@ -64,8 +64,8 @@ def test_selected_attention_lstm_v2_is_opt_in_candidate_only():
         dataset_metadata={"target_mode": "log_return"},
     )
 
-    assert "AttentionLSTM v2" not in default_trainer.candidate_models
-    assert selected_trainer.candidate_models == {"AttentionLSTM v2"}
+    assert "AttentionLSTM v2" not in default_trainer.training_context.candidate_models
+    assert selected_trainer.training_context.candidate_models == {"AttentionLSTM v2"}
 
 
 def test_reportable_models_include_only_production_ensembles():

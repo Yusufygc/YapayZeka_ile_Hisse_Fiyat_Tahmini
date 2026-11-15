@@ -452,12 +452,12 @@ class ForecastingPipeline:
         elif self.validation_mode == "walk_forward":
             self.model_trainer.train_walk_forward(self.data_manager.wf_splits, self.data_manager)
             wf_result = self.evaluation_manager.evaluate_walk_forward(
-                self.model_trainer.wf_results,
-                self.model_trainer.wf_predictions,
-                self.model_trainer.wf_y_true,
-                self.model_trainer.wf_backtest_inputs,
-                self.model_trainer.wf_fold_metrics,
-                self.model_trainer.wf_xai_records,
+                self.model_trainer.training_state.wf_results,
+                self.model_trainer.training_state.wf_predictions,
+                self.model_trainer.training_state.wf_y_true,
+                self.model_trainer.training_state.wf_backtest_inputs,
+                self.model_trainer.training_state.wf_fold_metrics,
+                self.model_trainer.training_state.wf_xai_records,
             )
             best_model_name = wf_result["best_model_name"]
             if (
@@ -527,6 +527,6 @@ class ForecastingPipeline:
         )
         self.model_trainer.train_single_split(self.data_manager.tensors)
         self.evaluation_manager.generate_predictions(
-            self.model_trainer.trained_models, self.data_manager.tensors
+            self.model_trainer.training_state.trained_models, self.data_manager.tensors
         )
-        self.evaluation_manager.evaluate_single_split(self.model_trainer.trained_models)
+        self.evaluation_manager.evaluate_single_split(self.model_trainer.training_state.trained_models)

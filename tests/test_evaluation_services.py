@@ -1,4 +1,7 @@
+import tempfile
+
 import numpy as np
+from _eval_helpers import make_eval_manager
 
 from src.pipeline.backtest_runner import _BacktestRunnerMixin
 from src.pipeline.evaluation_manager import EvaluationManager
@@ -24,8 +27,8 @@ def test_evaluation_manager_uses_service_composition_not_mixin_inheritance():
     assert not issubclass(EvaluationManager, _SignalCalibratorMixin)
     assert not issubclass(EvaluationManager, _MetricsReporterMixin)
 
-    manager = EvaluationManager.__new__(EvaluationManager)
-    manager._init_services()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        manager = make_eval_manager(tmpdir)
 
     assert isinstance(manager.prediction_service, PredictionService)
     assert isinstance(manager.backtest_service, BacktestService)
@@ -55,19 +58,9 @@ def test_owner_backed_service_removed_from_pipeline_modules():
     assert "_OwnerBackedService" not in vars(training_workflows)
 
 
-def test_lazy_prediction_service_delegates_to_manager_state():
-    manager = EvaluationManager.__new__(EvaluationManager)
-    manager.dataset_metadata = {"target_mode": "return"}
-
-    prices = manager._target_to_price(np.array([0.10, -0.05]), np.array([100.0, 200.0]))
-
-    np.testing.assert_allclose(prices, np.array([110.0, 190.0]))
-    assert isinstance(manager.prediction_service, PredictionService)
-
-
 def test_evaluate_public_methods_delegate_to_workflows():
-    manager = EvaluationManager.__new__(EvaluationManager)
-    manager._init_services()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        manager = make_eval_manager(tmpdir)
 
     calls = []
 

@@ -353,11 +353,6 @@ class _EvaluationWorkflowBase:
         return self.services.signal_calibration._signal_threshold_metadata()
 
     def _calibrate_walk_forward_signal_parameters(self, **kwargs) -> dict:
-        object.__setattr__(
-            self.services.signal_calibration,
-            "_signal_calibration_grid",
-            self.services.signal_calibration._signal_calibration_grid,
-        )
         return self.services.signal_calibration._calibrate_walk_forward_signal_parameters(**kwargs)
 
     def _attach_composite_scores(self, metrics: dict, **kwargs) -> dict:

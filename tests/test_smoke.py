@@ -78,16 +78,16 @@ class TestEvaluationManagerSmoke(unittest.TestCase):
         """EvaluationManager __init__ basariyla tamamlanmali."""
         with tempfile.TemporaryDirectory() as tmpdir:
             em = self._make_em(tmpdir)
-            self.assertIsInstance(em.ensemble_enabled, bool)
-            self.assertIsInstance(em.predictions, dict)
-            self.assertIsInstance(em.latest_model_metrics, dict)
+            self.assertIsInstance(em.context.ensemble_enabled, bool)
+            self.assertIsInstance(em.state.predictions, dict)
+            self.assertIsInstance(em.state.latest_model_metrics, dict)
 
     def test_evaluation_manager_ensemble_enabled_matches_config(self):
         """ensemble_enabled, ModelConfig'den dogru okunmali."""
         with tempfile.TemporaryDirectory() as tmpdir:
             for flag in (True, False):
                 em = self._make_em(tmpdir, flag=flag)
-                self.assertEqual(em.ensemble_enabled, flag,
+                self.assertEqual(em.context.ensemble_enabled, flag,
                                  f"ensemble_enabled={flag} config'den okunmadi")
 
 
@@ -104,9 +104,9 @@ class TestModelTrainerSmoke(unittest.TestCase):
                 dataset_hash="hash123",
                 dataset_metadata={"target_mode": "log_return"},
             )
-            self.assertEqual(trainer.stock_symbol, "TEST")
-            self.assertIsInstance(trainer.trained_models, dict)
-            self.assertIsInstance(trainer.wf_results, dict)
+            self.assertEqual(trainer.training_context.stock_symbol, "TEST")
+            self.assertIsInstance(trainer.training_state.trained_models, dict)
+            self.assertIsInstance(trainer.training_state.wf_results, dict)
 
     def test_model_trainer_selected_models_defaults(self):
         """selected_models=None oldugunda _ALL_MODELS setine dusmeli."""
@@ -116,7 +116,7 @@ class TestModelTrainerSmoke(unittest.TestCase):
                 stock_symbol="X",
                 feature_names=[],
             )
-            self.assertEqual(trainer.selected_models, set(_ALL_MODELS))
+            self.assertEqual(trainer.training_context.selected_models, set(_ALL_MODELS))
 
     def test_tree_hpo_storage_is_available_for_each_selected_tree_model(self):
         """XGBoost olmadan Random Forest secilirse Optuna storage tanimsiz kalmamali."""
