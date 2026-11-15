@@ -160,3 +160,7 @@ pytest_temp/
 new_plan.md
 # Eski sanal ortam yedekleri
 .venv_old_*/
+
+# Sembol CSV kilitleri
+*.lock
+data/yedek_bak_*/

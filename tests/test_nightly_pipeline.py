@@ -33,8 +33,8 @@ def test_refresh_counts_aggregate(monkeypatch, tmp_path):
         "CCC": DataUpdateResult(status="skipped"),
         "DDD": DataUpdateResult(status="updated", rows_added=2),
     }
-    monkeypatch.setattr(nl.DataUpdater, "check_and_update",
-                        staticmethod(lambda path, sym, interactive=False: status_by[sym]))
+    monkeypatch.setattr(nl.DataUpdater, "update_many",
+                        staticmethod(lambda targets: {s: status_by[s] for _, s in targets}))
     counts = nl.refresh_universe(str(tmp_path), sleep_s=0.0)
     assert counts["updated"] == 2
     assert counts["up_to_date"] == 1
@@ -50,6 +50,10 @@ def test_refresh_continues_on_exception(monkeypatch, tmp_path):
             raise RuntimeError("yfinance patladi")
         return DataUpdateResult(status="up_to_date")
 
+    def _boom_batch(targets):
+        raise RuntimeError("toplu indirme patladi")
+
+    monkeypatch.setattr(nl.DataUpdater, "update_many", staticmethod(_boom_batch))
     monkeypatch.setattr(nl.DataUpdater, "check_and_update", staticmethod(_cu))
     counts = nl.refresh_universe(str(tmp_path), sleep_s=0.0)
     assert counts["failed"] == 1
@@ -58,9 +62,9 @@ def test_refresh_continues_on_exception(monkeypatch, tmp_path):
 
 def test_refresh_limit(monkeypatch, tmp_path):
     _make_csvs(tmp_path, ["AAA", "BBB", "CCC", "DDD"])
-    monkeypatch.setattr(nl.DataUpdater, "check_and_update",
-                        staticmethod(lambda path, sym, interactive=False:
-                                     DataUpdateResult(status="up_to_date")))
+    monkeypatch.setattr(nl.DataUpdater, "update_many",
+                        staticmethod(lambda targets: {s: DataUpdateResult(status="up_to_date")
+                                                      for _, s in targets}))
     counts = nl.refresh_universe(str(tmp_path), sleep_s=0.0, limit=2)
     assert counts["up_to_date"] == 2
 

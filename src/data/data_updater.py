@@ -2,22 +2,58 @@
 """
 data_updater.py - CSV tabanli hisse verisi guncelleme servisi.
 
-Egitimden once hedef CSV'nin son tarihini kontrol eder. Veri gerideyse
-yfinance uzerinden eksik gunleri indirir ve mevcut CSV semasina uygun
-satirlari dosyaya ekler. Hata durumunda pipeline'i durdurmaz; mevcut veriyle
-devam edilmesini saglar.
+Egitimden once hedef CSV'nin son tarihini kontrol eder. Veri, son TAMAMLANMIS
+BIST seansinin gerisindeyse yfinance uzerinden eksik gunleri indirir ve mevcut
+CSV semasina uygun satirlari dosyaya ekler. Seans kapanmadan (18:10 Istanbul)
+gelen kismi bugunluk mum asla yazilmaz. Yazimlar sembol basina dosya kilidi
+altinda ve atomiktir; tam yeniden indirme oncesi yedek alinir.
+Hata durumunda pipeline'i durdurmaz; mevcut veriyle devam edilmesini saglar.
+
+Toplu guncelleme icin ``DataUpdater.update_many`` (chunk + retry/backoff).
 """
 
 from __future__ import annotations
 
 import builtins
+import logging
 import os
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
 
 import pandas as pd
-import yfinance as yf
+
+from src.data.csv_safety import (
+    DEFAULT_LOCK_TIMEOUT_S,
+    CsvLockTimeout,
+    atomic_append_text,
+    atomic_write_csv,
+    backup_before_rewrite,
+    csv_lock,
+)
+from src.data.market_providers import (  # noqa: F401  (YFinanceProvider geriye uyumlu re-export)
+    DEFAULT_BACKOFF_S,
+    DEFAULT_CHUNK_SIZE,
+    DEFAULT_MAX_RETRIES,
+    MarketDataProvider,
+    YFinanceProvider,
+    download_with_retries,
+)
+from src.data.session_clock import latest_completed_session, now_istanbul
+from src.data.updater_frames import (
+    _OVERLAP_DAYS,
+    _OVERLAP_TOLERANCE,
+    _find_column,
+    _infer_date_format,
+    _max_overlap_deviation,
+    _parse_date_series,
+    _parse_last_date,
+    _prepare_provider_rows,
+)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -33,35 +69,89 @@ class DataUpdateResult:
         return asdict(self)
 
 
-class MarketDataProvider:
-    def download(self, ticker: str, *, start: str, end: str) -> pd.DataFrame:
-        raise NotImplementedError
+@dataclass(frozen=True)
+class _Plan:
+    csv_path: str
+    symbol: str
+    ticker: str
+    last_date: pd.Timestamp
+    latest_before: str
+    start: str
+    end: str
+    today: pd.Timestamp
+    completed: pd.Timestamp
+    diff_days: int
+    lock_timeout: float
 
 
-class YFinanceProvider(MarketDataProvider):
-    """
-    Sprint 2 (2026-05-25) Plan A2.1:
-      ``auto_adjust=True`` HARD kontrol. yfinance close serisini split ve
-      temettu icin otomatik duzeltir. Duzeltilmemis seride 1:2 split
-      gunu log_return ≈ -0.69 olur ve tum modeller bozulur. Bu deger
-      degistirilmemelidir; testler de bunu denetler.
-    """
+def _result(status: str, before: str | None, error: str | None = None, **kw: Any) -> DataUpdateResult:
+    return DataUpdateResult(
+        status=status, latest_date_before=before,
+        latest_date_after=kw.pop("after", before), error=error, **kw,
+    )
 
-    AUTO_ADJUST: bool = True
 
-    def download(self, ticker: str, *, start: str, end: str) -> pd.DataFrame:
-        # auto_adjust=True ZORUNLU — split/temettu sizintisini onler.
-        return yf.download(
-            ticker,
-            start=start,
-            end=end,
-            progress=False,
-            auto_adjust=self.AUTO_ADJUST,
-        )
+def _read_csv_state(csv_path: str) -> tuple[pd.DataFrame, str, pd.Timestamp] | DataUpdateResult:
+    """CSV'yi okur; (df, tarih_kolonu, son_tarih) ya da hata sonucu doner."""
+    try:
+        df_raw = pd.read_csv(csv_path)
+    except FileNotFoundError:
+        msg = f"{csv_path} dosyasi bulunamadi."
+        print(f"  [UYARI] {msg} Lutfen kontrol edin.")
+        return DataUpdateResult(status="failed", error=msg)
+    except Exception as exc:
+        msg = f"{csv_path} okunamadi ({exc})"
+        print(f"  [UYARI] {msg}; veri guncellemesi atlandi.")
+        return DataUpdateResult(status="failed", error=msg)
+    if df_raw.empty:
+        msg = f"{csv_path} bos"
+        print(f"  [UYARI] {msg}; veri guncellemesi atlandi.")
+        return DataUpdateResult(status="failed", error=msg)
+    date_col = _find_column(df_raw.columns, ["Date", "Tarih"])
+    if date_col is None:
+        msg = "CSV'de Date/Tarih kolonu yok"
+        print(f"  [UYARI] {msg}; veri guncellemesi atlandi.")
+        return DataUpdateResult(status="failed", error=msg)
+    last_date = _parse_last_date(df_raw[date_col])
+    if pd.isna(last_date):
+        msg = "Son tarih parse edilemedi"
+        print(f"  [UYARI] {msg}; veri guncellemesi atlandi.")
+        return DataUpdateResult(status="failed", error=msg)
+    return df_raw, date_col, pd.Timestamp(last_date).normalize()
 
 
 class DataUpdater:
     """Veri seti guncelligini denetleyen ve tamamlayan sinif."""
+
+    @staticmethod
+    def _plan(
+        csv_path: str,
+        stock_symbol: str,
+        now: datetime | None,
+        calendar_path: str | None,
+        lock_timeout: float,
+    ) -> DataUpdateResult | _Plan:
+        state = _read_csv_state(csv_path)
+        if isinstance(state, DataUpdateResult):
+            return state
+        _df, _date_col, last_date = state
+        latest_before = last_date.strftime("%Y-%m-%d")
+        completed = latest_completed_session(now, calendar_path)
+        if last_date >= completed:
+            print("  [INFO] CSV veri setiniz son tamamlanmis seansa ait. Guncellemeye gerek yok.")
+            return _result("up_to_date", latest_before)
+        today = pd.Timestamp(now_istanbul(now).date())
+        # Overlap'li indirme: son tarihten 7 takvim gunu geriden basla. Split/temettu
+        # sonrasi auto_adjust=True gecmisi yeniden olcekler; ust uste binen satirlarda
+        # eski/yeni fiyat farki bunu yakalar (yoksa append sonrasi seride "dikis" kalir).
+        return _Plan(
+            csv_path=csv_path, symbol=stock_symbol, ticker=f"{stock_symbol}.IS",
+            last_date=last_date, latest_before=latest_before,
+            start=(last_date - pd.Timedelta(days=_OVERLAP_DAYS)).strftime("%Y-%m-%d"),
+            end=(today + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+            today=today, completed=completed,
+            diff_days=int((completed - last_date).days), lock_timeout=lock_timeout,
+        )
 
     @staticmethod
     def check_and_update(
@@ -69,97 +159,127 @@ class DataUpdater:
         stock_symbol: str,
         interactive: bool = True,
         provider: MarketDataProvider | None = None,
+        *,
+        now: datetime | None = None,
+        calendar_path: str | None = None,
+        lock_timeout: float = DEFAULT_LOCK_TIMEOUT_S,
     ) -> DataUpdateResult:
+        """Tek sembol guncellemesi. ``now`` test icin enjekte edilebilir (naive -> Istanbul)."""
         provider = provider or YFinanceProvider()
-        try:
-            df_raw = pd.read_csv(csv_path)
-        except FileNotFoundError:
-            msg = f"{csv_path} dosyasi bulunamadi."
-            print(f"  [UYARI] {msg} Lutfen kontrol edin.")
-            return DataUpdateResult(status="failed", error=msg)
-        except Exception as exc:
-            msg = f"{csv_path} okunamadi ({exc})"
-            print(f"  [UYARI] {msg}; veri guncellemesi atlandi.")
-            return DataUpdateResult(status="failed", error=msg)
+        plan = DataUpdater._plan(csv_path, stock_symbol, now, calendar_path, lock_timeout)
+        if isinstance(plan, DataUpdateResult):
+            return plan
 
-        if df_raw.empty:
-            msg = f"{csv_path} bos"
-            print(f"  [UYARI] {msg}; veri guncellemesi atlandi.")
-            return DataUpdateResult(status="failed", error=msg)
-
-        date_col = _find_column(df_raw.columns, ["Date", "Tarih"])
-        if date_col is None:
-            msg = "CSV'de Date/Tarih kolonu yok"
-            print(f"  [UYARI] {msg}; veri guncellemesi atlandi.")
-            return DataUpdateResult(status="failed", error=msg)
-
-        last_date = _parse_last_date(df_raw[date_col])
-        if pd.isna(last_date):
-            msg = "Son tarih parse edilemedi"
-            print(f"  [UYARI] {msg}; veri guncellemesi atlandi.")
-            return DataUpdateResult(status="failed", error=msg)
-
-        last_date = pd.Timestamp(last_date).normalize()
-        latest_before = last_date.strftime("%Y-%m-%d")
-        today = pd.Timestamp(datetime.today().date())
-        diff_days = int((today - last_date).days)
-        if diff_days <= 1:
-            print("  [INFO] CSV veri setiniz halihazirda son gune ait. Guncellemeye gerek yok.")
-            return DataUpdateResult(
-                status="up_to_date",
-                latest_date_before=latest_before,
-                latest_date_after=latest_before,
-            )
-
-        print(f"\n  [INFO] Veri setinizdeki son tarih : {last_date.strftime('%d/%m/%Y')}")
-        print(f"  [INFO] Bugunun tarihi             : {today.strftime('%d/%m/%Y')}")
-
+        print(f"\n  [INFO] Veri setinizdeki son tarih : {plan.last_date.strftime('%d/%m/%Y')}")
+        print(f"  [INFO] Son tamamlanmis seans      : {plan.completed.strftime('%d/%m/%Y')}")
         ask = builtins.input if interactive else (lambda *_args, **_kwargs: "e")
         answer = ask(
-            f"  [SORU] Veri seti bugunden {diff_days} gun geride. "
+            f"  [SORU] Veri seti son seanstan {plan.diff_days} gun geride. "
             f"Eksik veriler yfinance ({stock_symbol}.IS) ile tamamlansin mi? (e/h): "
         )
         if str(answer).strip().lower() != "e":
             print("  [INFO] Veri guncellemesi atlandi. Mevcut eski veriler kullaniliyor.")
-            return DataUpdateResult(
-                status="skipped",
-                latest_date_before=latest_before,
-                latest_date_after=latest_before,
-                error="user_declined",
-            )
+            return _result("skipped", plan.latest_before, "user_declined")
 
-        # Overlap'li indirme: son tarihten 7 takvim gunu geriden basla. Split/temettu
-        # sonrasi auto_adjust=True gecmisi yeniden olcekler; ust uste binen satirlarda
-        # eski/yeni fiyat farki bunu yakalar (yoksa append sonrasi seride "dikis" kalir).
-        start = (last_date - pd.Timedelta(days=_OVERLAP_DAYS)).strftime("%Y-%m-%d")
-        end = (today + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-        ticker = f"{stock_symbol}.IS"
-        print(f"  [INFO] yfinance indiriliyor: {ticker} {start} -> {end}")
-
-        def _failed(msg: str) -> DataUpdateResult:
-            print(f"  [UYARI] {msg}; mevcut CSV ile devam ediliyor.")
-            return DataUpdateResult(
-                status="failed",
-                latest_date_before=latest_before,
-                latest_date_after=latest_before,
-                error=msg,
-            )
-
+        print(f"  [INFO] yfinance indiriliyor: {plan.ticker} {plan.start} -> {plan.end}")
         try:
-            new_data = provider.download(ticker, start=start, end=end)
+            new_data = provider.download(plan.ticker, start=plan.start, end=plan.end)
         except Exception as exc:
-            return _failed(f"yfinance guncellemesi basarisiz ({exc})")
+            msg = f"yfinance guncellemesi basarisiz ({exc})"
+            print(f"  [UYARI] {msg}; mevcut CSV ile devam ediliyor.")
+            return _result("failed", plan.latest_before, msg)
+        return DataUpdater._apply_download(plan, new_data, provider, now, calendar_path)
 
+    @staticmethod
+    def update_many(
+        targets: Sequence[tuple[str, str]],
+        *,
+        provider: MarketDataProvider | None = None,
+        now: datetime | None = None,
+        calendar_path: str | None = None,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        backoff_s: float = DEFAULT_BACKOFF_S,
+        sleep: Callable[[float], None] = time.sleep,
+        lock_timeout: float = DEFAULT_LOCK_TIMEOUT_S,
+    ) -> dict[str, DataUpdateResult]:
+        """Toplu guncelleme: ``targets`` = [(csv_path, sembol)]. Etkileşimsizdir.
+
+        Guncel olanlar indirilmez; gerisi baslangic tarihine gore siralanip ``chunk_size``'lik
+        gruplar halinde ``yf.download(tickers=[...])`` ile indirilir, bos/basarisiz ticker'lar
+        ustel geri cekilmeyle yeniden denenir. Her sembol icin dogrulama + yazim tekli yolla aynidir.
+        """
+        provider = provider or YFinanceProvider()
+        results: dict[str, DataUpdateResult] = {}
+        plans: list[_Plan] = []
+        for csv_path, symbol in targets:
+            plan = DataUpdater._plan(csv_path, symbol, now, calendar_path, lock_timeout)
+            if isinstance(plan, DataUpdateResult):
+                results[symbol] = plan
+            else:
+                plans.append(plan)
+        plans.sort(key=lambda p: p.start)
+        step = max(1, chunk_size)
+        for i in range(0, len(plans), step):
+            group = plans[i:i + step]
+            frames, errors = download_with_retries(
+                provider, [p.ticker for p in group],
+                start=group[0].start, end=max(p.end for p in group),
+                chunk_size=step, max_retries=max_retries, backoff_s=backoff_s, sleep=sleep,
+            )
+            for plan in group:
+                frame = frames.get(plan.ticker)
+                if frame is None or plan.ticker in errors:
+                    msg = f"yfinance toplu indirme basarisiz ({errors.get(plan.ticker, 'bilinmeyen')})"
+                    results[plan.symbol] = _result("failed", plan.latest_before, msg)
+                else:
+                    results[plan.symbol] = DataUpdater._apply_download(
+                        plan, frame, provider, now, calendar_path
+                    )
+        return results
+
+    @staticmethod
+    def _apply_download(
+        plan: _Plan,
+        new_data: pd.DataFrame | None,
+        provider: MarketDataProvider,
+        now: datetime | None,
+        calendar_path: str | None,
+    ) -> DataUpdateResult:
+        """Indirilen veriyi dogrular ve sembol kilidi altinda yazar."""
         if new_data is None or new_data.empty:
             print("  [INFO] Indirilecek yeni islem gunu bulunamadi.")
-            return DataUpdateResult(
-                status="skipped",
-                latest_date_before=latest_before,
-                latest_date_after=latest_before,
-                error="no_new_rows_from_provider",
-            )
+            return _result("skipped", plan.latest_before, "no_new_rows_from_provider")
+        try:
+            with csv_lock(plan.csv_path, plan.lock_timeout):
+                return DataUpdater._apply_locked(plan, new_data, provider, now, calendar_path)
+        except CsvLockTimeout as exc:
+            print(f"  [UYARI] {exc}; mevcut CSV ile devam ediliyor.")
+            return _result("failed", plan.latest_before, str(exc))
 
-        rows_all = _prepare_provider_rows(new_data, df_raw.columns, date_col, today)
+    @staticmethod
+    def _apply_locked(
+        plan: _Plan,
+        new_data: pd.DataFrame,
+        provider: MarketDataProvider,
+        now: datetime | None,
+        calendar_path: str | None,
+    ) -> DataUpdateResult:
+        def _failed(msg: str) -> DataUpdateResult:
+            print(f"  [UYARI] {msg}; mevcut CSV ile devam ediliyor.")
+            return _result("failed", latest_before, msg)
+
+        # Kilit alindiktan sonra yeniden oku: baska yazar arada ilerletmis olabilir.
+        state = _read_csv_state(plan.csv_path)
+        if isinstance(state, DataUpdateResult):
+            return state
+        df_raw, date_col, last_date = state
+        latest_before = last_date.strftime("%Y-%m-%d")
+        if last_date >= plan.completed:
+            print("  [INFO] CSV baska bir surec tarafindan guncellenmis; yazim atlandi.")
+            return _result("up_to_date", latest_before)
+
+        rows_all = _prepare_provider_rows(new_data, df_raw.columns, date_col, plan.completed)
         date_fmt = _infer_date_format(str(df_raw[date_col].iloc[-1]))
 
         # Overlap dogrulamasi (Adj Close varsa o, yoksa Close karsilastirilir).
@@ -175,35 +295,27 @@ class DataUpdater:
                 "(split/temettu duzeltmesi suphesi); tum gecmis yeniden indiriliyor."
             )
             return DataUpdater._full_refetch(
-                provider, ticker, csv_path, df_raw, date_col, date_fmt,
-                today, latest_before, end,
+                provider, plan.ticker, plan.csv_path, df_raw, date_col, date_fmt,
+                plan.completed, latest_before, plan.end, now,
             )
 
         rows = rows_all[rows_all[date_col] > last_date].copy()
         if rows.empty:
-            print("  [INFO] Indirilen veri mevcut CSV'den daha yeni satir icermiyor.")
-            return DataUpdateResult(
-                status="skipped",
-                latest_date_before=latest_before,
-                latest_date_after=latest_before,
-                error="provider_rows_not_newer",
-            )
+            print("  [INFO] Indirilen veri mevcut CSV'den daha yeni (tamamlanmis) satir icermiyor.")
+            return _result("skipped", latest_before, "provider_rows_not_newer")
 
         latest_after = pd.Timestamp(rows[date_col].max()).strftime("%Y-%m-%d")
         rows[date_col] = rows[date_col].dt.strftime(date_fmt)
         rows = rows[list(df_raw.columns)]
         try:
-            rows.to_csv(csv_path, mode="a", header=False, index=False, encoding="utf-8-sig")
+            atomic_append_text(
+                plan.csv_path, rows.to_csv(header=False, index=False, lineterminator="\n")
+            )
         except Exception as exc:
             return _failed(f"Yeni satirlar CSV'ye yazilamadi ({exc})")
 
-        print(f"  [OK] {len(rows)} yeni islem gunu {os.path.basename(csv_path)} dosyasina eklendi.")
-        return DataUpdateResult(
-            status="updated",
-            latest_date_before=latest_before,
-            latest_date_after=latest_after,
-            rows_added=int(len(rows)),
-        )
+        print(f"  [OK] {len(rows)} yeni islem gunu {os.path.basename(plan.csv_path)} dosyasina eklendi.")
+        return _result("updated", latest_before, after=latest_after, rows_added=int(len(rows)))
 
     @staticmethod
     def _full_refetch(
@@ -213,22 +325,21 @@ class DataUpdater:
         df_raw: pd.DataFrame,
         date_col: str,
         date_fmt: str,
-        today: pd.Timestamp,
+        max_date: pd.Timestamp,
         latest_before: str,
         end: str,
+        now: datetime | None = None,
     ) -> DataUpdateResult:
-        """Tum gecmisi yeniden indirir; CSV'yi atomik (gecici dosya + os.replace) yazar."""
+        """Tum gecmisi yeniden indirir; yedek alip CSV'yi atomik (gecici dosya + os.replace) yazar.
+
+        Cagiran kilidi zaten tutuyor olmalidir.
+        """
         first_date = _parse_date_series(df_raw[date_col]).min()
         start = pd.Timestamp(first_date).strftime("%Y-%m-%d")
 
         def _failed(msg: str) -> DataUpdateResult:
             print(f"  [UYARI] {msg}; mevcut CSV korunuyor.")
-            return DataUpdateResult(
-                status="failed",
-                latest_date_before=latest_before,
-                latest_date_after=latest_before,
-                error=msg,
-            )
+            return _result("failed", latest_before, msg)
 
         try:
             full = provider.download(ticker, start=start, end=end)
@@ -237,7 +348,7 @@ class DataUpdater:
         if full is None or full.empty:
             return _failed("tam yeniden indirme bos dondu")
 
-        rows = _prepare_provider_rows(full, df_raw.columns, date_col, today)
+        rows = _prepare_provider_rows(full, df_raw.columns, date_col, max_date)
         if rows.empty:
             return _failed("tam yeniden indirmede gecerli satir yok")
         # Saglayici daha kisa gecmis veriyorsa eski (uzun) CSV'yi ezip veri kaybetme.
@@ -251,160 +362,21 @@ class DataUpdater:
         out = rows.copy()
         out[date_col] = out[date_col].dt.strftime(date_fmt)
         out = out[list(df_raw.columns)]
-        tmp_path = f"{csv_path}.tmp"
         try:
-            out.to_csv(tmp_path, index=False, encoding="utf-8-sig")
-            os.replace(tmp_path, csv_path)
+            backup_path = backup_before_rewrite(csv_path, today=now_istanbul(now))
+            print(f"  [INFO] Yedek alindi: {backup_path}")
+        except OSError as exc:
+            return _failed(f"yedek alinamadi, yeniden yazim iptal ({exc})")
+        try:
+            atomic_write_csv(out, csv_path)
         except Exception as exc:
-            if os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except OSError as rm_exc:
-                    print(f"  [UYARI] gecici dosya silinemedi: {rm_exc}")
             return _failed(f"CSV atomik yazilamadi ({exc})")
 
         print(
             f"  [OK] {os.path.basename(csv_path)} tam yeniden yazildi "
             f"({len(df_raw)} -> {len(out)} satir; split/temettu dikisi giderildi)."
         )
-        return DataUpdateResult(
-            status="updated",
-            latest_date_before=latest_before,
-            latest_date_after=latest_after,
-            rows_added=max(0, int(len(out) - len(df_raw))),
-            full_refetch=True,
+        return _result(
+            "updated", latest_before, after=latest_after,
+            rows_added=max(0, int(len(out) - len(df_raw))), full_refetch=True,
         )
-
-
-_OVERLAP_DAYS = 7
-_OVERLAP_TOLERANCE = 0.005  # |yeni/eski - 1| > %0.5 -> yeniden olcekleme suphesi
-
-
-def _prepare_provider_rows(
-    new_data: pd.DataFrame, columns: Any, date_col: str, today: pd.Timestamp
-) -> pd.DataFrame:
-    """Saglayici ciktisini CSV semasina cevirir; Date > bugun satirlari atilir."""
-    frame = _normalize_yfinance_frame(new_data)
-    rows = _map_to_existing_schema(frame, columns, date_col)
-    rows[date_col] = pd.to_datetime(rows[date_col], errors="coerce").dt.normalize()
-    rows = rows.dropna(subset=[date_col])
-    rows = rows[rows[date_col] <= today]
-    rows = rows.drop_duplicates(subset=[date_col], keep="last").sort_values(date_col)
-    return rows.reset_index(drop=True)
-
-
-def _max_overlap_deviation(
-    df_raw: pd.DataFrame,
-    rows_all: pd.DataFrame,
-    date_col: str,
-    compare_col: str | None,
-    last_date: pd.Timestamp,
-) -> float | None:
-    """Ust uste binen tarihlerde max |yeni/eski - 1|; karsilastirilabilir satir yoksa None."""
-    if compare_col is None or compare_col not in rows_all.columns:
-        return None
-    old = pd.DataFrame({
-        "d": _parse_date_series(df_raw[date_col]).dt.normalize(),
-        "old": pd.to_numeric(df_raw[compare_col], errors="coerce"),
-    }).dropna()
-    old = old[old["d"] >= last_date - pd.Timedelta(days=_OVERLAP_DAYS)].drop_duplicates("d", keep="last")
-    new = pd.DataFrame({
-        "d": rows_all[date_col],
-        "new": pd.to_numeric(rows_all[compare_col], errors="coerce"),
-    }).dropna()
-    merged = old.merge(new, on="d")
-    merged = merged[(merged["old"] > 0) & (merged["new"] > 0)]
-    if merged.empty:
-        return None
-    return float((merged["new"] / merged["old"] - 1.0).abs().max())
-
-
-def _find_column(columns: Any, candidates: list[str]) -> str | None:
-    lookup = {str(col).strip().lower(): str(col) for col in columns}
-    for candidate in candidates:
-        found = lookup.get(candidate.strip().lower())
-        if found is not None:
-            return found
-    return None
-
-
-def _parse_date_series(values: pd.Series) -> pd.Series:
-    """Tarih kolonunu ayristirir (yil-ilk ise dayfirst=False, degilse True); NaT'ler atilir."""
-    vals_clean = values.dropna()
-    if vals_clean.empty:
-        return pd.Series([], dtype="datetime64[ns]")
-    sample = str(vals_clean.iloc[0]).strip()
-    is_year_first = False
-    for separator in ["-", "/", "."]:
-        if separator in sample:
-            parts = sample.split(separator)
-            if parts and len(parts[0]) == 4:
-                is_year_first = True
-                break
-    parsed = pd.to_datetime(vals_clean, errors="coerce", dayfirst=not is_year_first)
-    return parsed.dropna()
-
-
-def _parse_last_date(values: pd.Series) -> pd.Timestamp:
-    parsed = _parse_date_series(values)
-    return pd.NaT if parsed.empty else pd.Timestamp(parsed.max())
-
-
-def _normalize_yfinance_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    data = frame.copy()
-    if isinstance(data.columns, pd.MultiIndex):
-        data.columns = data.columns.get_level_values(0)
-    data.reset_index(inplace=True)
-    data.columns = [str(col).replace("Datetime", "Date") for col in data.columns]
-    return data
-
-
-def _map_to_existing_schema(new_data: pd.DataFrame, existing_columns: Any, date_col: str) -> pd.DataFrame:
-    source_map = {
-        "date": "Date",
-        "tarih": "Date",
-        "open": "Open",
-        "açılış": "Open",
-        "acilis": "Open",
-        "high": "High",
-        "yüksek": "High",
-        "yuksek": "High",
-        "low": "Low",
-        "düşük": "Low",
-        "dusuk": "Low",
-        "close": "Close",
-        "kapanış": "Close",
-        "kapanis": "Close",
-        "adj_close": "Adj Close",
-        "adj close": "Adj Close",
-        "düzeltilmiş_kapanış": "Adj Close",
-        "duzeltilmis_kapanis": "Adj Close",
-        "volume": "Volume",
-        "hacim": "Volume",
-    }
-    available = {str(col).strip().lower(): str(col) for col in new_data.columns}
-    result = pd.DataFrame(index=new_data.index)
-    for target_col in existing_columns:
-        key = str(target_col).strip().lower()
-        source_name = source_map.get(key)
-        source_col = available.get(str(source_name).lower()) if source_name else None
-        if source_col is None and source_name == "Adj Close":
-            source_col = available.get("close")
-        if source_col is None:
-            result[target_col] = pd.NA
-        else:
-            result[target_col] = new_data[source_col]
-    if date_col in result.columns:
-        result[date_col] = pd.to_datetime(result[date_col], errors="coerce")
-    return result
-
-
-def _infer_date_format(sample: str) -> str:
-    sample = sample.strip()
-    if "-" in sample:
-        return "%Y-%m-%d" if len(sample.split("-")[0]) == 4 else "%d-%m-%Y"
-    if "/" in sample:
-        return "%Y/%m/%d" if len(sample.split("/")[0]) == 4 else "%d/%m/%Y"
-    if "." in sample:
-        return "%Y.%m.%d" if len(sample.split(".")[0]) == 4 else "%d.%m.%Y"
-    return "%Y-%m-%d"

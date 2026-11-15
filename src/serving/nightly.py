@@ -29,6 +29,7 @@ from typing import Optional, Sequence
 import pandas as pd
 
 from src.data.data_updater import DataUpdater
+from src.data.freshness import check_freshness, warn_if_stale
 from src.serving.nightly_scoring import (
     assemble_peer_table,
     coverage_warnings,
@@ -91,29 +92,43 @@ def _universe_symbols(data_dir: str) -> list[str]:
     return sorted(out)
 
 
-def refresh_universe(data_dir: str, *, sleep_s: float = 0.2,
+def refresh_universe(data_dir: str, *, sleep_s: float = 0.0,
                      limit: int = 0, progress_every: int = 50) -> dict:
-    """Evrendeki her sembolu artimli tazele. Returns durum sayim sozlugu."""
+    """Evrendeki her sembolu artimli tazele. Returns durum sayim sozlugu.
+
+    Toplu yol: ``DataUpdater.update_many`` (yf.download chunk + retry + sembol kilidi).
+    Toplu cagri tumden patlarsa sembol basina tekli yola duser. ``sleep_s`` yalniz
+    bu dusus yolunda semboller arasi beklemedir.
+    """
     syms = _universe_symbols(data_dir)
     if limit > 0:
         syms = syms[:limit]
     counts = {"updated": 0, "up_to_date": 0, "skipped": 0, "failed": 0}
     rows_added = 0
-    _log(f"veri tazeleme: {len(syms)} sembol")
-    for i, sym in enumerate(syms, 1):
-        path = os.path.join(data_dir, f"{sym}.csv")
-        try:
-            res = DataUpdater.check_and_update(path, sym, interactive=False)
-            counts[res.status] = counts.get(res.status, 0) + 1
-            rows_added += int(res.rows_added or 0)
-        except Exception as exc:  # tek sembol patlamasi pipeline'i durdurmasin
+    _log(f"veri tazeleme: {len(syms)} sembol (toplu)")
+    targets = [(os.path.join(data_dir, f"{s}.csv"), s) for s in syms]
+    try:
+        results = DataUpdater.update_many(targets)
+    except Exception as exc:  # toplu yol patlarsa tekli yola dus
+        _log(f"[WARN] toplu tazeleme hatasi ({str(exc)[:80]}); tekli yola dusuluyor")
+        results = {}
+        for i, (path, sym) in enumerate(targets, 1):
+            try:
+                results[sym] = DataUpdater.check_and_update(path, sym, interactive=False)
+            except Exception as one_exc:  # tek sembol patlamasi pipeline'i durdurmasin
+                results[sym] = None
+                _log(f"[WARN] {sym} tazeleme hatasi: {str(one_exc)[:80]}")
+            if sleep_s:
+                time.sleep(sleep_s)
+            if progress_every and i % progress_every == 0:
+                _log(f"  ... {i}/{len(targets)}")
+    for sym in syms:
+        res = results.get(sym)
+        if res is None:
             counts["failed"] += 1
-            _log(f"[WARN] {sym} tazeleme hatasi: {str(exc)[:80]}")
-        if sleep_s:
-            time.sleep(sleep_s)
-        if progress_every and i % progress_every == 0:
-            _log(f"  ... {i}/{len(syms)} (updated={counts['updated']} "
-                 f"up_to_date={counts['up_to_date']} failed={counts['failed']})")
+            continue
+        counts[res.status] = counts.get(res.status, 0) + 1
+        rows_added += int(res.rows_added or 0)
     counts["rows_added"] = rows_added
     _log(f"veri tazeleme bitti: {counts}")
     return counts
@@ -135,6 +150,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="skorlama modeli: lgb (varsayilan) | ensemble (LGB+3-seed MLP, Faz 9; ~4x sure)")
     ap.add_argument("--mlp-epochs", type=int, default=15, help="ensemble MLP epoch")
     ap.add_argument("--stale-days", type=int, default=10)
+    ap.add_argument("--stale-business-days", type=int, default=5,
+                    help="bugune gore is gunu esigi: sembolun son tarihi bundan fazla geride ise "
+                         "BAYAT isaretlenir (confidence dusurulur; kosu durmaz)")
     ap.add_argument("--liq-floor-tl", type=float, default=3_000_000.0,
                     help="tradable alt esigi: medyan gunluk TL ciro (default 3M=P20, Q1'i kapatir)")
     ap.add_argument("--limit", type=int, default=0, help="ilk N sembol (tazeleme + skorlama; test/manuel)")
@@ -143,7 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "ornek: --fallback-dir data/yedek (K7)")
     ap.add_argument("--quarantine-jumps", action=argparse.BooleanOptionalAction, default=True,
                     help="|1g log-getiri|>0.30 olcek kiriklari etrafindaki satirlari at (K8)")
-    ap.add_argument("--sleep-s", type=float, default=0.2, help="semboller arasi tazeleme beklemesi")
+    ap.add_argument("--sleep-s", type=float, default=0.0, help="yalniz tekli dusus yolunda semboller arasi bekleme")
     ap.add_argument("--skip-data", action="store_true")
     ap.add_argument("--skip-trading-gate", action="store_true")
     return ap
@@ -212,6 +230,9 @@ def run_scoring(args: argparse.Namespace) -> int:
         _log("UYARI survivorship: evrende delisted sembol yok (hayatta kalma yanliligi riski)")
     if meta["fallback_symbols"]:
         _log(f"fallback klasorden yuklenen sembol: {len(meta['fallback_symbols'])}")
+    if meta.get("rejected_rows"):
+        _log(f"UYARI bozuk CSV satiri: {len(meta['rejected_rows'])} sembolde "
+             f"{sum(meta['rejected_rows'].values())} satir karantinaya alindi")
     if meta["quarantined_days"]:
         _log(f"karantina: {len(meta['quarantined_days'])} sembolde "
              f"{sum(meta['quarantined_days'].values())} satir atildi")
@@ -257,9 +278,22 @@ def run_scoring(args: argparse.Namespace) -> int:
     def tradable_for(s: str) -> bool:
         return float(sym_liq.get(s, -1e9)) >= liq_floor
 
+    # Bugune gore tazelik kapisi: panel-ici goreli esik (stale_days) tek basina, tum veri
+    # aylarca bayatsa hicbir sembolu isaretlemez. Bayat semboller uyari + confidence'ta isaret.
+    stale_now = warn_if_stale(
+        sym_last.to_dict(), "Gecelik serving tazelik kapisi",
+        max_business_days=args.stale_business_days)
+    glob_fresh = check_freshness(
+        latest_global, max_business_days=args.stale_business_days, label="panel en guncel piyasa gunu")
+    _log(("UYARI " if glob_fresh.stale else "") + glob_fresh.message)
+    if stale_now:
+        _log(f"UYARI bayat sembol (is gunu > {args.stale_business_days}): "
+             f"{len(stale_now)}/{len(sym_last)} -> confidence'ta stale isaretlenir")
+
     def stale_for(s: str) -> bool:
         last = sym_last.get(s)
-        return last is None or (latest_global - last).days > args.stale_days
+        return (last is None or s in stale_now
+                or (latest_global - last).days > args.stale_days)
 
     table = assemble_serving_table(
         model, full_aug, latest_rows, as_of, feats, seg_table, icir_maps, neff_maps,
@@ -274,7 +308,7 @@ def run_scoring(args: argparse.Namespace) -> int:
     # probability_source PeerStore kolonu degil (peer_store.py disinda) -> run config'inde.
     prob_src = (sorted(table["probability_source"].dropna().unique().tolist())
                 if "probability_source" in table.columns else [])
-    rid = store.insert_run(GlobalRunMeta(
+    rid, n = store.write_run(GlobalRunMeta(
         model_name=model_name,
         as_of_date=str(as_of.date()),
         data_snapshot_hash=snap, n_symbols=int(panel["symbol"].nunique()),
@@ -285,10 +319,13 @@ def run_scoring(args: argparse.Namespace) -> int:
                 "neff_maps": neff_maps, "trend_probability_source": prob_src,
                 "liq_floor_tl": args.liq_floor_tl, "stale_days": args.stale_days,
                 "warnings": warns,
+                "stale_business_days": args.stale_business_days,
+                "stale_symbols_now": len(stale_now),
+                "panel_freshness": glob_fresh.message,
+                "rejected_rows_symbols": len(meta.get("rejected_rows", {})),
                 "survivorship": meta["survivorship_status"],
                 "fallback_symbols": len(meta["fallback_symbols"]),
-                "quarantined_symbols": len(meta["quarantined_days"])}))
-    n = store.insert_peer_scores(rid, table)
+                "quarantined_symbols": len(meta["quarantined_days"])}), table)
     _log(f"PeerStore run_id={rid}: {n} peer_scores yazildi -> {args.db}")
     _log(f"confidence dagilimi: {table['confidence_label'].value_counts().to_dict()}")
     if "trend_label" in table.columns:
