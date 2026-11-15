@@ -7,7 +7,7 @@ Risk modelinin kendisi `src/risk/`; kapi mantigi degismez.
 from __future__ import annotations
 
 import argparse
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 import pandas as pd
 
@@ -35,15 +35,18 @@ def horizon_arg(value: str) -> int:
 def run_risk_step(
     panel: pd.DataFrame, as_of: pd.Timestamp, prev_run: Optional[dict[str, Any]],
     *, log: Callable[[str], None], status: Any = None,
+    quarantined: Optional[Mapping[str, int]] = None,
 ) -> tuple[Optional[pd.DataFrame], dict[str, Any], list[str]]:
     """Risk tablosu + config ozeti + uyarilar.
 
     - `status` (NightlyRunStatus) verilirse `risk={status, method, error}` yazilir
       (`ok` | `fallback` | `failed`) -> `/health` ve operator gorur.
+    - `quarantined` ({sembol: atilan satir}) risk tahmini olmayan sembollerin nedenini
+      siniflar (summary['missing']).
     - `prev_run` (onceki kosunun basligi) ile karsilastirilip kapi degisimi
       (har_x_ridge <-> naive_fallback) loglanir ve config uyarisina eklenir.
     """
-    table, summary = compute_risk_safe(panel, as_of, log=log)
+    table, summary = compute_risk_safe(panel, as_of, log=log, quarantined=quarantined)
     info = risk_run_status(summary)
     prev = previous_risk_method(prev_run)
     flip = gate_flip_warning(prev, info["method"])

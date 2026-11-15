@@ -146,7 +146,7 @@ class AnalysisService:
         data_block = self._data_block(last_date, last_close, today.isoformat())
         dq = self._data_quality(symbol, csv_path)
 
-        conf, status = self._confidence(peer, data_block, pool, dq, csv_last_date)
+        conf, status = self._confidence(peer, data_block, pool, dq, csv_last_date, symbol)
         return AnalysisResponse(
             symbol=symbol,
             analysis_status=status,
@@ -203,6 +203,7 @@ class AnalysisService:
         pool: dict,
         dq: DataQualityBlock,
         csv_last_date: Optional[str] = None,
+        symbol: str = "",
     ) -> Tuple[ConfidenceBlock, str]:
         """Ust-seviye guven: Kol-B etiketi; bayat veri / as_of geriligi / risk durumu / drift dusurur."""
         label = peer.confidence_label if peer.confidence_label in _LEVELS else "low"
@@ -228,7 +229,7 @@ class AnalysisService:
 
         risk_method = getattr(peer, "risk_method", None)
         if risk_method is None:
-            warnings.append(self._missing_risk_warning(peer))
+            warnings.append(self._missing_risk_warning(peer, symbol))
             label = _lower(label)
         elif risk_method == "naive_fallback":
             warnings.append(
@@ -283,11 +284,23 @@ class AnalysisService:
         )
 
     @staticmethod
-    def _missing_risk_warning(peer: PeerBlock) -> str:
-        """risk_method None: kosu-duzeyi hata mi, sembolun kisa gecmisi mi?"""
+    def _missing_risk_warning(peer: PeerBlock, symbol: str = "") -> str:
+        """risk_method None: kosu-duzeyi hata mi, yoksa sembole ozgu neden mi (run config 'missing')?"""
         val = peer.risk_validation if isinstance(peer.risk_validation, dict) else {}
         if val.get("error"):
             return ("Risk modeli bu gece calismadi (kosu-duzeyi hata); risk seviyesi ve "
                     "fiyat araligi uretilemedi.")
+        missing = val.get("missing") if isinstance(val.get("missing"), dict) else {}
+        reason = missing.get(symbol)
+        if reason == "quarantine":
+            return ("Sembolde yakin zamanda olcek kirigi (bolunme/duzeltilmemis fiyat) saptandi; "
+                    "ilgili gunler karantinaya alindi ve risk modelinin gerektirdigi temiz gecmis "
+                    "(~63 islem gunu + pencere) henuz olusmadi; risk seviyesi ve fiyat araligi yok.")
+        if reason == "short_history":
+            return ("Sembolun fiyat gecmisi risk modeli icin yetersiz (<64 islem gunu); "
+                    "risk seviyesi ve fiyat araligi uretilemedi.")
+        if reason == "gap":
+            return ("Sembolun son gunlerinde eksik/islemsiz gunler var (risk penceresi dolmadi); "
+                    "birkac gun icinde duzelmesi beklenir. Risk seviyesi ve fiyat araligi yok.")
         return ("Bu sembol icin risk tahmini yok (yetersiz/kesintili fiyat gecmisi veya "
                 "olcek kirigi karantinasi); fiyat araligi uretilemedi.")

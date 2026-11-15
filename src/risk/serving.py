@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 import numpy as np
 import pandas as pd
@@ -128,9 +128,45 @@ def compute_risk_serving(
     return table, validation_summary(result), result
 
 
+MISSING_QUARANTINE = "quarantine"          # olcek kirigi (bolunme) karantinasi: gunler panelden atildi
+MISSING_SHORT_HISTORY = "short_history"    # risk penceresi icin yeterli satir yok
+MISSING_GAP = "gap"                        # son pencerelerde eksik/islemsiz gun
+MIN_HISTORY_ROWS = 64                      # rv_63 + getiri icin asgari satir
+
+
+def explain_missing_risk(
+    table: Optional[pd.DataFrame], panel: pd.DataFrame, as_of: pd.Timestamp,
+    quarantined: Optional[Mapping[str, int]] = None,
+) -> dict[str, str]:
+    """as_of gununde risk tahmini OLMAYAN sembol -> neden ({symbol: kod}).
+
+    Neden (API uyarisi bunu okur): `quarantine` (sembolde K8 olcek-kirigi karantinasi var:
+    sicrama sonrasi ~63 satir panelden atilir, HAR pencereleri yeniden dolana dek (~63+51 islem
+    gunu) ozellik NaN kalir; egitimle ayni kural oldugundan bilincli), `short_history`
+    (<64 satir), `gap` (son 5/21/63 gunde eksik gun; birkac gunde duzelir).
+    """
+    if table is None or table.empty:
+        return {}
+    bad = table.loc[table["risk_sigma_5d"].isna(), "symbol"].astype(str).tolist()
+    if not bad:
+        return {}
+    counts = panel[panel["Date"] <= pd.Timestamp(as_of)].groupby("symbol").size()
+    q = quarantined or {}
+    out: dict[str, str] = {}
+    for sym in bad:
+        if int(counts.get(sym, 0)) < MIN_HISTORY_ROWS:
+            out[sym] = MISSING_SHORT_HISTORY
+        elif int(q.get(sym, 0)) > 0:
+            out[sym] = MISSING_QUARANTINE
+        else:
+            out[sym] = MISSING_GAP
+    return out
+
+
 def compute_risk_safe(
     panel: pd.DataFrame, as_of: pd.Timestamp, log: Callable[[str], None] = print,
     cfg: Optional[RiskValidationConfig] = None,
+    quarantined: Optional[Mapping[str, int]] = None,
 ) -> tuple[Optional[pd.DataFrame], dict[str, Any]]:
     """Nightly sarmalayicisi: `compute_risk_serving` + log. Panel yeniden yuklenmez.
 
@@ -144,6 +180,10 @@ def compute_risk_safe(
         log(f"HATA risk modeli hesaplanamadi ({type(exc).__name__}: {str(exc)[:150]}); "
             "risk_* ve fiyat bandi bos")
         return None, {"error": f"{type(exc).__name__}: {str(exc)[:300]}"}
+    summary["missing"] = explain_missing_risk(table, panel, as_of, quarantined)
+    if summary["missing"]:
+        log(f"UYARI risk tahmini olmayan sembol: {len(summary['missing'])} "
+            f"({sorted(set(summary['missing'].values()))}); ornek: {sorted(summary['missing'])[:5]}")
     log(f"risk: method={summary['method']} kapi={'GECTI' if summary['gate_passed'] else 'GECMEDI'} "
         f"mse_ratio={summary['mse_ratio']:.3f} dm_t={summary['dm_t']:.1f} "
         f"kapsama={summary['coverage']:.3f} ({time.time() - t0:.0f}s)")

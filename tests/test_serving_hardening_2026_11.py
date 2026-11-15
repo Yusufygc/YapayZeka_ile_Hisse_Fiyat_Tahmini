@@ -225,7 +225,7 @@ def test_risk_run_status_values():
 def test_run_risk_step_writes_failed_status_to_status_file(tmp_path, monkeypatch):
     import src.serving.nightly_risk as nr
 
-    monkeypatch.setattr(nr, "compute_risk_safe", lambda panel, as_of, log=print: (None, {"error": "RuntimeError: x"}))
+    monkeypatch.setattr(nr, "compute_risk_safe", lambda panel, as_of, log=print, quarantined=None: (None, {"error": "RuntimeError: x"}))
     logs: list[str] = []
     db = str(tmp_path / "serving_pool.db")
     status = NightlyRunStatus(status_path_for_db(db))
@@ -304,7 +304,7 @@ def test_run_risk_step_logs_and_records_flip(monkeypatch):
     import src.serving.nightly_risk as nr
 
     monkeypatch.setattr(nr, "compute_risk_safe",
-                        lambda panel, as_of, log=print: (pd.DataFrame(), {"method": "naive_fallback", "gate_passed": False}))
+                        lambda panel, as_of, log=print, quarantined=None: (pd.DataFrame(), {"method": "naive_fallback", "gate_passed": False}))
     prev = {"config_json": json.dumps({"risk": {"method": "har_x_ridge"}})}
     logs: list[str] = []
     _, summary, warns = run_risk_step(pd.DataFrame(), pd.Timestamp("2026-11-13"), prev, log=logs.append)
@@ -392,3 +392,48 @@ def test_bind_address_defaults_to_loopback_and_env_overrides(monkeypatch):
     monkeypatch.setenv("AI_CORE_API_HOST", "0.0.0.0")
     monkeypatch.setenv("AI_CORE_API_PORT", "9001")
     assert api_main._bind_address() == ("0.0.0.0", 9001)
+
+
+# ------------------------------------- 13. risk tahmini olmayan sembol: neden siniflama
+def _gap_panel():
+    """S00: olcek-kirigi karantinasini taklit eden uzun bosluk; S01: yalniz 30 satir."""
+    from risk_synth import make_panel
+
+    base = make_panel(n_sym=12, n_days=300, seed=3)
+    dates = sorted(base["Date"].unique())
+    drop_dates = dates[150:270]                       # ~karantina: 120 gun panelden atildi
+    base = base[~((base["symbol"] == "S00") & base["Date"].isin(drop_dates))]
+    base = base[~((base["symbol"] == "S01") & (base["Date"] < dates[-30]))]
+    return base.reset_index(drop=True), pd.Timestamp(dates[-1])
+
+
+def test_quarantine_gap_nans_har_windows_root_cause_of_missing_risk():
+    from src.risk.features import RISK_FEATURE_COLS, build_risk_frame
+
+    panel, as_of = _gap_panel()
+    day = build_risk_frame(panel, 5).query("Date == @as_of").set_index("symbol")
+    assert day.loc["S00", ["rv_5", "rv_21"]].notna().all()        # kisa pencereler dolu
+    assert np.isnan(day.loc["S00", "rv_63"])                      # rv_63: <%80 gecerli gun
+    assert day.loc["S05", list(RISK_FEATURE_COLS)].notna().all()  # gaps olmayan sembol saglam
+
+
+def test_explain_missing_risk_classifies_reasons():
+    from src.risk.serving import explain_missing_risk
+
+    panel, as_of = _gap_panel()
+    table = pd.DataFrame({"symbol": ["S00", "S01", "S02", "S05"],
+                          "risk_sigma_5d": [np.nan, np.nan, np.nan, 0.05]})
+    out = explain_missing_risk(table, panel, as_of, quarantined={"S00": 69})
+    assert out == {"S00": "quarantine", "S01": "short_history", "S02": "gap"}
+    assert explain_missing_risk(None, panel, as_of) == {}
+
+
+@pytest.mark.parametrize("reason,needle", [
+    ("quarantine", "olcek kirigi"), ("short_history", "yetersiz"), ("gap", "eksik/islemsiz")])
+def test_api_missing_risk_warning_names_the_reason(env, reason, needle):
+    _make_pool(env.pool, [_peer_row("ASELS", risk_method=None, risk_sigma_5d=None, risk_z=None)],
+               config={"risk": {"method": "har_x_ridge", "missing": {"ASELS": reason}}})
+    _write_market(env.data, "ASELS", "2026-11-16")
+    body = env.client().get("/analysis/ASELS").json()
+    assert body["confidence"]["label"] == "medium"
+    assert any(needle in w for w in body["confidence"]["warnings"])

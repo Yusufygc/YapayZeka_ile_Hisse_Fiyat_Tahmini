@@ -354,7 +354,8 @@ def run_scoring(args: argparse.Namespace, status: Optional[NightlyRunStatus] = N
 
     store = PeerStore(args.db)
     risk_table, risk_summary, risk_warns = run_risk_step(
-        full_aug, as_of, store.latest_run(), log=_log, status=status)
+        full_aug, as_of, store.latest_run(), log=_log, status=status,
+        quarantined=meta.get("quarantined_days"))
     warns = [*warns, *risk_warns]
     table = assemble_peer_table(
         model, latest_rows, feats, seg_table, icir_maps=icir_maps, neff_maps=neff_maps,
