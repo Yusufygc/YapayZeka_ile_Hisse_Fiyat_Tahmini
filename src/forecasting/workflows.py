@@ -17,6 +17,7 @@ from src.forecasting.artifacts import (
     artifact_sidecar_paths,
     load_forecast_artifact_package,
 )
+from src.database.paths import resolve_model_path
 from src.forecasting.bist_rules import RULES_VERSION
 from src.pipeline.config import DataConfig, ValidationConfig
 from src.pipeline.data_manager import DataManager
@@ -227,9 +228,9 @@ class ForecastSymbolWorkflow:
         return [str(feature) for feature in metadata.get("feature_names") or []]
 
     def _resolve_model_path(self, model_path: str) -> str:
-        if not model_path or os.path.isabs(model_path):
-            return model_path
-        return os.path.join(self.ctx.project_root, model_path)
+        # Göreceli yol proje köküne, başka makineden kalan mutlak `...\outputs\...`
+        # yolu yerel outputs köküne çözülür (src/database/paths.py).
+        return resolve_model_path(model_path, project_root=self.ctx.project_root)
 
     def _run_ensemble(
         self,
@@ -459,7 +460,8 @@ class BestModelResolver:
         candidates = [
             row
             for row in rows
-            if row.get("model_path") and os.path.isfile(str(row.get("model_path")))
+            if row.get("model_path")
+            and os.path.isfile(resolve_model_path(row.get("model_path"), project_root=self.ctx.project_root))
         ]
         if not candidates:
             return None
@@ -588,9 +590,9 @@ class ProductionTrainingWorkflow:
         }
 
     def _resolve_model_path(self, model_path: str) -> str:
-        if not model_path or os.path.isabs(model_path):
-            return model_path
-        return os.path.join(self.ctx.project_root, model_path)
+        # Göreceli yol proje köküne, başka makineden kalan mutlak `...\outputs\...`
+        # yolu yerel outputs köküne çözülür (src/database/paths.py).
+        return resolve_model_path(model_path, project_root=self.ctx.project_root)
 
     @staticmethod
     def _clean_training_frame(data_manager: DataManager) -> pd.DataFrame:

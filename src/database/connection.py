@@ -14,6 +14,11 @@ bağlantıyı kapatır. Bağlantıyı `with` olmadan kullanan çağıranlar yine
 from __future__ import annotations
 
 import sqlite3
+import threading
+
+BUSY_TIMEOUT_MS = 5000
+
+_WAL_LOCK = threading.Lock()
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -30,3 +35,24 @@ def connect(path: str, **kwargs) -> sqlite3.Connection:
     """`sqlite3.connect` ile aynı, ancak `ClosingConnection` döndürür."""
     kwargs.setdefault("factory", ClosingConnection)
     return sqlite3.connect(path, **kwargs)
+
+
+def open_db(path: str, *, foreign_keys: bool = True, row_factory=sqlite3.Row) -> sqlite3.Connection:
+    """Ortak bağlantı fabrikası: `busy_timeout` + WAL (yalnızca gerekirse yazılır).
+
+    - `busy_timeout` bağlantı bazlıdır; her bağlantıda ayarlanır (yazar çakışmasında
+      anında `database is locked` yerine kısa süre bekler).
+    - `journal_mode=WAL` DB dosyasında kalıcıdır: mevcut mod okunur (kilitsiz) ve
+      yalnızca WAL değilse bir kez ayarlanır; böylece her bağlantı yazma kilidi
+      istemez, silinip yeniden oluşturulan dosyalar da doğru kurulur.
+    """
+    conn = sqlite3.connect(path, factory=ClosingConnection, timeout=BUSY_TIMEOUT_MS / 1000.0)
+    conn.row_factory = row_factory
+    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+    mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    if str(mode).lower() != "wal":
+        with _WAL_LOCK:
+            conn.execute("PRAGMA journal_mode=WAL")
+    if foreign_keys:
+        conn.execute("PRAGMA foreign_keys=ON")
+    return conn

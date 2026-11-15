@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from src.api.constants import XAI_CAVEAT
+from src.database.paths import resolve_model_path
 from src.xai.feature_dictionary import describe_feature, feature_group
 from src.xai.group_summary import XaiGroupSummaryData, build_group_summaries
 from src.xai.manifest import read_xai_manifest
@@ -133,7 +134,9 @@ def _candidate_xai_dirs(
     candidates: List[str] = []
     if run_id:
         candidates.append(os.path.join(outputs_base, symbol, "runs", str(run_id), "xai"))
-    model_xai_dir = _xai_dir_from_model_path(model_path)
+    # Başka makineden kalan / göreceli model yolunu yerel outputs köküne çöz.
+    resolved_model_path = resolve_model_path(model_path, outputs_root=outputs_base) if model_path else None
+    model_xai_dir = _xai_dir_from_model_path(resolved_model_path)
     if model_xai_dir:
         candidates.append(model_xai_dir)
     candidates.append(os.path.join(outputs_base, symbol, "latest", "xai"))

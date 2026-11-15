@@ -45,7 +45,7 @@ except ImportError as exc:
         "  conda activate dl_env && pip install fastapi uvicorn"
     ) from exc
 
-from src.database.stock_model_db import StockModelDB
+from src.database.stock_model_db import StockModelDB, get_db
 from src.api.routers.analysis import router as analysis_router
 from src.api.runtime_config import get_cors_settings
 from src.api.services.pipeline_jobs import (
@@ -98,7 +98,9 @@ app.include_router(analysis_router)
 _DB_PATH = os.path.join(_PROJECT_ROOT, "data", "stock_models.db")
 
 def _get_db() -> StockModelDB:
-    return StockModelDB(_DB_PATH)
+    # Önbellekli (yol başına tek örnek): şema/migrasyon/best_models yeniden inşası
+    # istek başına değil süreçte bir kez çalışır.
+    return get_db(_DB_PATH)
 
 
 def _parse_payload_json(job: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

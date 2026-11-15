@@ -18,200 +18,71 @@ Kullanım:
     best = db.get_best_model("TUPRS")   # ileriye dönük otomatik seçim için
 """
 
-import sqlite3
-
-from src.database.connection import ClosingConnection
 import hashlib
 import math
-from typing import Any, Dict, List, Optional
+import os
+import sqlite3
+import threading
+from typing import Any, Dict, List, Optional, Tuple
+
+from src.database.connection import open_db
 
 from src.evaluation.scoring import compute_composite_score  # noqa: F401  (re-export; mantik scoring.py'de)
 from src.pipeline.model_scope import BENCHMARK_MODELS
 
 
-_CREATE_EXPERIMENTS = """
-CREATE TABLE IF NOT EXISTS experiments (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    stock_symbol     TEXT    NOT NULL,
-    model_name       TEXT    NOT NULL,
-    validation_mode  TEXT    NOT NULL DEFAULT 'single_split',
-    target_mode      TEXT    NOT NULL DEFAULT 'price',
-    feature_mode     TEXT    NOT NULL DEFAULT 'legacy_price_features',
-    scaling_mode     TEXT    NOT NULL DEFAULT 'minmax',
-    mae              REAL,
-    rmse             REAL,
-    mape             REAL,
-    dir_acc          REAL,
-    sharpe           REAL,
-    hit_rate         REAL,
-    rmse_vs_benchmark REAL,
-    net_return       REAL,
-    buyhold_return   REAL,
-    max_drawdown     REAL,
-    trade_count      INTEGER,
-    signal_diagnosis TEXT,
-    composite_score  REAL,
-    model_path       TEXT,
-    features         TEXT,
-    dataset_hash     TEXT,
-    is_production_candidate INTEGER NOT NULL DEFAULT 0,
-    selection_source TEXT,
-    run_id           TEXT,
-    trained_at       TEXT    NOT NULL
-);
-"""
-
-_CREATE_BEST_MODELS = """
-CREATE TABLE IF NOT EXISTS best_models (
-    stock_symbol    TEXT    PRIMARY KEY,
-    model_name      TEXT    NOT NULL,
-    experiment_id   INTEGER NOT NULL,
-    composite_score REAL    NOT NULL,
-    target_mode     TEXT    NOT NULL DEFAULT 'price',
-    feature_mode    TEXT    NOT NULL DEFAULT 'legacy_price_features',
-    scaling_mode    TEXT    NOT NULL DEFAULT 'minmax',
-    validation_mode TEXT    NOT NULL DEFAULT 'final_holdout',
-    dataset_hash    TEXT,
-    run_id          TEXT,
-    selection_source TEXT,
-    mae             REAL,
-    rmse            REAL,
-    mape            REAL,
-    dir_acc         REAL,
-    sharpe          REAL,
-    hit_rate        REAL,
-    rmse_vs_benchmark REAL,
-    net_return      REAL,
-    buyhold_return  REAL,
-    max_drawdown    REAL,
-    trade_count     INTEGER,
-    signal_diagnosis TEXT,
-    model_path      TEXT,
-    updated_at      TEXT    NOT NULL,
-    FOREIGN KEY (experiment_id) REFERENCES experiments(id)
-);
-"""
-
-_CREATE_IDX_SYMBOL = """
-CREATE INDEX IF NOT EXISTS idx_experiments_symbol
-    ON experiments (stock_symbol);
-"""
-
-_CREATE_IDX_SCORE = """
-CREATE INDEX IF NOT EXISTS idx_experiments_score
-    ON experiments (stock_symbol, composite_score DESC);
-"""
-
-_CREATE_FORECAST_RUNS = """
-CREATE TABLE IF NOT EXISTS forecast_runs (
-    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_key                TEXT    NOT NULL UNIQUE,
-    stock_symbol           TEXT    NOT NULL,
-    model_name             TEXT    NOT NULL,
-    source_experiment_id   INTEGER,
-    run_at                 TEXT    NOT NULL,
-    last_observed_date     TEXT    NOT NULL,
-    last_close             REAL    NOT NULL,
-    horizon_days           INTEGER NOT NULL,
-    trend_label            TEXT    NOT NULL,
-    weekly_expected_return REAL,
-    trend_threshold        REAL,
-    rules_version          TEXT    NOT NULL,
-    status                 TEXT    NOT NULL DEFAULT 'pending',
-    FOREIGN KEY (source_experiment_id) REFERENCES experiments(id)
-);
-"""
-
-_CREATE_FORECAST_POINTS = """
-CREATE TABLE IF NOT EXISTS forecast_points (
-    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id                   INTEGER NOT NULL,
-    target_date              TEXT    NOT NULL,
-    horizon_index            INTEGER NOT NULL,
-    raw_predicted_close      REAL,
-    bounded_predicted_close  REAL,
-    predicted_return         REAL,
-    lower_band               REAL,
-    upper_band               REAL,
-    price_tick               REAL,
-    p10_close                REAL,
-    p50_close                REAL,
-    p90_close                REAL,
-    predicted_return_p10     REAL,
-    predicted_return_p50     REAL,
-    predicted_return_p90     REAL,
-    interval_method          TEXT,
-    actual_close             REAL,
-    actual_return            REAL,
-    abs_error                REAL,
-    direction_correct        INTEGER,
-    resolved_at              TEXT,
-    UNIQUE(run_id, target_date),
-    FOREIGN KEY (run_id) REFERENCES forecast_runs(id) ON DELETE CASCADE
-);
-"""
-
-_CREATE_FORECAST_ACCURACY = """
-CREATE TABLE IF NOT EXISTS forecast_accuracy_summary (
-    run_id                   INTEGER PRIMARY KEY,
-    stock_symbol             TEXT    NOT NULL,
-    model_name               TEXT    NOT NULL,
-    rmse                     REAL,
-    mae                      REAL,
-    mape                     REAL,
-    dir_acc                  REAL,
-    weekly_direction_correct INTEGER,
-    interval_coverage        REAL,
-    interval_avg_width       REAL,
-    nominal_coverage         REAL,
-    resolved_points          INTEGER NOT NULL,
-    updated_at               TEXT    NOT NULL,
-    FOREIGN KEY (run_id) REFERENCES forecast_runs(id) ON DELETE CASCADE
-);
-"""
-
-_CREATE_IDX_FORECAST_SYMBOL = """
-CREATE INDEX IF NOT EXISTS idx_forecast_runs_symbol
-    ON forecast_runs (stock_symbol, run_at DESC);
-"""
-
-_CREATE_IDX_FORECAST_RUN_KEY = """
-CREATE UNIQUE INDEX IF NOT EXISTS idx_forecast_runs_run_key
-    ON forecast_runs (run_key);
-"""
-
-_CREATE_IDX_FORECAST_POINTS_DATE = """
-CREATE INDEX IF NOT EXISTS idx_forecast_points_target_date
-    ON forecast_points (target_date);
-"""
-
-_CREATE_ANALYSIS_REFRESH_JOBS = """
-CREATE TABLE IF NOT EXISTS analysis_refresh_jobs (
-    job_id       TEXT PRIMARY KEY,
-    symbol       TEXT NOT NULL,
-    job_type     TEXT NOT NULL,
-    status       TEXT NOT NULL,
-    reason       TEXT NOT NULL,
-    started_at   TEXT,
-    finished_at  TEXT,
-    error        TEXT,
-    payload_json TEXT
-);
-"""
-
-_CREATE_IDX_REFRESH_JOBS_SYMBOL = """
-CREATE INDEX IF NOT EXISTS idx_analysis_refresh_jobs_symbol
-    ON analysis_refresh_jobs (symbol, status, started_at DESC);
-"""
-
-REQUIRED_SCHEMA_TABLES = (
-    "experiments",
-    "best_models",
-    "forecast_runs",
-    "forecast_points",
-    "forecast_accuracy_summary",
-    "analysis_refresh_jobs",
+from src.database.schema_ddl import (  # noqa: F401  (re-export; SchemaRepository `schema._CREATE_*` okur)
+    _CREATE_EXPERIMENTS,
+    _CREATE_BEST_MODELS,
+    _CREATE_IDX_SYMBOL,
+    _CREATE_IDX_SCORE,
+    _CREATE_FORECAST_RUNS,
+    _CREATE_FORECAST_POINTS,
+    _CREATE_FORECAST_ACCURACY,
+    _CREATE_IDX_FORECAST_SYMBOL,
+    _CREATE_IDX_FORECAST_RUN_KEY,
+    _CREATE_IDX_FORECAST_POINTS_DATE,
+    _CREATE_ANALYSIS_REFRESH_JOBS,
+    _CREATE_IDX_REFRESH_JOBS_SYMBOL,
+    REQUIRED_SCHEMA_TABLES,
 )
+
+
+# Süreç içi şema-hazır kaydı: yol -> dosya kimliği (dev, ino). Şema kurulumu +
+# migrasyonlar + best_models yeniden inşası yazma işlemidir; her `StockModelDB(...)`
+# (örn. her API isteği) çağrısında tekrarlanmamalı. Dosya silinip yeniden
+# oluşturulursa kimlik değişir ve şema yeniden kurulur.
+_SCHEMA_READY: Dict[str, Tuple[int, int]] = {}
+_SCHEMA_LOCK = threading.RLock()
+_DB_CACHE: Dict[str, "StockModelDB"] = {}
+_DB_CACHE_LOCK = threading.Lock()
+
+
+def _db_key(db_path: str) -> str:
+    return os.path.normcase(os.path.abspath(db_path))
+
+
+def _file_identity(db_path: str) -> Optional[Tuple[int, int]]:
+    try:
+        st = os.stat(db_path)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def get_db(db_path: str) -> "StockModelDB":
+    """Yol başına tek (thread-safe, önbellekli) `StockModelDB` döner.
+
+    `StockModelDB` durumsuzdur (her işlemde yeni bağlantı açar), bu yüzden
+    paylaşımı güvenlidir. Şema başlatma bu yol için süreçte bir kez çalışır.
+    """
+    key = _db_key(db_path)
+    with _DB_CACHE_LOCK:
+        db = _DB_CACHE.get(key)
+        if db is None:
+            db = StockModelDB(db_path)
+            _DB_CACHE[key] = db
+        return db
 
 
 class StockModelDB:
@@ -221,14 +92,30 @@ class StockModelDB:
     Args:
         db_path: Veritabanı dosyasının tam yolu.
                  Yoksa otomatik oluşturulur.
+        init_schema: False ise şema kurulumu atlanır (çağıran `ensure_schema()`
+                 çağırmalıdır). Varsayılan True; ancak aynı süreçte bu yol için
+                 şema zaten kurulduysa tekrar çalıştırılmaz.
     """
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, init_schema: bool = True):
         self.db_path = db_path
-        import os as _os
-        _os.makedirs(_os.path.dirname(db_path) or ".", exist_ok=True)
+        os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
         self._init_repositories()
-        self._init_db()
+        if init_schema:
+            self.ensure_schema()
+
+    def ensure_schema(self, force: bool = False) -> None:
+        """Şema/migrasyon/best_models yeniden inşasını süreçte yol başına bir kez çalıştırır.
+
+        `force=True` her koşulda yeniden çalıştırır (bakım araçları için).
+        """
+        key = _db_key(self.db_path)
+        with _SCHEMA_LOCK:
+            identity = _file_identity(self.db_path)
+            if not force and identity is not None and _SCHEMA_READY.get(key) == identity:
+                return
+            self._init_db()
+            _SCHEMA_READY[key] = _file_identity(self.db_path)
 
     def _init_repositories(self) -> None:
         from src.database.repositories import (
@@ -259,11 +146,8 @@ class StockModelDB:
             self._init_repositories()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, factory=ClosingConnection)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        return conn
+        # WAL + busy_timeout + foreign_keys: src.database.connection.open_db.
+        return open_db(self.db_path)
 
     def _init_db(self) -> None:
         self._ensure_repositories()

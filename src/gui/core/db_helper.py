@@ -7,7 +7,7 @@ stock_models.db verilerini okur ve GUI tablo modelleri için hazırlar.
 import os
 import sqlite3
 
-from src.database.connection import ClosingConnection
+from src.database.connection import open_db
 import glob
 from typing import Any, Dict, List, Optional
 
@@ -25,9 +25,7 @@ class DBHelper:
         """
         SQLite bağlantısı oluşturur ve satırları dict benzeri döndürecek row_factory kurar.
         """
-        conn = sqlite3.connect(self.db_path, factory=ClosingConnection)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return open_db(self.db_path, foreign_keys=False)
 
     def get_best_models_summary(self) -> List[Dict[str, Any]]:
         """
@@ -66,10 +64,14 @@ class DBHelper:
         if not os.path.exists(self.db_path):
             return []
 
+        # forecast_runs.status semantiği: log_forecast_run varsayılanı 'pending' =
+        # "tahmin üretildi, gerçekleşmeler (resolve) bekleniyor"; hiçbir yazıcı
+        # 'completed' yazmaz (ileride tüm noktalar çözülünce kullanılabilir). Üretilmiş
+        # her tahmin GUI'de gösterilmeli, bu yüzden her iki değer de kabul edilir.
         query_run = """
             SELECT id, run_key, model_name, run_at, last_observed_date, last_close, trend_label, weekly_expected_return
             FROM forecast_runs
-            WHERE stock_symbol = ? AND status = 'completed'
+            WHERE stock_symbol = ? AND status IN ('pending', 'completed')
             ORDER BY run_at DESC
             LIMIT 1
         """

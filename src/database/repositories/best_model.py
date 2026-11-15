@@ -12,6 +12,7 @@ import json
 import sqlite3
 from typing import Any, Dict, List, Optional
 
+from src.database.paths import resolve_model_path, to_storable_path
 from src.database.repositories.helpers import (
     _parse_jsonish,
     _optional_float,
@@ -43,8 +44,12 @@ class BestModelRepository:
         selection_source: Optional[str],
         run_id: Optional[str],
         ensemble_metadata: Optional[Dict[str, Any]] = None,
+        conn: Optional[sqlite3.Connection] = None,
     ) -> None:
         """Üretim best-model kaydını seçim guard'ı altında günceller.
+
+        `conn` verilirse çağıranın transaction'ına katılır (log_experiment
+        atomikliği); verilmezse kendi bağlantısını açar.
 
         Yalnızca final_holdout değerlendirmesi (veya üretim ensemble'ı) ve
         production-candidate işaretli adaylar değerlendirilir. Mevcut kayıt;
@@ -71,42 +76,88 @@ class BestModelRepository:
         }
         eligibility_status, eligibility_reason = evaluate_best_model_eligibility(eligibility_row)
 
-        with self.db._connect() as conn:
-            existing = conn.execute(
-                """
-                SELECT model_name, experiment_id, composite_score, eligibility_status
-                FROM best_models
-                WHERE stock_symbol = ?
-                """,
-                (stock_symbol,),
-            ).fetchone()
-            if not self._should_replace_existing_best(
-                existing,
-                new_score=float(composite_score or 0.0),
-                new_eligibility=eligibility_status,
-            ):
-                return
-            self.upsert_best_from_values(
-                conn=conn,
-                stock_symbol=stock_symbol,
-                model_name=model_name,
-                experiment_id=experiment_id,
-                composite_score=composite_score,
-                metrics=metrics,
-                model_path=model_path,
-                updated_at=trained_at,
-                target_mode=target_mode,
-                feature_mode=feature_mode,
-                scaling_mode=scaling_mode,
-                validation_mode=validation_mode,
-                dataset_hash=dataset_hash,
-                run_id=run_id,
-                selection_source=selection_source,
-                eligibility_status=eligibility_status,
-                eligibility_reason=eligibility_reason,
-                ensemble_metadata=ensemble_metadata,
-            )
-            self._print_best_update(stock_symbol, model_name, experiment_id, existing)
+        kwargs = dict(
+            stock_symbol=stock_symbol,
+            model_name=model_name,
+            experiment_id=experiment_id,
+            composite_score=composite_score,
+            metrics=metrics,
+            model_path=model_path,
+            trained_at=trained_at,
+            target_mode=target_mode,
+            feature_mode=feature_mode,
+            scaling_mode=scaling_mode,
+            validation_mode=validation_mode,
+            dataset_hash=dataset_hash,
+            run_id=run_id,
+            selection_source=selection_source,
+            eligibility_status=eligibility_status,
+            eligibility_reason=eligibility_reason,
+            ensemble_metadata=ensemble_metadata,
+        )
+        if conn is not None:
+            self._apply_best_update(conn, **kwargs)
+            return
+        with self.db._connect() as own_conn:
+            self._apply_best_update(own_conn, **kwargs)
+
+    def _apply_best_update(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        stock_symbol: str,
+        model_name: str,
+        experiment_id: int,
+        composite_score: float,
+        metrics: Dict[str, float],
+        model_path: str,
+        trained_at: str,
+        target_mode: str,
+        feature_mode: str,
+        scaling_mode: str,
+        validation_mode: str,
+        dataset_hash: str,
+        run_id: Optional[str],
+        selection_source: Optional[str],
+        eligibility_status: str,
+        eligibility_reason: str,
+        ensemble_metadata: Optional[Dict[str, Any]],
+    ) -> None:
+        existing = conn.execute(
+            """
+            SELECT model_name, experiment_id, composite_score, eligibility_status
+            FROM best_models
+            WHERE stock_symbol = ?
+            """,
+            (stock_symbol,),
+        ).fetchone()
+        if not self._should_replace_existing_best(
+            existing,
+            new_score=float(composite_score or 0.0),
+            new_eligibility=eligibility_status,
+        ):
+            return
+        self.upsert_best_from_values(
+            conn=conn,
+            stock_symbol=stock_symbol,
+            model_name=model_name,
+            experiment_id=experiment_id,
+            composite_score=composite_score,
+            metrics=metrics,
+            model_path=model_path,
+            updated_at=trained_at,
+            target_mode=target_mode,
+            feature_mode=feature_mode,
+            scaling_mode=scaling_mode,
+            validation_mode=validation_mode,
+            dataset_hash=dataset_hash,
+            run_id=run_id,
+            selection_source=selection_source,
+            eligibility_status=eligibility_status,
+            eligibility_reason=eligibility_reason,
+            ensemble_metadata=ensemble_metadata,
+        )
+        self._print_best_update(stock_symbol, model_name, experiment_id, existing)
 
     @staticmethod
     def _should_replace_existing_best(
@@ -281,7 +332,7 @@ class BestModelRepository:
                 _optional_float(metrics.get("Max_Drawdown")),
                 _optional_int(metrics.get("Trade_Count")),
                 _optional_text(metrics.get("Signal_Diagnosis")),
-                model_path, updated_at,
+                to_storable_path(model_path), updated_at,
                 eligibility_status, eligibility_reason, ensemble_metadata_json,
             ),
         )
@@ -293,7 +344,11 @@ class BestModelRepository:
                 "SELECT * FROM best_models WHERE stock_symbol = ?",
                 (stock_symbol,),
             ).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        result = dict(row)
+        result["model_path"] = resolve_model_path(result.get("model_path"))
+        return result
 
     def get_leaderboard(self, top_n: int = 20) -> List[Dict[str, Any]]:
         """best_models'i composite_score azalan sırada ilk `top_n` ile döner."""

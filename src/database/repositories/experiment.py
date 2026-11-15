@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from src.database import stock_model_db as schema
+from src.database.paths import resolve_model_path, to_storable_path
 from src.database.repositories.helpers import (
     _ensemble_metadata_for,
     _optional_float,
@@ -54,30 +55,34 @@ class ExperimentRepository:
         dataset_metadata = dataset_metadata or {}
         run_id = run_id or dataset_metadata.get("run_id")
         ensemble_metadata = _ensemble_metadata_for(model_name, metrics, dataset_metadata)
-        experiment_id = self._insert_experiment(
-            stock_symbol, model_name, metrics, model_path, features or [],
-            dataset_hash, validation_mode, dataset_metadata,
-            is_production_candidate, selection_source, run_id, composite, trained_at,
-            ensemble_metadata,
-        )
-        self.best_models.update_production_best_model(
-            stock_symbol=stock_symbol,
-            model_name=model_name,
-            experiment_id=experiment_id,
-            composite_score=composite,
-            metrics=metrics,
-            model_path=model_path,
-            trained_at=trained_at,
-            target_mode=dataset_metadata.get("target_mode", "price"),
-            feature_mode=dataset_metadata.get("feature_mode", "legacy_price_features"),
-            scaling_mode=dataset_metadata.get("scaling_mode", "minmax"),
-            validation_mode=validation_mode,
-            dataset_hash=dataset_hash,
-            is_production_candidate=bool(is_production_candidate),
-            selection_source=selection_source,
-            run_id=run_id,
-            ensemble_metadata=ensemble_metadata,
-        )
+        # Tek transaction: deney satırı + best_models güncellemesi birlikte commit
+        # olur; ortada hata varsa ikisi de geri alınır (kısmi deney satırı kalmaz).
+        with self.db._connect() as conn:
+            experiment_id = self._insert_experiment(
+                conn, stock_symbol, model_name, metrics, model_path, features or [],
+                dataset_hash, validation_mode, dataset_metadata,
+                is_production_candidate, selection_source, run_id, composite, trained_at,
+                ensemble_metadata,
+            )
+            self.best_models.update_production_best_model(
+                stock_symbol=stock_symbol,
+                model_name=model_name,
+                experiment_id=experiment_id,
+                composite_score=composite,
+                metrics=metrics,
+                model_path=model_path,
+                trained_at=trained_at,
+                target_mode=dataset_metadata.get("target_mode", "price"),
+                feature_mode=dataset_metadata.get("feature_mode", "legacy_price_features"),
+                scaling_mode=dataset_metadata.get("scaling_mode", "minmax"),
+                validation_mode=validation_mode,
+                dataset_hash=dataset_hash,
+                is_production_candidate=bool(is_production_candidate),
+                selection_source=selection_source,
+                run_id=run_id,
+                ensemble_metadata=ensemble_metadata,
+                conn=conn,
+            )
         print(
             f"  [DB] {stock_symbol} | {model_name:15s} -> "
             f"composite={composite:.2f}  "
@@ -88,6 +93,7 @@ class ExperimentRepository:
 
     def _insert_experiment(
         self,
+        conn: sqlite3.Connection,
         stock_symbol: str,
         model_name: str,
         metrics: Dict[str, float],
@@ -104,42 +110,41 @@ class ExperimentRepository:
         ensemble_metadata: Optional[Dict[str, Any]] = None,
     ) -> int:
         stability = self.db._optional_float(metrics.get("Stability_Score"))
-        with self.db._connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO experiments
-                    (stock_symbol, model_name, validation_mode, target_mode, feature_mode, scaling_mode,
-                     mae, rmse, mape, dir_acc, sharpe, hit_rate,
-                     rmse_vs_benchmark, net_return, buyhold_return, max_drawdown, trade_count, signal_diagnosis,
-                     composite_score, model_path, features, dataset_hash,
-                     is_production_candidate, selection_source, run_id, trained_at,
-                     stability_score, ensemble_metadata_json, dm_pvalue_vs_benchmark)
-                VALUES
-                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    stock_symbol, model_name, validation_mode,
-                    dataset_metadata.get("target_mode", "price"),
-                    dataset_metadata.get("feature_mode", "legacy_price_features"),
-                    dataset_metadata.get("scaling_mode", "minmax"),
-                    metrics.get("MAE"), metrics.get("RMSE"),
-                    metrics.get("MAPE"), metrics.get("Dir_Acc"),
-                    metrics.get("Sharpe"), metrics.get("Hit_Rate"),
-                    _optional_float(metrics.get("RMSE_vs_benchmark")),
-                    _optional_float(metrics.get("Net_Return")),
-                    _optional_float(metrics.get("BuyHold_Return")),
-                    _optional_float(metrics.get("Max_Drawdown")),
-                    _optional_int(metrics.get("Trade_Count")),
-                    _optional_text(metrics.get("Signal_Diagnosis")),
-                    composite, model_path, json.dumps(features, ensure_ascii=False),
-                    dataset_hash, int(bool(is_production_candidate)),
-                    selection_source, run_id, trained_at,
-                    stability,
-                    json.dumps(ensemble_metadata, ensure_ascii=False) if ensemble_metadata else None,
-                    _optional_float(metrics.get("DM_PValue_vs_benchmark")),
-                ),
-            )
-            return int(cursor.lastrowid)
+        cursor = conn.execute(
+            """
+            INSERT INTO experiments
+                (stock_symbol, model_name, validation_mode, target_mode, feature_mode, scaling_mode,
+                 mae, rmse, mape, dir_acc, sharpe, hit_rate,
+                 rmse_vs_benchmark, net_return, buyhold_return, max_drawdown, trade_count, signal_diagnosis,
+                 composite_score, model_path, features, dataset_hash,
+                 is_production_candidate, selection_source, run_id, trained_at,
+                 stability_score, ensemble_metadata_json, dm_pvalue_vs_benchmark)
+            VALUES
+                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                stock_symbol, model_name, validation_mode,
+                dataset_metadata.get("target_mode", "price"),
+                dataset_metadata.get("feature_mode", "legacy_price_features"),
+                dataset_metadata.get("scaling_mode", "minmax"),
+                metrics.get("MAE"), metrics.get("RMSE"),
+                metrics.get("MAPE"), metrics.get("Dir_Acc"),
+                metrics.get("Sharpe"), metrics.get("Hit_Rate"),
+                _optional_float(metrics.get("RMSE_vs_benchmark")),
+                _optional_float(metrics.get("Net_Return")),
+                _optional_float(metrics.get("BuyHold_Return")),
+                _optional_float(metrics.get("Max_Drawdown")),
+                _optional_int(metrics.get("Trade_Count")),
+                _optional_text(metrics.get("Signal_Diagnosis")),
+                composite, to_storable_path(model_path), json.dumps(features, ensure_ascii=False),
+                dataset_hash, int(bool(is_production_candidate)),
+                selection_source, run_id, trained_at,
+                stability,
+                json.dumps(ensemble_metadata, ensure_ascii=False) if ensemble_metadata else None,
+                _optional_float(metrics.get("DM_PValue_vs_benchmark")),
+            ),
+        )
+        return int(cursor.lastrowid)
 
     def get_experiments(
         self,
@@ -167,7 +172,10 @@ class ExperimentRepository:
                 """,
                 params,
             ).fetchall()
-        return [dict(row) for row in rows]
+        result = [dict(row) for row in rows]
+        for item in result:
+            item["model_path"] = resolve_model_path(item.get("model_path"))
+        return result
 
     def get_cross_run_leaderboard(
         self, stock_symbol: str, n_runs: int = 5

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 from src.database import stock_model_db as schema
+from src.database.paths import migrate_stored_path
 from src.database.repositories.best_model import BestModelRepository
 
 
@@ -42,6 +43,7 @@ class SchemaRepository:
             self._ensure_forecast_point_columns(conn)
             self._ensure_forecast_accuracy_columns(conn)
             self.migrate_legacy_production_candidates(conn)
+            self.migrate_model_paths(conn)
             self.refresh_best_models_from_production_experiments(conn)
 
     @staticmethod
@@ -114,6 +116,32 @@ class SchemaRepository:
         self.ensure_column(conn, "best_models", "max_drawdown", "REAL")
         self.ensure_column(conn, "best_models", "trade_count", "INTEGER")
         self.ensure_column(conn, "best_models", "signal_diagnosis", "TEXT")
+
+    def migrate_model_paths(self, conn: sqlite3.Connection) -> int:
+        """Mutlak `.../outputs/...` model yollarını `outputs/...` göreceliye yeniden yazar.
+
+        Başka makineden kalan (örn. ``D:/x/outputs/TUPRS/...``) yolları taşınabilir
+        yapar. Idempotent: göreceli/`outputs` segmenti olmayan yollara ve bu
+        makinede mevcut, proje DIŞI mutlak yollara dokunmaz.
+
+        Returns:
+            Güncellenen satır sayısı (experiments + best_models).
+        """
+        changed = 0
+        for table, key in (("experiments", "id"), ("best_models", "stock_symbol")):
+            rows = conn.execute(
+                f"SELECT {key} AS k, model_path FROM {table} "
+                "WHERE model_path IS NOT NULL AND LOWER(model_path) LIKE '%outputs%'"
+            ).fetchall()
+            for row in rows:
+                new_path = migrate_stored_path(row["model_path"])
+                if new_path != row["model_path"]:
+                    conn.execute(
+                        f"UPDATE {table} SET model_path = ? WHERE {key} = ?",
+                        (new_path, row["k"]),
+                    )
+                    changed += 1
+        return changed
 
     def migrate_legacy_production_candidates(self, conn: sqlite3.Connection) -> None:
         """Eski final_holdout deneylerini üretim-aday olarak geriye dönük işaretler.

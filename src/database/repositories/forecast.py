@@ -148,12 +148,10 @@ class ForecastRepository:
                 predicted_return_p10    = excluded.predicted_return_p10,
                 predicted_return_p50    = excluded.predicted_return_p50,
                 predicted_return_p90    = excluded.predicted_return_p90,
-                interval_method         = excluded.interval_method,
-                actual_close            = NULL,
-                actual_return           = NULL,
-                abs_error               = NULL,
-                direction_correct       = NULL,
-                resolved_at             = NULL
+                interval_method         = excluded.interval_method
+                -- actual_close / actual_return / abs_error / direction_correct /
+                -- resolved_at BİLEREK güncellenmez: yeniden kaydedilen forecast,
+                -- çözümlenmiş gerçekleşme verisini silmemeli.
             """,
             (
                 run_id,

@@ -18,7 +18,7 @@ import json
 import os
 import sqlite3
 
-from src.database.connection import ClosingConnection
+from src.database.connection import open_db
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -125,10 +125,8 @@ class PeerStore:
         self._init()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, factory=ClosingConnection)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys=ON")
-        return conn
+        # WAL (bir kez) + busy_timeout + foreign_keys: src.database.connection.open_db.
+        return open_db(self.db_path)
 
     def _init(self) -> None:
         with self._connect() as conn:
@@ -143,28 +141,44 @@ class PeerStore:
                 conn.execute(f"ALTER TABLE peer_scores ADD COLUMN {col} {sqltype}")
 
     # ------------------------------------------------------------------ write
-    def insert_run(self, meta: GlobalRunMeta, created_at: Optional[str] = None) -> int:
+    def insert_run(
+        self,
+        meta: GlobalRunMeta,
+        created_at: Optional[str] = None,
+        *,
+        conn: Optional[sqlite3.Connection] = None,
+    ) -> int:
+        """Run başlığını yazar. `conn` verilirse çağıranın transaction'ına katılır."""
+        if conn is None:
+            with self._connect() as own:
+                return self.insert_run(meta, created_at, conn=own)
         import datetime as _dt
 
         created_at = created_at or _dt.datetime.now().isoformat(timespec="seconds")
-        with self._connect() as conn:
-            cur = conn.execute(
-                """INSERT INTO global_model_runs
-                   (created_at, as_of_date, model_name, data_snapshot_hash,
-                    n_symbols, n_rows, horizon, ic_mean, icir, pct_ic_positive, config_json)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                (created_at, meta.as_of_date, meta.model_name, meta.data_snapshot_hash,
-                 int(meta.n_symbols), int(meta.n_rows), int(meta.horizon),
-                 _f(meta.ic_mean), _f(meta.icir), _f(meta.pct_ic_positive),
-                 json.dumps(meta.config or {}, ensure_ascii=False)),
-            )
-            return int(cur.lastrowid)
+        cur = conn.execute(
+            """INSERT INTO global_model_runs
+               (created_at, as_of_date, model_name, data_snapshot_hash,
+                n_symbols, n_rows, horizon, ic_mean, icir, pct_ic_positive, config_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (created_at, meta.as_of_date, meta.model_name, meta.data_snapshot_hash,
+             int(meta.n_symbols), int(meta.n_rows), int(meta.horizon),
+             _f(meta.ic_mean), _f(meta.icir), _f(meta.pct_ic_positive),
+             json.dumps(meta.config or {}, ensure_ascii=False)),
+        )
+        return int(cur.lastrowid)
 
-    def insert_peer_scores(self, run_id: int, scored: pd.DataFrame) -> int:
+    def insert_peer_scores(
+        self,
+        run_id: int,
+        scored: pd.DataFrame,
+        *,
+        conn: Optional[sqlite3.Connection] = None,
+    ) -> int:
         """scored: peer_scoring + segment + confidence birlesmis DataFrame.
 
         Eksik kolonlar None ile doldurulur; listeler (reasons/warnings) JSON'a
-        cevrilir. Returns yazilan satir sayisi."""
+        cevrilir. `conn` verilirse çağıranın transaction'ına katılır.
+        Returns yazilan satir sayisi."""
         df = scored.copy()
         for col in _PEER_COLS:
             if col not in df.columns:
@@ -176,14 +190,31 @@ class PeerStore:
             (run_id, *(_cell(r[c]) for c in _PEER_COLS))
             for _, r in df.iterrows()
         ]
-        with self._connect() as conn:
-            conn.executemany(
-                f"""INSERT OR REPLACE INTO peer_scores
-                    (run_id, {", ".join(_PEER_COLS)})
-                    VALUES ({", ".join("?" * (len(_PEER_COLS) + 1))})""",
-                rows,
-            )
+        sql = f"""INSERT OR REPLACE INTO peer_scores
+                  (run_id, {", ".join(_PEER_COLS)})
+                  VALUES ({", ".join("?" * (len(_PEER_COLS) + 1))})"""
+        if conn is None:
+            with self._connect() as own:
+                own.executemany(sql, rows)
+        else:
+            conn.executemany(sql, rows)
         return len(rows)
+
+    def write_run(
+        self,
+        meta: GlobalRunMeta,
+        scored: pd.DataFrame,
+        created_at: Optional[str] = None,
+    ) -> tuple[int, int]:
+        """Run başlığı + peer skorlarını TEK transaction'da yazar (atomik).
+
+        Skor yazımı başarısız olursa run başlığı da geri alınır (yetim run kalmaz).
+        Returns (run_id, yazılan_satır).
+        """
+        with self._connect() as conn:
+            run_id = self.insert_run(meta, created_at, conn=conn)
+            n = self.insert_peer_scores(run_id, scored, conn=conn)
+        return run_id, n
 
     # ------------------------------------------------------------------- read
     def latest_run(self) -> Optional[dict]:

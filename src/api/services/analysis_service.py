@@ -26,6 +26,7 @@ from src.api.schemas.analysis import (
 from src.api.services.analysis_freshness import compute_freshness
 from src.api.services.data_quality_monitor import compute_psi_30d
 from src.api.services.data_refresh_service import DataRefreshService, read_latest_market_row
+from src.database.paths import resolve_model_path
 from src.pipeline.confidence_calculator import compute_confidence
 from src.xai.product_summary import build_xai_product_summary
 
@@ -83,9 +84,10 @@ class AnalysisService:
             self._refresh_wait_timeout_seconds = float(refresh_wait_timeout_seconds)
 
     def _get_db(self):
-        from src.database.stock_model_db import StockModelDB
+        from src.database.stock_model_db import get_db
 
-        return StockModelDB(self._db_path)
+        # Önbellekli: istek başına şema init / best_models rebuild yapılmaz.
+        return get_db(self._db_path)
 
     def _try_refresh_and_rebuild(self, *, db, symbol, best, generated_at, reason):
         """Refresh job kuyruğa alır; tamamlandıysa state'i yeniden yükleyip dolu
@@ -322,7 +324,9 @@ def _build_forecast_response(
         model_name=model_name,
         outputs_base=outputs_base,
         run_id=best.get("run_id"),
-        model_path=best.get("model_path"),
+        model_path=resolve_model_path(
+            best.get("model_path"), project_root=project_root, outputs_root=outputs_base
+        ) or None,
     )
     xai_block = _build_xai_block(xai_summary)
     status = _resolve_status(
