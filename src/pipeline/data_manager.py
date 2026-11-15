@@ -533,21 +533,9 @@ class DataManager:
         self._prepare_data_services()
         return self.data_ingestion_service.apply_training_window(raw_df)
 
-    def _format_window_candidates(self) -> list[str]:
-        self._prepare_data_services()
-        return self.data_ingestion_service.format_window_candidates()
-
     def _check_survivorship_bias(self) -> dict:
         self._prepare_data_services()
         return self.data_quality_service.check_survivorship_bias()
-
-    def _fetch_macro(self, raw_df: pd.DataFrame) -> pd.DataFrame:
-        self._prepare_data_services()
-        return self.data_ingestion_service.fetch_macro(raw_df)
-
-    def _refresh_dataset_metadata(self) -> None:
-        self._prepare_data_services()
-        return self.data_ingestion_service.refresh_dataset_metadata()
 
     def build_run_metadata(
         self, validation_mode: str, model_config: dict | None = None
@@ -605,14 +593,6 @@ class DataManager:
         }
 
     # ── Tensör Hazırlama ──────────────────────────────────────────────────────
-    def _build_target_series(self, close_values: np.ndarray) -> np.ndarray:
-        self._prepare_data_services()
-        return self.tensor_preparation_service.build_target_series(close_values)
-
-    @staticmethod
-    def _scale_data_compat(*args, **kwargs):
-        return TensorPreparationService.scale_data_compat(*args, **kwargs)
-
     def prepare_tensors(
         self,
         train_df: pd.DataFrame,

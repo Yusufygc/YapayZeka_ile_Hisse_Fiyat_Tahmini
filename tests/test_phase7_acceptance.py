@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 
-import json
 import os
 import shutil
 import unittest
@@ -13,8 +12,6 @@ from src.backtesting.engine import run_backtest
 from src.backtesting.metrics import summarize_backtest
 from src.backtesting.reporting import save_backtest_report
 from src.evaluation.financial_metrics import compute_financial_metrics
-from src.evaluation.evaluator import save_metrics_report
-from src.model_registry.model_registry import ModelRegistry
 from src.utils.data_splitter import TimeSeriesSplitter
 
 
@@ -181,32 +178,6 @@ class Phase7AcceptanceTests(unittest.TestCase):
         self.assertIn("Leakage Guard", md)
         self.assertIn("Transaction_Costs", md)
 
-    def test_registry_preserves_dataset_hash_and_metadata_per_protocol(self):
-        registry = ModelRegistry(os.path.join(self.tmp, "registry"))
-        registry.register(
-            "Model",
-            "v1",
-            ["f1"],
-            {"RMSE": 1.0},
-            "model_a.pkl",
-            dataset_hash="hash_a",
-            dataset_metadata={"validation_config": {"mode": "single"}, "target_mode": "log_return"},
-        )
-        registry.register(
-            "Model",
-            "v1",
-            ["f1"],
-            {"RMSE": 1.0},
-            "model_b.pkl",
-            dataset_hash="hash_b",
-            dataset_metadata={"validation_config": {"mode": "walk_forward"}, "target_mode": "log_return"},
-        )
-
-        with open(os.path.join(self.tmp, "registry", "registry.json"), "r", encoding="utf-8") as handle:
-            entries = json.load(handle)
-        self.assertEqual({entry["dataset_hash"] for entry in entries}, {"hash_a", "hash_b"})
-        self.assertNotEqual(entries[0]["dataset_metadata"]["validation_config"], entries[1]["dataset_metadata"]["validation_config"])
-
     def test_regression_zero_return_reconstructs_prev_close_and_metrics_are_stable(self):
         try:
             from src.data.preprocessor import reconstruct_prices_from_logret
@@ -245,78 +216,6 @@ class Phase7AcceptanceTests(unittest.TestCase):
         metadata, _ = DataManager.build_run_metadata(dm, "walk_forward", model_config={"model": "x"})
         self.assertFalse(metadata["nested_model_selection"]["final_holdout_used_for_selection"])
         self.assertEqual(metadata["evaluation_set"]["rows"], 3)
-
-    def test_metrics_report_marks_research_score_and_blocks_ineligible_leader(self):
-        metrics = {
-            "Naive Zero Return": {
-                "RMSE": 1.0,
-                "MAE": 1.0,
-                "MAPE": 0.0,
-                "Return_RMSE": 0.01,
-                "Return_MAE": 0.01,
-                "Dir_Acc": 50.0,
-                "Hit_Rate": 50.0,
-                "Neutral_Rate": 0.0,
-                "Sharpe": 0.0,
-                "BuyHold_Sharpe": 0.0,
-                "Benchmark_Model": "Naive Zero Return",
-                "Benchmark_Source": "best_baseline_by_rmse",
-                "RMSE_vs_benchmark": 1.0,
-                "Mandatory_Zero_Return_RMSE": 1.0,
-                "RMSE_vs_zero_return": 1.0,
-                "DirAcc_vs_benchmark": 0.0,
-                "Sharpe_excess_vs_buy_hold": 0.0,
-                "Beats_Benchmark_RMSE": True,
-                "Beats_Zero_Return_RMSE": True,
-                "Beats_BuyHold_Sharpe": True,
-                "Eligible_For_Leader": True,
-                "Composite_Score": 40.0,
-                "Target_Semantics": "X[t] -> y[t+1]",
-                "Execution_Lag": "next_bar",
-                "Macro_Release_Lag": "{}",
-                "Transaction_Costs": "commission_bps=10; slippage_bps=5",
-                "Validation_Protocol": "{'wf_n_splits': 12}",
-            },
-            "Overfit": {
-                "RMSE": 1.2,
-                "MAE": 0.5,
-                "MAPE": 0.0,
-                "Return_RMSE": 0.01,
-                "Return_MAE": 0.01,
-                "Dir_Acc": 90.0,
-                "Hit_Rate": 90.0,
-                "Neutral_Rate": 0.0,
-                "Sharpe": 3.0,
-                "BuyHold_Sharpe": 0.0,
-                "Benchmark_Model": "Naive Zero Return",
-                "Benchmark_Source": "best_baseline_by_rmse",
-                "RMSE_vs_benchmark": 1.2,
-                "Mandatory_Zero_Return_RMSE": 1.0,
-                "RMSE_vs_zero_return": 1.2,
-                "DirAcc_vs_benchmark": 40.0,
-                "Sharpe_excess_vs_buy_hold": 3.0,
-                "Beats_Benchmark_RMSE": False,
-                "Beats_Zero_Return_RMSE": False,
-                "Beats_BuyHold_Sharpe": True,
-                "Eligible_For_Leader": False,
-                "Composite_Score": 99.0,
-                "Target_Semantics": "X[t] -> y[t+1]",
-                "Execution_Lag": "next_bar",
-                "Macro_Release_Lag": "{}",
-                "Transaction_Costs": "commission_bps=10; slippage_bps=5",
-                "Validation_Protocol": "{'wf_n_splits': 12}",
-            },
-        }
-        df = save_metrics_report(metrics, os.path.join(self.tmp, "metrics_report_latest.csv"))
-        self.assertEqual(df.index[0], "Naive Zero Return")
-        self.assertEqual(df.loc["Naive Zero Return", "Score_Type"], "research_score")
-
-        md_path = os.path.join(self.tmp, "md", "metrics_report_latest.md")
-        with open(md_path, "r", encoding="utf-8") as handle:
-            md = handle.read()
-        self.assertIn("Validation_Protocol", md)
-        self.assertIn("Target_Semantics", md)
-        self.assertIn("Transaction_Costs", md)
 
     def test_walk_forward_acceptance_creates_at_least_twelve_folds(self):
         rows = 900

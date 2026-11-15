@@ -229,10 +229,6 @@ class _EvaluationWorkflowBase:
         return self.ctx.models_dir
 
     @property
-    def tracker(self):
-        return self.ctx.tracker
-
-    @property
     def feature_names(self) -> list:
         return self.ctx.feature_names
 
@@ -516,15 +512,6 @@ class SingleSplitEvaluationWorkflow(_EvaluationWorkflowBase):
         self.latest_model_metrics["latest"] = metrics
 
         for name, model_metrics in metrics.items():
-            self.tracker.log_run(
-                name,
-                {"validation": "single"},
-                model_metrics,
-                self.feature_names,
-                self.dataset_hash,
-                self.dataset_metadata,
-            )
-
             model_ext = ".keras" if name in _KERAS_MODELS else ".pkl"
             model_filename = f"{name.replace(' ', '_').lower()}_model{model_ext}"
             model_path = os.path.join(self.models_dir, model_filename)
@@ -1021,15 +1008,6 @@ class FinalHoldoutEvaluationWorkflow(_EvaluationWorkflowBase):
         # ── Final holdout grafikleri ─────────────────────────────────
         _merge_backtest_metrics(metrics, backtest_results)
         self.latest_model_metrics["final_holdout"] = metrics
-
-        self.tracker.log_run(
-            model_name,
-            {"validation": "final_holdout", "selected_by": "walk_forward"},
-            metrics[model_name],
-            self.feature_names,
-            self.dataset_hash,
-            final_metadata,
-        )
 
         if self.stock_db is not None:
             self.stock_db.log_experiment(

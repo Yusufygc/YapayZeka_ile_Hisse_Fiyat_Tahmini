@@ -9,7 +9,6 @@ from typing import Any, Callable
 
 import numpy as np
 
-from src.experiments.experiment_tracker import ExperimentTracker
 from src.pipeline import model_factory
 from src.pipeline.model_scope import normalize_candidate_models
 from src.pipeline.training_workflows import (
@@ -41,7 +40,7 @@ RandomForestModel = model_factory.RandomForestModel
 @dataclass
 class TrainingContext:
     stock_symbol: str = ""
-    tracker: ExperimentTracker | None = None
+    run_dir: str | None = None
     feature_names: list = field(default_factory=list)
     selected_models: list = field(default_factory=list)
     candidate_models: set = field(default_factory=set)
@@ -88,19 +87,19 @@ class ModelTrainer:
     def __init__(
         self,
         stock_symbol: str,
-        tracker: ExperimentTracker,
         feature_names: list,
         selected_models: list = None,
         dataset_hash: str = "N/A",
         dataset_metadata: dict | None = None,
         model_config: dict | None = None,
+        run_dir: str | None = None,
     ):
         dataset_metadata = dataset_metadata or {}
         model_config = model_config or dataset_metadata.get("model_config", {})
         selected_models = normalize_candidate_models(selected_models)
         self.training_context = TrainingContext(
             stock_symbol=stock_symbol,
-            tracker=tracker,
+            run_dir=run_dir,
             feature_names=feature_names,
             selected_models=selected_models,
             candidate_models=set(selected_models),
@@ -173,12 +172,12 @@ class ModelTrainer:
         self._ensure_training_context().stock_symbol = value
 
     @property
-    def tracker(self) -> ExperimentTracker | None:
-        return self._ensure_training_context().tracker
+    def run_dir(self) -> str | None:
+        return self._ensure_training_context().run_dir
 
-    @tracker.setter
-    def tracker(self, value: ExperimentTracker | None) -> None:
-        self._ensure_training_context().tracker = value
+    @run_dir.setter
+    def run_dir(self, value: str | None) -> None:
+        self._ensure_training_context().run_dir = value
 
     @property
     def feature_names(self) -> list:
@@ -433,8 +432,9 @@ class ModelTrainer:
 
     def _dump_feature_importances(self, validators: dict) -> None:
         import csv as _csv
-        run_dir = os.path.dirname(self.tracker.log_dir)
-        xai_dir = os.path.join(run_dir, "xai")
+        if not self.run_dir:
+            return
+        xai_dir = os.path.join(self.run_dir, "xai")
         os.makedirs(xai_dir, exist_ok=True)
         for model_name, validator in validators.items():
             fi = getattr(validator, "mean_feature_importance", None)

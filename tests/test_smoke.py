@@ -60,7 +60,6 @@ class TestEvaluationManagerSmoke(unittest.TestCase):
     def _make_em(self, tmpdir, flag=True):
         from src.pipeline.evaluation_manager import EvaluationManager
         from src.pipeline.config import ExecutionConfig, ModelConfig
-        from src.experiments.experiment_tracker import ExperimentTracker
         
         models_dir = os.path.join(tmpdir, "models")
         os.makedirs(models_dir, exist_ok=True)
@@ -68,7 +67,6 @@ class TestEvaluationManagerSmoke(unittest.TestCase):
             stock_symbol="TEST",
             outputs_dir=tmpdir,
             models_dir=models_dir,
-            tracker=ExperimentTracker(os.path.join(tmpdir, "exp")),
             feature_names=["f1", "f2", "f3"],
             dataset_hash="abc123",
             dataset_metadata={"target_mode": "log_return", "signal_threshold_config": {}},
@@ -99,11 +97,9 @@ class TestModelTrainerSmoke(unittest.TestCase):
 
     def test_model_trainer_instantiates(self):
         from src.pipeline.model_trainer import ModelTrainer
-        from src.experiments.experiment_tracker import ExperimentTracker
         with tempfile.TemporaryDirectory() as tmpdir:
             trainer = ModelTrainer(
                 stock_symbol="TEST",
-                tracker=ExperimentTracker(tmpdir),
                 feature_names=["f1", "f2"],
                 dataset_hash="hash123",
                 dataset_metadata={"target_mode": "log_return"},
@@ -115,11 +111,9 @@ class TestModelTrainerSmoke(unittest.TestCase):
     def test_model_trainer_selected_models_defaults(self):
         """selected_models=None oldugunda _ALL_MODELS setine dusmeli."""
         from src.pipeline.model_trainer import ModelTrainer, _ALL_MODELS
-        from src.experiments.experiment_tracker import ExperimentTracker
         with tempfile.TemporaryDirectory() as tmpdir:
             trainer = ModelTrainer(
                 stock_symbol="X",
-                tracker=ExperimentTracker(tmpdir),
                 feature_names=[],
             )
             self.assertEqual(trainer.selected_models, set(_ALL_MODELS))
@@ -127,7 +121,6 @@ class TestModelTrainerSmoke(unittest.TestCase):
     def test_tree_hpo_storage_is_available_for_each_selected_tree_model(self):
         """XGBoost olmadan Random Forest secilirse Optuna storage tanimsiz kalmamali."""
         from src.pipeline.model_trainer import ModelTrainer
-        from src.experiments.experiment_tracker import ExperimentTracker
 
         tensors = {
             "X_train_s": np.ones((12, 2), dtype=float),
@@ -152,7 +145,6 @@ class TestModelTrainerSmoke(unittest.TestCase):
                  patch("src.pipeline.model_trainer.RandomForestModel", FakeTunedModel):
                 trainer = ModelTrainer(
                     stock_symbol="TEST",
-                    tracker=ExperimentTracker(tmpdir),
                     feature_names=["f1", "f2"],
                     selected_models=selected,
                     dataset_metadata={"target_mode": "log_return"},

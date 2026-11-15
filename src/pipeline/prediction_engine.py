@@ -17,8 +17,8 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 from src.models.ensemble import EnsembleModel
-from src.evaluation.evaluator import compute_metrics, plot_comparison
-from src.utils.reporting_utils import route_output_path
+from src.evaluation.evaluator import compute_metrics
+from src.pipeline.model_scope import DATE_AWARE_MODELS as _DATE_AWARE_MODELS
 
 try:
     from src.data.preprocessor import reconstruct_prices_from_logret, reconstruct_prices_from_return
@@ -41,7 +41,6 @@ logger = logging.getLogger(__name__)
 
 _SEQ_MODELS = {"LSTM", "LSTM Lite", "AttentionLSTM", "AttentionLSTM v2", "DLinear", "NLinear"}
 _TREE_MODELS = {"XGBoost", "Random Forest", "Ridge Return", "ElasticNet Return", "LightGBM Return"}
-_DATE_AWARE_MODELS = {"Prophet", "Prophet-ML/DL Hybrid"}
 
 
 class _PredictionEngineMixin:
@@ -499,52 +498,6 @@ class _PredictionEngineMixin:
         print(
             "  [OK] Walk-forward ensemble tahminleri eklendi: Equal, Inverse RMSE, Sharpe-Weighted, Risk-Parity, Hierarchical, Meta-Stacker, Cash-Gated."
         )
-
-    # ------------------------------------------------------------------ #
-    #  Ensemble directional agreement (Adim 2.2)                          #
-    # ------------------------------------------------------------------ #
-
-    @staticmethod
-    def compute_ensemble_direction_agreement(
-        component_predictions: Dict[str, np.ndarray],
-        main_model_name: str,
-    ) -> Optional[float]:
-        main_preds = component_predictions.get(main_model_name)
-        if main_preds is None or len(main_preds) == 0:
-            return None
-        main_direction = float(np.sign(main_preds[-1]))
-        if main_direction == 0:
-            return None
-        others = [
-            v
-            for k, v in component_predictions.items()
-            if k != main_model_name and not k.startswith("Ensemble ") and len(v) > 0
-        ]
-        if not others:
-            return None
-        agreements = [float(np.sign(v[-1])) == main_direction for v in others]
-        return float(sum(agreements)) / len(agreements)
-
-    # ------------------------------------------------------------------ #
-    #  Plot helper                                                         #
-    # ------------------------------------------------------------------ #
-
-    def _save_selected_models_plot(
-        self,
-        y_true: np.ndarray,
-        predictions: Dict[str, np.ndarray],
-        save_path: str,
-        title: str,
-    ) -> None:
-        if not self.ctx.selected_models:
-            return
-        selected_predictions = {
-            name: preds for name, preds in predictions.items() if name in self.ctx.selected_models
-        }
-        if not selected_predictions:
-            return
-        plot_comparison(y_true, selected_predictions, save_path=save_path, title=title)
-        print(f"[OK] Secilen modeller grafigi kaydedildi -> {route_output_path(save_path)}")
 
     # ------------------------------------------------------------------ #
     #  Single model prediction                                            #

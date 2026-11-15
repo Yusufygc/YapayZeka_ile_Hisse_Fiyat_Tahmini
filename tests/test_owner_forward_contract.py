@@ -29,7 +29,6 @@ import pytest
 
 from src.pipeline.config import ExecutionConfig, ModelConfig
 from src.pipeline.evaluation_manager import EvaluationManager
-from src.experiments.experiment_tracker import ExperimentTracker
 
 
 def _make_manager(tmpdir: str, *, target_mode: str = "log_return") -> EvaluationManager:
@@ -39,7 +38,6 @@ def _make_manager(tmpdir: str, *, target_mode: str = "log_return") -> Evaluation
         stock_symbol="TEST",
         outputs_dir=tmpdir,
         models_dir=models_dir,
-        tracker=ExperimentTracker(os.path.join(tmpdir, "exp")),
         feature_names=["f1", "f2", "f3"],
         dataset_hash="abc123",
         dataset_metadata={"target_mode": target_mode, "signal_threshold_config": {}},

@@ -35,8 +35,10 @@ _CANONICAL_ORDER: tuple[str, ...] = (
     "LSTM",
     "LSTM Lite",
     "AttentionLSTM v2",
-    "Prophet-ML/DL Hybrid",
 )
+
+# Prophet gibi `dates_test` / son gozlem tarihi bekleyen (tarih-farkindali) modeller.
+DATE_AWARE_MODELS: frozenset[str] = frozenset({"Prophet"})
 
 
 def _sort_by_canonical(names: Iterable[str]) -> tuple[str, ...]:

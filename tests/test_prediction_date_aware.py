@@ -45,34 +45,34 @@ def _tensors():
     }
 
 
-def test_prophet_hybrid_single_model_prediction_receives_dates_test():
+def test_prophet_single_model_prediction_receives_dates_test():
     ctx, state = _prediction_ctx_state()
     service = PredictionService(ctx, state)
     model = _DateAwareModel()
 
-    service._predict_single_model("Prophet-ML/DL Hybrid", model, _tensors())
+    service._predict_single_model("Prophet", model, _tensors())
 
     assert model.seen_dates == list(_tensors()["dates_test"])
 
 
-def test_prophet_hybrid_batch_prediction_receives_dates_test():
+def test_prophet_batch_prediction_receives_dates_test():
     ctx, state = _prediction_ctx_state()
     service = PredictionService(ctx, state)
     model = _DateAwareModel()
 
-    service.generate_predictions({"Prophet-ML/DL Hybrid": model}, _tensors())
+    service.generate_predictions({"Prophet": model}, _tensors())
 
     assert model.seen_dates == list(_tensors()["dates_test"])
-    assert "Prophet-ML/DL Hybrid" in state.predictions
+    assert "Prophet" in state.predictions
 
 
-def test_latest_target_prediction_uses_date_aware_path_for_prophet_hybrid():
+def test_latest_target_prediction_uses_date_aware_path_for_prophet():
     workflow = LatestTargetPredictionWorkflow(SimpleNamespace())
     model = _DateAwareModel()
     last_date = pd.Timestamp("2026-05-22")
 
     prediction = workflow.predict(
-        "Prophet-ML/DL Hybrid",
+        "Prophet",
         model,
         {"latest_X": np.ones((1, 2)), "last_observed_date": last_date},
     )

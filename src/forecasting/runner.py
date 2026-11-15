@@ -9,15 +9,13 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import numpy as np
-import pandas as pd
 
 from src.database.stock_model_db import StockModelDB
 from src.forecasting.bist_calendar import ensure_bist_calendar
 from src.forecasting.bist_rules import BistMarketRules
-from src.forecasting.persistence import ForecastPersistence
 from src.forecasting.workflows import (
     BestModelResolver,
     ForecastContext,
@@ -28,7 +26,6 @@ from src.forecasting.workflows import (
     ProductionTrainingWorkflow,
 )
 from src.pipeline.config import ModelConfig
-from src.pipeline.data_manager import DataManager
 
 
 @dataclass
@@ -64,7 +61,6 @@ class ForecastRunner:
             resolved_calendar_path
         )
         self.model_config = model_config or ModelConfig()
-        self.persistence = ForecastPersistence(self.db)
         self._init_workflows()
 
     def _init_workflows(self) -> None:
@@ -76,7 +72,6 @@ class ForecastRunner:
             db=self.db,
             rules=self.rules,
             model_config=self.model_config,
-            persistence=self.persistence,
             make_model_instance=self._make_model_instance,
             make_prophet=self._make_prophet,
             target_to_price=ForecastRunner._target_to_price,
@@ -131,44 +126,6 @@ class ForecastRunner:
             auto_update_interactive=auto_update_interactive,
         )
 
-    def _train_production_model(self, model_name: str, data_manager: DataManager) -> tuple[Any, Dict[str, Any]]:
-        self._ensure_workflows()
-        return self.production_training_workflow.train(model_name, data_manager)
-
-    def _predict_latest_target(self, model_name: str, model: Any, context: Dict[str, Any]) -> float:
-        self._ensure_workflows()
-        return self.latest_target_prediction_workflow.predict(model_name, model, context)
-
-    def _roll_forward_points(
-        self,
-        *,
-        predicted_target: float,
-        horizon_days: int,
-        last_close: float,
-        last_observed_date: pd.Timestamp,
-        target_mode: str,
-    ) -> list[dict[str, Any]]:
-        self._ensure_workflows()
-        return self.forecast_point_generator.roll_forward(
-            predicted_target=predicted_target,
-            horizon_days=horizon_days,
-            last_close=last_close,
-            last_observed_date=last_observed_date,
-            target_mode=target_mode,
-        )
-
-    @staticmethod
-    def _make_target(close: np.ndarray, target_mode: str) -> np.ndarray:
-        prev = close[:-1]
-        nxt = close[1:]
-        if target_mode == "log_return":
-            return np.log(nxt / prev)
-        if target_mode == "return":
-            return (nxt / prev) - 1.0
-        if target_mode == "price":
-            return nxt
-        raise ValueError(f"Desteklenmeyen target_mode: {target_mode}")
-
     @staticmethod
     def _target_to_price(target: float, previous_close: float, target_mode: str) -> float:
         if target_mode == "log_return":
@@ -190,10 +147,6 @@ class ForecastRunner:
             regressor_names=cfg.get("regressor_names"),
             feature_names=feature_names,
         )
-
-    def _best_trainable_experiment(self, symbol: str) -> Optional[Dict[str, Any]]:
-        self._ensure_workflows()
-        return self.model_resolver.best_trainable_experiment(symbol)
 
     def _make_model_instance(self, model_name: str, *, stage: str = "single"):
         if model_name == "Naive Last Value":

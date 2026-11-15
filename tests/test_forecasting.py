@@ -167,7 +167,7 @@ def test_forecast_runner_replacement_excludes_baselines():
     )
     runner = ForecastRunner(project_root=project_root, db_path=db_path)
 
-    replacement = runner._best_trainable_experiment("TEST")
+    replacement = runner.model_resolver.best_trainable_experiment("TEST")
 
     assert replacement is not None
     assert replacement["model_name"] == "Ridge Return"
@@ -250,15 +250,15 @@ def test_forecast_runner_auto_enables_macro_when_artifact_requires_macro():
                 "price_tick": 0.05,
             }]
 
-    class FakePersistence:
-        def save_run(self, **kwargs):
+    class FakeDb:
+        def log_forecast_run(self, **kwargs):
             return 123
 
     runner.context.model_resolver = FakeResolver()
     runner.context.data_preparation_service = FakeDataPreparation()
     runner.context.production_training_workflow = FakeTraining()
     runner.context.forecast_point_generator = FakePointGenerator()
-    runner.context.persistence = FakePersistence()
+    runner.context.db = FakeDb()
 
     result = runner.run_symbol(
         symbol="TEST",

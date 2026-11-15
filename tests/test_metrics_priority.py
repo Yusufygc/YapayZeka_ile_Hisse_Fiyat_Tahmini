@@ -2,11 +2,6 @@
 """
 Sprint 1 (2026-05-25) Plan A1.2 + A1.4 testleri.
 
-A1.2: METRICS_REPORT_COLUMNS sirasi advisory-oriented:
-  - Dir_Acc/Hit_Rate Composite_Score'dan once gelir
-  - Net_Return / BuyHold_Return en dipte (yan referans olarak)
-  - Sharpe-tipi metric'ler ortada, RMSE_vs_benchmark Composite'in hemen yaninda
-
 A1.4: compute_composite_score formulu Dir_Acc + Hit_Rate'i one cikarir.
   - Yuksek Dir_Acc + Hit_Rate -> daha yuksek composite
   - Sharpe NaN ise crash etmez, notr puan alir
@@ -17,40 +12,7 @@ from __future__ import annotations
 import math
 import pytest
 
-from src.evaluation.evaluator import METRICS_REPORT_COLUMNS
 from src.database.stock_model_db import compute_composite_score
-
-
-def test_dir_acc_appears_before_composite_score():
-    """A1.2: Dir_Acc, advisory icin one cikar -> Composite_Score'dan once."""
-    cols = METRICS_REPORT_COLUMNS
-    assert cols.index("Dir_Acc") < cols.index("Composite_Score")
-    assert cols.index("Hit_Rate") < cols.index("Composite_Score")
-
-
-def test_buy_hold_return_after_composite():
-    """A1.2: BuyHold_Return Composite_Score'dan SONRA (dipnot)."""
-    cols = METRICS_REPORT_COLUMNS
-    # BuyHold_Return + Net_Return dipnota tasindi.
-    assert "BuyHold_Return" in cols
-    assert "Net_Return" in cols
-    assert cols.index("BuyHold_Return") > cols.index("Composite_Score")
-    assert cols.index("Net_Return") > cols.index("Composite_Score")
-
-
-def test_risk_free_warning_columns_present():
-    """A1.1 + A1.2: Risk_Free_Unavailable + Sharpe_Warning kolonlari raporda."""
-    assert "Risk_Free_Unavailable" in METRICS_REPORT_COLUMNS
-    assert "Sharpe_Warning" in METRICS_REPORT_COLUMNS
-
-
-def test_calmar_and_deflated_sharpe_present_in_report_order():
-    """A1.2: Calmar + Deflated_Sharpe Sharpe'dan once gosterilir."""
-    cols = METRICS_REPORT_COLUMNS
-    assert "Calmar" in cols
-    assert "Deflated_Sharpe" in cols
-    assert cols.index("Calmar") < cols.index("Sharpe")
-    assert cols.index("Deflated_Sharpe") < cols.index("Sharpe")
 
 
 def test_composite_score_rewards_higher_dir_acc():

@@ -214,10 +214,6 @@ REQUIRED_SCHEMA_TABLES = (
 )
 
 
-def _compute_composite_score(metrics: Dict[str, float]) -> float:
-    return compute_composite_score(metrics)
-
-
 class StockModelDB:
     """
     SQLite tabanlı hisse-model kayıt yöneticisi.
@@ -273,12 +269,6 @@ class StockModelDB:
         self._ensure_repositories()
         return self.schema_repository.initialize()
 
-    @staticmethod
-    def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
-        from src.database.repositories import SchemaRepository
-
-        return SchemaRepository.ensure_column(conn, table, column, ddl)
-
     def log_experiment(
         self,
         stock_symbol: str,
@@ -315,125 +305,6 @@ class StockModelDB:
             selection_source=selection_source,
             run_id=run_id,
         )
-
-    def _update_production_best_model(
-        self,
-        *,
-        stock_symbol: str,
-        model_name: str,
-        experiment_id: int,
-        composite_score: float,
-        metrics: Dict[str, float],
-        model_path: str,
-        trained_at: str,
-        target_mode: str,
-        feature_mode: str,
-        scaling_mode: str,
-        validation_mode: str,
-        dataset_hash: str,
-        is_production_candidate: bool,
-        selection_source: Optional[str],
-        run_id: Optional[str],
-        ensemble_metadata: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        self._ensure_repositories()
-        return self.best_model_repository.update_production_best_model(
-            stock_symbol=stock_symbol,
-            model_name=model_name,
-            experiment_id=experiment_id,
-            composite_score=composite_score,
-            metrics=metrics,
-            model_path=model_path,
-            trained_at=trained_at,
-            target_mode=target_mode,
-            feature_mode=feature_mode,
-            scaling_mode=scaling_mode,
-            validation_mode=validation_mode,
-            dataset_hash=dataset_hash,
-            is_production_candidate=is_production_candidate,
-            selection_source=selection_source,
-            run_id=run_id,
-            ensemble_metadata=ensemble_metadata,
-        )
-
-    @staticmethod
-    def _upsert_best_from_values(
-        *,
-        conn: sqlite3.Connection,
-        stock_symbol: str,
-        model_name: str,
-        experiment_id: int,
-        composite_score: float,
-        metrics: Dict[str, Any],
-        model_path: str,
-        updated_at: str,
-        target_mode: str,
-        feature_mode: str,
-        scaling_mode: str,
-        validation_mode: str,
-        dataset_hash: Optional[str],
-        run_id: Optional[str],
-        selection_source: Optional[str],
-    ) -> None:
-        conn.execute(
-            """
-            INSERT INTO best_models
-                (stock_symbol, model_name, experiment_id, composite_score,
-                 target_mode, feature_mode, scaling_mode, validation_mode,
-                 dataset_hash, run_id, selection_source,
-                 mae, rmse, mape, dir_acc, sharpe, hit_rate,
-                 model_path, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(stock_symbol) DO UPDATE SET
-                model_name       = excluded.model_name,
-                experiment_id    = excluded.experiment_id,
-                composite_score  = excluded.composite_score,
-                target_mode      = excluded.target_mode,
-                feature_mode     = excluded.feature_mode,
-                scaling_mode     = excluded.scaling_mode,
-                validation_mode  = excluded.validation_mode,
-                dataset_hash     = excluded.dataset_hash,
-                run_id           = excluded.run_id,
-                selection_source = excluded.selection_source,
-                mae              = excluded.mae,
-                rmse             = excluded.rmse,
-                mape             = excluded.mape,
-                dir_acc          = excluded.dir_acc,
-                sharpe           = excluded.sharpe,
-                hit_rate         = excluded.hit_rate,
-                model_path       = excluded.model_path,
-                updated_at       = excluded.updated_at
-            """,
-            (
-                stock_symbol,
-                model_name,
-                experiment_id,
-                composite_score,
-                target_mode,
-                feature_mode,
-                scaling_mode,
-                validation_mode,
-                dataset_hash,
-                run_id,
-                selection_source,
-                metrics.get("MAE"),
-                metrics.get("RMSE"),
-                metrics.get("MAPE"),
-                metrics.get("Dir_Acc"),
-                metrics.get("Sharpe"),
-                metrics.get("Hit_Rate"),
-                model_path,
-                updated_at,
-            ),
-        )
-
-    def _migrate_legacy_production_candidates(self, conn: sqlite3.Connection) -> None:
-        self._ensure_repositories()
-        return self.schema_repository.migrate_legacy_production_candidates(conn)
-
-    def _refresh_best_models_from_production_experiments(self, conn: sqlite3.Connection) -> None:
-        self._ensure_repositories()
-        return self.schema_repository.refresh_best_models_from_production_experiments(conn)
 
     def get_best_model(self, stock_symbol: str) -> Optional[Dict[str, Any]]:
         """Sembolün üretim 'best model' kaydını döner (BestModelRepository'e delege)."""
@@ -687,10 +558,6 @@ class StockModelDB:
             "missing_tables": missing,
             "table_counts": self.get_table_counts(REQUIRED_SCHEMA_TABLES),
         }
-
-    def _refresh_forecast_accuracy(self, conn: sqlite3.Connection, run_id: int) -> None:
-        self._ensure_repositories()
-        return self.forecast_resolution_repository.refresh_forecast_accuracy(conn, run_id)
 
     @staticmethod
     def _forecast_run_key(

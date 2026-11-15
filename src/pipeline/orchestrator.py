@@ -16,13 +16,12 @@ import logging
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 from src.database.stock_model_db import StockModelDB
-from src.experiments.experiment_tracker import ExperimentTracker
 from src.pipeline.config import (
     PipelineConfig,
     DataConfig,
@@ -42,7 +41,6 @@ from src.pipeline.model_trainer import ModelTrainer
 from src.pipeline.horizon_policy import assert_kola_production_horizon_supported
 from src.utils.reproducibility import set_global_seed
 from src.pipeline.artifacts import (
-    write_window_selection_decision,
     write_validation_and_quality_reports,
     write_run_manifest,
 )
@@ -152,12 +150,9 @@ class ForecastingPipeline:
         self.outputs_dir = os.path.join(self.output_root, "runs", self.run_id)
         self.latest_dir = os.path.join(self.output_root, "latest")
         self.models_dir = os.path.join(self.outputs_dir, "models")
-        self.experiment_dir = os.path.join(self.outputs_dir, "experiments")
         self.registry_dir = self.models_dir
 
     def _init_collaborators(self, e: ExecutionConfig) -> None:
-        self.tracker = ExperimentTracker(self.experiment_dir)
-
         db_path = os.path.join(self.project_root, "data", "stock_models.db")
         self.stock_db = StockModelDB(db_path)
 
@@ -225,7 +220,6 @@ class ForecastingPipeline:
             self.output_root,
             self.outputs_dir,
             self.models_dir,
-            self.experiment_dir,
             self.registry_dir,
         ]:
             os.makedirs(directory, exist_ok=True)
@@ -267,56 +261,6 @@ class ForecastingPipeline:
             f"val_ratio={deep_cfg.get('validation_ratio')}, "
             f"min_val={deep_cfg.get('min_validation_samples')}"
         )
-
-    def _window_selection_rows(
-        self,
-        window_label: str,
-        window_years: Optional[int],
-        child: Any,
-    ) -> List[Dict[str, Any]]:
-        evaluator = getattr(child, "evaluation_manager", None)
-        if evaluator is None:
-            return []
-        wf_metrics = getattr(evaluator, "latest_model_metrics", {}).get("wf", {})
-        wf_backtests = getattr(evaluator, "latest_backtest_metrics", {}).get("wf", {})
-        final_backtests = getattr(evaluator, "latest_backtest_metrics", {}).get("final_holdout", {})
-        rows: List[Dict[str, Any]] = []
-        for model_name, metrics in wf_metrics.items():
-            bt = wf_backtests.get(model_name, {})
-            final_bt = final_backtests.get(model_name, {})
-            final_net = final_bt.get("Net_Return")
-            final_bh = final_bt.get("BuyHold_Return")
-            final_gap = (
-                float(final_net) - float(final_bh)
-                if final_net is not None and final_bh is not None
-                else None
-            )
-            rows.append(
-                {
-                    "Window_Label": window_label,
-                    "Window_Years": window_years,
-                    "Model": model_name,
-                    "Dir_Acc": metrics.get("Dir_Acc"),
-                    "RMSE": metrics.get("RMSE"),
-                    "RMSE_vs_benchmark": metrics.get("RMSE_vs_benchmark"),
-                    "Sharpe_excess_vs_buy_hold": metrics.get("Sharpe_excess_vs_buy_hold"),
-                    "Composite_Score": metrics.get("Composite_Score"),
-                    "Trade_Count": bt.get("Trade_Count"),
-                    "Exposure": bt.get("Exposure"),
-                    "Net_Return": bt.get("Net_Return"),
-                    "BuyHold_Return": bt.get("BuyHold_Return"),
-                    "Max_Drawdown": bt.get("Max_Drawdown"),
-                    "Sharpe": bt.get("Sharpe"),
-                    "Final_Holdout_Net_Return": final_net,
-                    "Final_Holdout_BuyHold_Return": final_bh,
-                    "Final_Holdout_BuyHold_Gap": final_gap,
-                    "Final_Holdout_Used_For_Selection": False,
-                }
-            )
-        return rows
-
-    def _write_window_selection_decision(self, comparison_df: Any, save_path: str) -> str:
-        return write_window_selection_decision(comparison_df, save_path)
 
     def _write_validation_and_quality_reports(self) -> None:
         write_validation_and_quality_reports(self)
@@ -477,18 +421,17 @@ class ForecastingPipeline:
 
         self.model_trainer = ModelTrainer(
             self.stock_symbol,
-            self.tracker,
             self.data_manager.feature_names,
             self.selected_models,
             dataset_hash=self.run_dataset_hash,
             dataset_metadata=self.run_dataset_metadata,
             model_config=self.model_config,
+            run_dir=self.outputs_dir,
         )
         self.evaluation_manager = EvaluationManager(
             self.stock_symbol,
             self.outputs_dir,
             self.models_dir,
-            self.tracker,
             self.data_manager.feature_names,
             self.run_dataset_hash,
             self.run_dataset_metadata,

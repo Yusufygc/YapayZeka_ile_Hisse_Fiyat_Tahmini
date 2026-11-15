@@ -5,7 +5,6 @@ import os
 
 import numpy as np
 
-from src.experiments.experiment_tracker import ExperimentTracker
 from src.pipeline.model_trainer import ModelTrainer
 from src.pipeline.training_workflows import (
     FinalHoldoutTrainingWorkflow,
@@ -17,7 +16,6 @@ from src.pipeline.training_workflows import (
 def _trainer(tmp_path, *, selected_models=None) -> ModelTrainer:
     return ModelTrainer(
         stock_symbol="TEST",
-        tracker=ExperimentTracker(os.path.join(str(tmp_path), "exp")),
         feature_names=["f1", "f2"],
         selected_models=selected_models,
         dataset_hash="hash",

@@ -1,3 +1,20 @@
+## [2026-11-15] Refactor | Ölü kod temizliği (davranış değişmez)
+
+- Silindi: `src/validation/{cpcv,purged_kfold,rolling_holdout}.py` + config bayrakları
+  (`use_purged_kfold`, `use_cpcv`, `cpcv_n_groups`, `cpcv_k_test`, `target_horizons`);
+  `src/pipeline/regime_context.py`; `src/model_registry/` (JSON ModelRegistry);
+  `src/experiments/` (ExperimentTracker: `experiment_log.csv` / `run_metadata/*.json`
+  artık yazılmaz, `outputs/<SYM>/runs/<RUN>/experiments/` dizini oluşturulmaz; StockModelDB
+  kaydı aynen sürer; `ModelTrainer`/`EvaluationManager`'dan `tracker` parametresi kalktı,
+  XAI feature-importance dizini için `ModelTrainer(run_dir=...)` eklendi);
+  `src/forecasting/persistence.py` (iş akışları `db.log_forecast_run` çağırır);
+  eğitilmeyen `LightGBM Quantile` ve `Prophet-ML/DL Hybrid` modelleri (registry + `_CANONICAL_ORDER`).
+- Silindi (ölü fonksiyonlar): `add_features`, `save_metrics_report` (+ `METRICS_REPORT_COLUMNS`),
+  `EnsembleModel.optimize_by_dsr/profit_factor`, `FeatureCache.purge_expired`, prediction_engine
+  yardımcıları, `StockModelDB` kullanılmayan stub'ları, signal_calibrator ölü yardımcıları,
+  DataManager/ForecastRunner çağrısız stub'ları, orchestrator `_window_selection_rows` zinciri.
+- `_DATE_AWARE_MODELS` tek tanım: `src/pipeline/model_scope.DATE_AWARE_MODELS`.
+
 ## [2026-11-15] Bugfix | Derin denetim Faz 2: ölçüm/mantık hataları + Python 3.13
 
 - Metrik formülleri (`2e5a1bd`): Sortino, PSR/DSR, rf nakit barı + point-in-time

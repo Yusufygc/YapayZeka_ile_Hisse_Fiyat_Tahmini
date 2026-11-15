@@ -71,8 +71,6 @@ ForecastingPipeline          â† src/pipeline/orchestrator.py  (Facade)
 | `src/evaluation/` | Finansal metrikler, permütasyon önem testi |
 | `src/xai/` | SHAP/önem açıklamaları, özellik sözlüğü, HTML/metin raporu |
 | `src/database/` | `StockModelDB` — SQLite tabanlı merkezi kayıt |
-| `src/experiments/` | `ExperimentTracker` — CSV tabanlı çalışma günlüğü |
-| `src/model_registry/` | `ModelRegistry` — `registry.json` versiyonlama |
 | `src/utils/` | Veri bölücü, tekrar üretilebilirlik tohumları, dinamik risksiz oran |
 | `src/api/` | FastAPI HTTP servis katmanı |
 
@@ -259,7 +257,6 @@ Bu proje, deneysel bir prototipten başlayarak altı faz boyunca sistematik olar
 **Yapılanlar:**
 - `DataSplitter`: Kronolojik bölünme garantisi; shuffle yok, stratified split yok.
 - `reproducibility.py`: Python, NumPy, TensorFlow ve PyTorch tohumları tek yerden ayarlanır.
-- `ExperimentTracker`: Her çalışmanın parametreleri ve metrikleri CSV'ye kaydedilir; deney takibi mümkün hale gelir.
 
 **Bu işe ne yarar?** Aynı konfigürasyonu iki kez çalıştırdığınızda aynı sonucu alırsınız. Karşılaştırmalı analizler güvenilir olur.
 
@@ -567,8 +564,6 @@ outputs/{SYMBOL}/
 │   ├── xgboost_model.pkl
 │   ├── lstm_model.keras
 │   └── {model}_final_holdout_model.{ext}
-├── experiments/
-│   └── experiment_log_{timestamp}.csv
 ├── xai/
 │   ├── xai_report_{model}.html
 │   └── xai_report_{model}.txt

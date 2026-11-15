@@ -20,13 +20,13 @@ from src.forecasting.artifacts import (
 from src.forecasting.bist_rules import RULES_VERSION
 from src.pipeline.config import DataConfig, ValidationConfig
 from src.pipeline.data_manager import DataManager
+from src.pipeline.model_scope import DATE_AWARE_MODELS as _DATE_AWARE_MODELS
 
 logger = logging.getLogger(__name__)
 
 _TREE_MODELS = {"XGBoost", "Random Forest", "Ridge Return", "ElasticNet Return", "LightGBM Return"}
 _SEQ_MODELS = {"LSTM", "LSTM Lite", "AttentionLSTM v2", "DLinear", "NLinear"}
 _BASELINE_MODELS = {"Naive Last Value", "Naive Zero Return", "Naive Drift"}
-_DATE_AWARE_MODELS = {"Prophet", "Prophet-ML/DL Hybrid"}
 _MACRO_FEATURES = {"Rate_Level", "Rate_Change", "CPI_MoM", "CPI_YoY", "Real_Rate"}
 
 # h>1 recursive forecast, 1-adim modelin kendi ciktisiyla besleyerek uretilir ve
@@ -72,7 +72,6 @@ class ForecastContext:
     db: Any
     rules: Any
     model_config: Any
-    persistence: Any
     # ForecastRunner factory callable'ları (model_config'e bağlı; runner'da kalır).
     make_model_instance: Callable[..., Any]
     make_prophet: Callable[[list], Any]
@@ -163,7 +162,7 @@ class ForecastSymbolWorkflow:
         extra_warnings = [] if horizon_fields["recursive_forecast_validated"] else [
             RECURSIVE_UNVALIDATED_WARNING
         ]
-        run_id = self.ctx.persistence.save_run(
+        run_id = self.ctx.db.log_forecast_run(
             stock_symbol=symbol,
             model_name=selection["model_name"],
             source_experiment_id=selection["source_experiment_id"],
@@ -302,7 +301,7 @@ class ForecastSymbolWorkflow:
         extra_warnings = [] if horizon_fields["recursive_forecast_validated"] else [
             RECURSIVE_UNVALIDATED_WARNING
         ]
-        run_id = self.ctx.persistence.save_run(
+        run_id = self.ctx.db.log_forecast_run(
             stock_symbol=symbol,
             model_name=selection["model_name"],
             source_experiment_id=selection["source_experiment_id"],

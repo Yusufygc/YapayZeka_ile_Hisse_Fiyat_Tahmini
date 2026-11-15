@@ -113,7 +113,6 @@ def test_stock_model_db_reexport_is_same_function():
     from src.evaluation import scoring
 
     assert stock_model_db.compute_composite_score is scoring.compute_composite_score
-    assert stock_model_db._compute_composite_score(_row()) == scoring.compute_composite_score(_row())
 
 
 # --------------------------------------------------------------------------- #

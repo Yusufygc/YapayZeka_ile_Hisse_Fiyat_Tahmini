@@ -2,7 +2,7 @@
 """Pipeline çıktı/manifest yazma yardımcıları.
 
 Sorumluluklar:
-  - Pencere seçim kararı, run manifest ve diğer I/O + dosya formatlama
+  - Run manifest ve diğer I/O + dosya formatlama
     sorumluluklarını orchestrator'dan ayırır (orchestrator şişkinliğini azaltır).
 """
 from __future__ import annotations
@@ -19,24 +19,6 @@ from typing import Any, Dict, List, Optional
 from src.utils.reporting_utils import write_csv_and_aligned_view
 
 logger = logging.getLogger(__name__)
-
-
-def write_window_selection_decision(comparison_df: Any, save_path: str) -> str:
-    import pandas as _pd
-
-    if not isinstance(comparison_df, _pd.DataFrame):
-        comparison_df = _pd.DataFrame(comparison_df)
-    decision_path = os.path.splitext(save_path)[0] + "_decision.md"
-    os.makedirs(os.path.dirname(decision_path), exist_ok=True)
-    best = comparison_df.iloc[0].to_dict() if not comparison_df.empty else {}
-    with open(decision_path, "w", encoding="utf-8") as handle:
-        handle.write("# Training Window Selection Decision\n\n")
-        handle.write("Final holdout used for selection: `False`\n\n")
-        if best:
-            handle.write("## Selected Row\n\n")
-            for key, value in best.items():
-                handle.write(f"- `{key}`: `{value}`\n")
-    return decision_path
 
 
 def write_validation_and_quality_reports(pipeline: Any) -> None:

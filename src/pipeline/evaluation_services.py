@@ -14,7 +14,6 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 from src.database.stock_model_db import StockModelDB
-from src.experiments.experiment_tracker import ExperimentTracker
 from src.pipeline.backtest_runner import _BacktestRunnerMixin
 from src.pipeline.config import ExecutionConfig, ModelConfig
 from src.pipeline.metrics_reporter import _MetricsReporterMixin
@@ -38,7 +37,6 @@ class EvaluationContext:
     stock_symbol: str = ""
     outputs_dir: str = ""
     models_dir: str = ""
-    tracker: Optional[ExperimentTracker] = None
     feature_names: list = field(default_factory=list)
     dataset_hash: str = ""
     dataset_metadata: Dict[str, Any] = field(default_factory=dict)

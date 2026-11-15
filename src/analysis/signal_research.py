@@ -42,7 +42,6 @@ DEFAULT_MODELS = (
     "AttentionLSTM v2",
     "Prophet",
     "ARIMA",
-    "Prophet-ML/DL Hybrid",
 )
 
 PLAN1_PRIMARY_SYMBOLS = (

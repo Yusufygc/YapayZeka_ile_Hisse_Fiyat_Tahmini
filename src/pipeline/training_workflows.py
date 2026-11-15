@@ -26,10 +26,6 @@ class _TrainingWorkflowBase:
         return self.ctx.stock_symbol
 
     @property
-    def tracker(self):
-        return self.ctx.tracker
-
-    @property
     def feature_names(self) -> list:
         return self.ctx.feature_names
 
@@ -292,7 +288,7 @@ class WalkForwardTrainingWorkflow(_TrainingWorkflowBase):
         self._run_deep_validators(wf_splits, data_manager, preprocessors["seq"], validators)
         self._materialize_validator_results(validators)
         self._dump_feature_importances(validators)
-        self._log_walk_forward_runs()
+        self._stamp_walk_forward_threshold_config()
 
     def _preprocessor(self, data_manager, kind: str):
         def prepare(train_df, test_df, context_df=None):
@@ -425,15 +421,7 @@ class WalkForwardTrainingWorkflow(_TrainingWorkflowBase):
             "market_regime": np.asarray(all_market_regime),
         }
 
-    def _log_walk_forward_runs(self) -> None:
+    def _stamp_walk_forward_threshold_config(self) -> None:
         for model_name, metrics in self.wf_results.items():
             metrics["Threshold_Config"] = str(self.dataset_metadata.get("signal_threshold_config", {}))
-            self.tracker.log_run(
-                model_name,
-                {"validation": "walk_forward"},
-                metrics,
-                self.feature_names,
-                self.dataset_hash,
-                self.dataset_metadata,
-            )
 

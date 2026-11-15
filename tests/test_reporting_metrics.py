@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 
-import os
-import shutil
 import unittest
 
 import numpy as np
@@ -10,7 +8,7 @@ import pandas as pd
 from src.backtesting.metrics import summarize_backtest
 from src.database.stock_model_db import compute_composite_score
 from src.evaluation.financial_metrics import compute_financial_metrics, compute_quantile_metrics
-from src.evaluation.evaluator import enrich_with_benchmark_metrics, save_metrics_report
+from src.evaluation.evaluator import enrich_with_benchmark_metrics
 from src.pipeline.evaluation_manager import EvaluationManager
 
 
@@ -58,17 +56,6 @@ class ReportingMetricsTests(unittest.TestCase):
         enriched["Naive Zero Return"]["Composite_Score"] = 50.0
         enriched["Overfit Model"]["Composite_Score"] = 99.0
 
-        tmp = os.path.abspath(os.path.join("outputs", "_test_reporting_metrics"))
-        if os.path.exists(tmp):
-            shutil.rmtree(tmp)
-        os.makedirs(tmp, exist_ok=True)
-        try:
-            report_path = os.path.join(tmp, "metrics_report.csv")
-            df = save_metrics_report(enriched, report_path)
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
-
-        self.assertEqual(df.index[0], "Naive Zero Return")
         self.assertFalse(bool(enriched["Overfit Model"]["Eligible_For_Leader"]))
 
     def test_backtest_summary_includes_cagr_sortino_and_cost_drag(self):

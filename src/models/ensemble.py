@@ -158,24 +158,6 @@ class EnsembleModel:
             sharpes[name] = float(pnl.mean() / std) if std > 0 else 0.0
         return EnsembleModel._positive_normalize(sharpes, floor=0.0)
 
-    @staticmethod
-    def optimize_by_dsr(deflated_sharpes: Dict[str, float]) -> Dict[str, float]:
-        """Deflated Sharpe Ratio tabanlı ağırlıklandırma.
-
-        DSR ≤ 0 modeller dışlanır (istatistiksel anlamsızlık). Tümü ≤ 0 ise
-        eşit ağırlık fallback.
-        """
-        return EnsembleModel._positive_normalize(deflated_sharpes, floor=0.0)
-
-    @staticmethod
-    def optimize_by_profit_factor(profit_factors: Dict[str, float]) -> Dict[str, float]:
-        """Profit Factor tabanlı ağırlıklandırma.
-
-        ``PF > 1`` (kazançlı) modeller ağırlık alır; ``PF ≤ 1`` dışlanır.
-        Tümü ≤ 1 ise eşit ağırlık fallback.
-        """
-        return EnsembleModel._positive_normalize(profit_factors, floor=1.0)
-
     # ─────────────────────────────────────────────────────────────────
     #  Faz 5 Katman 2 — Risk-parity (inverse-volatility) ağırlıklandırma
     # ─────────────────────────────────────────────────────────────────

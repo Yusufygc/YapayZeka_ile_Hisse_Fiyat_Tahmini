@@ -858,62 +858,6 @@ class Phase8AcceptanceTests(unittest.TestCase):
         self.assertTrue(valid["Meets_Min_Trade_Count"])
         self.assertEqual(selected["Trial"], 2)
 
-    @unittest.skipIf(ForecastingPipeline is None, f"ForecastingPipeline import failed: {globals().get('ORCHESTRATOR_IMPORT_ERROR')}")
-    def test_window_selection_rows_and_decision_keep_final_holdout_out_of_selection(self):
-        pipeline = ForecastingPipeline.__new__(ForecastingPipeline)
-        pipeline.outputs_dir = self.tmp
-
-        child = SimpleNamespace(
-            outputs_dir=os.path.join(self.tmp, "window_selection", "5y"),
-            evaluation_manager=SimpleNamespace(
-                latest_model_metrics={
-                    "wf": {
-                        "Candidate": {
-                            "Dir_Acc": 55.0,
-                            "RMSE": 1.0,
-                            "RMSE_vs_benchmark": 0.95,
-                            "Sharpe_excess_vs_buy_hold": 0.2,
-                            "Composite_Score": 60.0,
-                        }
-                    }
-                },
-                latest_backtest_metrics={
-                    "wf": {
-                        "Candidate": {
-                            "Trade_Count": 4,
-                            "Exposure": 0.4,
-                            "Net_Return": 0.08,
-                            "BuyHold_Return": 0.03,
-                            "Max_Drawdown": -0.02,
-                            "Sharpe": 1.1,
-                        }
-                    },
-                    "final_holdout": {
-                        "Candidate": {
-                            "Net_Return": 0.01,
-                            "BuyHold_Return": 0.02,
-                        }
-                    },
-                },
-            ),
-        )
-
-        rows = ForecastingPipeline._window_selection_rows(pipeline, "5y", 5, child)
-        self.assertEqual(len(rows), 1)
-        self.assertFalse(rows[0]["Final_Holdout_Used_For_Selection"])
-        self.assertAlmostEqual(rows[0]["Final_Holdout_BuyHold_Gap"], -0.01)
-
-        comparison = pd.DataFrame(rows)
-        decision_path = ForecastingPipeline._write_window_selection_decision(
-            pipeline,
-            comparison,
-            os.path.join(self.tmp, "training_window_comparison_v1.csv"),
-        )
-        with open(decision_path, "r", encoding="utf-8") as handle:
-            decision = handle.read()
-        self.assertIn("Final holdout used for selection: `False`", decision)
-        self.assertIn("`Window_Label`: `5y`", decision)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -188,26 +188,6 @@ class FeatureCache:
         except OSError:
             pass
 
-    def purge_expired(self) -> int:
-        """
-        Suresi dolmus tum cache girdilerini temizle.
-        Silinen girdi sayisini doner.
-        """
-        removed = 0
-        try:
-            for fname in os.listdir(self.cache_dir):
-                if not fname.endswith(".pkl"):
-                    continue
-                fpath = os.path.join(self.cache_dir, fname)
-                age = time.time() - os.path.getmtime(fpath)
-                if self.ttl_seconds >= 0 and age > self.ttl_seconds:
-                    key = fname[:-4]
-                    self._evict(key)
-                    removed += 1
-        except OSError:
-            pass
-        return removed
-
     def clear(self) -> int:
         """Tum cache girdilerini sil. Silinen girdi sayisini doner."""
         removed = 0

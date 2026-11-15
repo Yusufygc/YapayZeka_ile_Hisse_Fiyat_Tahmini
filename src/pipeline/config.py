@@ -36,11 +36,6 @@ class DataConfig:
     auto_update_data: bool = False
     auto_update_interactive: bool = False
     universe_auto_sync: bool = True
-    # Sprint 4 (2026-05-25) A4.3: opt-in multi-horizon target uretimi.
-    # None ise sadece tek-horizon (h=1) target — mevcut davranis korunur.
-    # Listede her h icin ayri target dizisi `build_multi_horizon_targets()`
-    # uretir; ensemble path icin sequence model'ler tek tek egitilir.
-    target_horizons: Optional[List[int]] = None
     # E2 Faz 1 (2026-06-02): tekil egitim hedefinin ileri ufku.
     # target_horizon=1 -> y[t]=hedef(close[t+1]) (mevcut davranis, default).
     # target_horizon=h -> y[t]=hedef(close[t+h]); haftalik (5) sinyal/gurultu
@@ -67,13 +62,6 @@ class ValidationConfig:
     # test penceresi etiketsiz baglam satirlari alir.
     wf_embargo_size: Optional[int] = None
     final_holdout_size: int = 60
-    # Sprint 3 (2026-05-25) A3.4: PurgedKFold + CPCV opt-in flag'ler.
-    # Default False — production WF akisi degismez; arastirma/CI gucu icin
-    # opsiyonel ek validasyon.
-    use_purged_kfold: bool = False
-    use_cpcv: bool = False
-    cpcv_n_groups: int = 6
-    cpcv_k_test: int = 2
 
 
 @dataclass

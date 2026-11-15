@@ -8,7 +8,6 @@ or baseline-only workflows during package import.
 
 _EXPORTS = {
     "ProphetModel": ("prophet_model", "ProphetModel"),
-    "ProphetHybridModel": ("prophet_hybrid_model", "ProphetHybridModel"),
     "XGBoostModel": ("xgboost_model", "XGBoostModel"),
     "AttentionLSTMModel": ("lstm_model", "AttentionLSTMModel"),
     "AttentionLSTMV2Model": ("attention_lstm_v2_model", "AttentionLSTMV2Model"),
@@ -21,7 +20,6 @@ _EXPORTS = {
     "RidgeReturnModel": ("linear_model", "RidgeReturnModel"),
     "ElasticNetReturnModel": ("linear_model", "ElasticNetReturnModel"),
     "LightGBMReturnModel": ("gradient_boosting_model", "LightGBMReturnModel"),
-    "QuantileLightGBMModel": ("quantile_lightgbm_model", "QuantileLightGBMModel"),
     "DLinearSequenceModel": ("linear_sequence_model", "DLinearSequenceModel"),
     "NLinearSequenceModel": ("linear_sequence_model", "NLinearSequenceModel"),
 }

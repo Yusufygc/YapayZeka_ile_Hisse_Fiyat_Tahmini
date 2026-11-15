@@ -7,49 +7,6 @@ import numpy as np
 from src.models.ensemble import EnsembleModel
 
 
-def test_optimize_by_dsr_positive_only():
-    weights = EnsembleModel.optimize_by_dsr({
-        "A": 1.5,
-        "B": 0.5,
-        "C": -0.3,
-        "D": 0.0,
-    })
-    # Negatif/sıfır dışlanır.
-    assert weights["C"] == 0.0
-    assert weights["D"] == 0.0
-    # Pozitifler toplamı 1.
-    assert abs(sum(weights.values()) - 1.0) < 1e-6
-    # A > B (DSR oranıyla).
-    assert weights["A"] > weights["B"]
-
-
-def test_optimize_by_dsr_all_negative_falls_back_to_equal():
-    weights = EnsembleModel.optimize_by_dsr({"A": -1.0, "B": -0.5})
-    assert abs(weights["A"] - 0.5) < 1e-6
-    assert abs(weights["B"] - 0.5) < 1e-6
-
-
-def test_optimize_by_profit_factor_excludes_below_one():
-    weights = EnsembleModel.optimize_by_profit_factor({
-        "A": 2.0,
-        "B": 1.5,
-        "C": 0.9,
-        "D": 1.0,
-    })
-    assert weights["C"] == 0.0
-    assert weights["D"] == 0.0
-    assert abs(sum(weights.values()) - 1.0) < 1e-6
-    # PF=2 → 1.0 katkı, PF=1.5 → 0.5 katkı; A ağırlığı 2x B olmalı.
-    # round(6) rounding ile +/- 1e-6 toleransa kadar.
-    assert abs(weights["A"] - 2 * weights["B"]) < 1e-5
-
-
-def test_optimize_by_profit_factor_all_losers_falls_back_to_equal():
-    weights = EnsembleModel.optimize_by_profit_factor({"A": 0.7, "B": 0.5})
-    assert abs(weights["A"] - 0.5) < 1e-6
-    assert abs(weights["B"] - 0.5) < 1e-6
-
-
 def test_optimize_by_sharpe_uses_directional_pnl():
     """Tahmin yönü gerçeği takip eden model daha yüksek ağırlık almalı."""
     rng = np.random.default_rng(0)

@@ -39,8 +39,7 @@ def test_forecast_runner_composes_internal_workflows(tmp_path):
 def test_private_forecast_helpers_delegate_and_preserve_characterization(tmp_path):
     runner = _runner(tmp_path)
 
-    target = runner._make_target(np.array([100.0, 102.0, 101.0]), "return")
-    points = runner._roll_forward_points(
+    points = runner.forecast_point_generator.roll_forward(
         predicted_target=0.01,
         horizon_days=2,
         last_close=100.0,
@@ -48,7 +47,6 @@ def test_private_forecast_helpers_delegate_and_preserve_characterization(tmp_pat
         target_mode="return",
     )
 
-    np.testing.assert_allclose(target, np.array([0.02, -0.009803921568627416]))
     assert len(points) == 2
     assert points[0]["bounded_predicted_close"] == runner._target_to_price(0.01, 100.0, "return")
 

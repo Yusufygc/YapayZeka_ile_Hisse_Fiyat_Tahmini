@@ -4,7 +4,6 @@ import os
 import shutil
 
 from src.database.stock_model_db import StockModelDB
-from src.experiments.experiment_tracker import ExperimentTracker
 from src.pipeline.evaluation_services import MetricsReportingService
 from src.pipeline.model_scope import BENCHMARK_MODELS, reportable_model_names
 from src.pipeline.model_trainer import ModelTrainer
@@ -21,7 +20,6 @@ def test_selected_lstm_scope_keeps_only_lstm_as_candidate_and_naive_as_benchmark
     tmp = _workspace_tmp("trainer_scope")
     trainer = ModelTrainer(
         stock_symbol="TEST",
-        tracker=ExperimentTracker(tmp),
         feature_names=["f1"],
         selected_models=["LSTM"],
         dataset_metadata={"target_mode": "log_return"},
@@ -39,7 +37,6 @@ def test_selected_lstm_lite_scope_keeps_only_lstm_lite_as_candidate():
     tmp = _workspace_tmp("trainer_lstm_lite_scope")
     trainer = ModelTrainer(
         stock_symbol="TEST",
-        tracker=ExperimentTracker(tmp),
         feature_names=["f1"],
         selected_models=["LSTM Lite"],
         dataset_metadata={"target_mode": "log_return"},
@@ -56,14 +53,12 @@ def test_selected_attention_lstm_v2_is_opt_in_candidate_only():
     tmp = _workspace_tmp("trainer_attention_v2_scope")
     default_trainer = ModelTrainer(
         stock_symbol="TEST",
-        tracker=ExperimentTracker(tmp),
         feature_names=["f1"],
         selected_models=None,
         dataset_metadata={"target_mode": "log_return"},
     )
     selected_trainer = ModelTrainer(
         stock_symbol="TEST",
-        tracker=ExperimentTracker(tmp),
         feature_names=["f1"],
         selected_models=["AttentionLSTM v2"],
         dataset_metadata={"target_mode": "log_return"},

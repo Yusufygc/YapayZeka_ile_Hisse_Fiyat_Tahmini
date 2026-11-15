@@ -25,7 +25,6 @@ from src.backtesting.signals import SignalConfig
 from src.database.stock_model_db import StockModelDB
 from src.evaluation.financial_metrics import compute_quantile_metrics
 from src.evaluation.evaluator import compute_metrics, plot_comparison, plot_prediction_interval
-from src.experiments.experiment_tracker import ExperimentTracker
 from src.pipeline.config import ExecutionConfig, ModelConfig
 from src.pipeline.evaluation_workflows import (
     EvaluationWorkflowServices,
@@ -57,7 +56,6 @@ class EvaluationManager:
         stock_symbol: str,
         outputs_dir: str,
         models_dir: str,
-        tracker: ExperimentTracker,
         feature_names: list,
         dataset_hash: str,
         dataset_metadata: Dict[str, Any],
@@ -74,7 +72,6 @@ class EvaluationManager:
             stock_symbol=stock_symbol,
             outputs_dir=outputs_dir,
             models_dir=models_dir,
-            tracker=tracker,
             feature_names=feature_names,
             dataset_hash=dataset_hash,
             dataset_metadata=dataset_metadata,
@@ -194,14 +191,6 @@ class EvaluationManager:
     @models_dir.setter
     def models_dir(self, value: str) -> None:
         self.context.models_dir = value
-
-    @property
-    def tracker(self) -> Any:
-        return self.context.tracker
-
-    @tracker.setter
-    def tracker(self, value: Any) -> None:
-        self.context.tracker = value
 
     @property
     def feature_names(self) -> list:

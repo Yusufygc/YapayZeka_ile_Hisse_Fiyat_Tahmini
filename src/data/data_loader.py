@@ -11,7 +11,6 @@ import os
 
 import pandas as pd
 import numpy as np
-import ta
 
 
 # ── Sütun eşleştirme tablosu (TR -> EN) ──────────────────────────────────────
@@ -219,85 +218,6 @@ def _compute_survivorship_report(df: pd.DataFrame, csv_path: str) -> dict:
         # Sessizce sukut etme: kalan akis kalite kontrolu yapmadan devam etmesin.
         pass
     return report
-
-
-def add_features(df: pd.DataFrame, lags: int = 5) -> pd.DataFrame:
-    """
-    Teknik gösterge ve gecikme özelliklerini ekler.
-
-    v2 (H2 düzeltmesi) — stasyonerleştirilmiş sürüm:
-      Eski sürüm fiyat-birimi seviyeleri (SMA_20, EMA_12, MACD, BB_Upper/Lower,
-      ATR, Close_Lag_*) saklıyordu. Trend piyasasında bu kolonlar test
-      döneminde MinMax/Robust skalanın dışına fırlıyor, modeli OOD besliyordu.
-      Şimdi hepsi "Close'a göre oran" veya "% bant" olarak tutuluyor.
-
-    Eklenen özellikler:
-        • RSI (14)                  — zaten 0-100, stasyoner
-        • SMA_20_rel, EMA_12_rel    — Close / MA − 1  (mean-reversion sinyali)
-        • BB_Upper_rel, BB_Lower_rel, BB_Width_20
-        • ATR_norm                  — ATR / Close (volatilite %'i)
-        • Stoch_K, Stoch_D          — zaten 0-100
-        • LogRet_Lag_1 … LogRet_Lag_{lags}   (Close_Lag yerine stasyoner lag)
-
-    Not: MACD artık FeaturePipeline tarafından MACD_norm / MACD_Signal_norm /
-    MACD_Diff_norm olarak sağlanıyor → duplikasyonu önlemek için buradan
-    kaldırıldı.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Temizlenmiş OHLCV verisi (Close, High, Low, Open, Volume sütunları).
-    lags : int
-        Gecikme (lag) sayısı.
-
-    Returns
-    -------
-    pd.DataFrame
-        Özellik mühendisliği uygulanmış, NaN satırları düşürülmüş DataFrame.
-    """
-    df = df.copy()
-    close = df["Close"]
-    close_safe = close.replace(0, np.nan)
-
-    # ── Stasyoner teknik göstergeler ─────────────────────────────────────────
-    df["RSI"] = ta.momentum.rsi(close, window=14)
-
-    # MA → Close'a göre göreli (0 civarında dalgalanır)
-    sma_20 = ta.trend.sma_indicator(close, window=20)
-    ema_12 = ta.trend.ema_indicator(close, window=12)
-    df["SMA_20_rel"] = close / sma_20.replace(0, np.nan) - 1.0
-    df["EMA_12_rel"] = close / ema_12.replace(0, np.nan) - 1.0
-
-    # Bollinger Bantları — bantlara göre göreli konum + bant genişliği
-    bb = ta.volatility.BollingerBands(close, window=20, window_dev=2)
-    bb_up  = bb.bollinger_hband()
-    bb_lo  = bb.bollinger_lband()
-    df["BB_Upper_rel"] = close / bb_up.replace(0, np.nan) - 1.0
-    df["BB_Lower_rel"] = close / bb_lo.replace(0, np.nan) - 1.0
-    df["BB_Width_20"]  = bb.bollinger_wband()   # zaten %, stasyoner
-
-    # ATR: volatilite fiyat birimi → Close'a böl → ≈ günlük volatilite katsayısı
-    atr = ta.volatility.average_true_range(df["High"], df["Low"], close, window=14)
-    df["ATR_norm"] = atr / close_safe
-
-    # Stochastic — zaten 0-100 aralığında, stasyoner
-    stoch = ta.momentum.StochasticOscillator(
-        df["High"], df["Low"], close, window=14, smooth_window=3
-    )
-    df["Stoch_K"] = stoch.stoch()
-    df["Stoch_D"] = stoch.stoch_signal()
-
-    # ── Lag özellikleri: log-getiri lag'leri (Close lag'leri non-stationary'di)
-    # LogRet_Lag_i[t] = log(Close[t-i+1] / Close[t-i]) = geçmiş i. günün getirisi
-    log_ret = np.log(close / close.shift(1))
-    for i in range(1, lags + 1):
-        df[f"LogRet_Lag_{i}"] = log_ret.shift(i)   # i gün öncesinin getirisi
-
-    # ── NaN satırları temizle ────────────────────────────────────────────────
-    df.dropna(inplace=True)
-    df.reset_index(drop=True, inplace=True)
-
-    return df
 
 
 def load_data(csv_path: str) -> pd.DataFrame:

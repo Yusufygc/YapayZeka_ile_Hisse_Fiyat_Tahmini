@@ -83,20 +83,6 @@ def _safe_float(value: Any, default: float) -> float:
     return calibration_selection.safe_float(value, default)
 
 
-def _risk_adjusted_score(
-    mean_net_return: float,
-    mean_excess_return: float,
-    mean_sharpe: float,
-    mean_max_drawdown: float,
-) -> float:
-    return calibration_selection.risk_adjusted_score(
-        mean_net_return=mean_net_return,
-        mean_excess_return=mean_excess_return,
-        mean_sharpe=mean_sharpe,
-        mean_max_drawdown=mean_max_drawdown,
-    )
-
-
 class _SignalCalibratorMixin:
     """Mixin: sinyal esik kalibrasyonu ve grid search optimizasyonu.
 
@@ -679,10 +665,6 @@ class _SignalCalibratorMixin:
     def _grid_param_key(params: Dict[str, float | int]) -> tuple:
         return calibration_grid.grid_param_key(params)
 
-    @staticmethod
-    def _signal_calibration_param_values(grid: list[Dict[str, float | int]]) -> Dict[str, set]:
-        return calibration_grid.param_values(grid)
-
     @classmethod
     def _signal_calibration_coverage_status(
         cls,
@@ -720,54 +702,6 @@ class _SignalCalibratorMixin:
             cap=cap,
             seed=seed,
             exclude_keys=exclude_keys,
-        )
-
-    @classmethod
-    def _select_coverage_grid_indices(
-        cls,
-        *,
-        available: list[tuple[int, Dict[str, float | int]]],
-        cap: int,
-        rng: np.random.Generator,
-    ) -> tuple[list[int], set[tuple]]:
-        return calibration_grid.select_coverage_grid_indices(
-            available=available,
-            cap=cap,
-            rng=rng,
-        )
-
-    @classmethod
-    def _best_grid_coverage_candidate(
-        cls,
-        *,
-        available: list[tuple[int, Dict[str, float | int]]],
-        selected_keys: set[tuple],
-        covered: set[tuple],
-        rng: np.random.Generator,
-    ) -> tuple[tuple[int, float], int, Dict[str, float | int]] | None:
-        return calibration_grid.best_grid_coverage_candidate(
-            available=available,
-            selected_keys=selected_keys,
-            covered=covered,
-            rng=rng,
-        )
-
-    @classmethod
-    def _append_random_grid_indices(
-        cls,
-        *,
-        available: list[tuple[int, Dict[str, float | int]]],
-        cap: int,
-        rng: np.random.Generator,
-        selected_indices: list[int],
-        selected_keys: set[tuple],
-    ) -> None:
-        calibration_grid.append_random_grid_indices(
-            available=available,
-            cap=cap,
-            rng=rng,
-            selected_indices=selected_indices,
-            selected_keys=selected_keys,
         )
 
     @staticmethod
@@ -903,10 +837,6 @@ class _SignalCalibratorMixin:
             "Reject_Reason": "" if passed else ",".join(reasons),
             "Active_For_Execution": False,
         }
-
-    @staticmethod
-    def _calibration_constraint_passed(row: Dict[str, Any]) -> bool:
-        return calibration_selection.calibration_constraint_passed(row)
 
     @classmethod
     def _select_confirmed_signal_calibration_row(

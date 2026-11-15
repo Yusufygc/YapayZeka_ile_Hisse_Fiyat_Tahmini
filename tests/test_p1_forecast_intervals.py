@@ -344,8 +344,8 @@ def _workflow(horizon_warnings_sink):
         def roll_forward_recursive(self, **kw):
             return [dict(point)]
 
-    class _Persist:
-        def save_run(self, **kw):
+    class _Db:
+        def log_forecast_run(self, **kw):
             horizon_warnings_sink.append(kw.get("forecast_warnings"))
             return 7
 
@@ -356,7 +356,7 @@ def _workflow(horizon_warnings_sink):
         data_preparation_service=_Prep(),
         production_training_workflow=_Train(),
         forecast_point_generator=_Gen(),
-        persistence=_Persist(),
+        db=_Db(),
         latest_target_prediction_workflow=object(),
     )
     return ForecastSymbolWorkflow(ctx, ForecastResult)

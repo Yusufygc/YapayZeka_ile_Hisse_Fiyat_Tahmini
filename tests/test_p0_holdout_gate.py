@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -48,7 +48,6 @@ def _make_manager(tmp_path, **exe_overrides) -> EvaluationManager:
         "TEST",
         str(tmp_path / "out"),
         str(tmp_path / "models"),
-        MagicMock(),
         ["f1"],
         "hash",
         {"target_mode": "log_return", "candidate_models": [MODEL], "run_id": "r"},
