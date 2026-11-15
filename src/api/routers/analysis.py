@@ -14,7 +14,7 @@ from src.api.observability import log_event
 from src.api.services.advisory_audit import append_response as audit_append
 from src.api.services.analysis_service import AnalysisService
 from src.api.services.peer_service import PeerEnrichmentService
-from src.api.services.response_cache import get_default_cache
+from src.api.services.response_cache import compute_freshness_fingerprint, get_default_cache
 
 router = APIRouter(tags=["Analiz"])
 
@@ -23,6 +23,11 @@ _peer_enricher = PeerEnrichmentService()
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 _cache = get_default_cache()
 _AUDIT_LOG_PATH = os.path.join(_PROJECT_ROOT, "data", "advisory_history.csv")
+
+
+def _freshness_fingerprint(symbol: str):
+    """Cache anahtarına giren tazelik parmak izi (best model / forecast / serving run)."""
+    return compute_freshness_fingerprint(symbol, stock_db_path=_service._db_path)
 
 
 @router.get("/v1/analysis/{symbol}", response_model=AnalysisResponse)
@@ -50,9 +55,12 @@ def get_analysis(symbol: str) -> AnalysisResponse:
     - ``error``: Beklenmeyen hata.
     """
     try:
-        # Sprint 9 A9.2 — response cache (24h TTL by symbol).
+        # Sprint 9 A9.2 — response cache (TTL + freshness fingerprint by symbol).
+        # Parmak izi build'den ONCE alinir: build sirasinda DB degisirse bir
+        # sonraki istek miss olur (bayat yanit servis edilmez).
         normalized = str(symbol).upper().strip()
-        cached = _cache.get(normalized)
+        fingerprint = _freshness_fingerprint(normalized)
+        cached = _cache.get(normalized, fingerprint)
         if cached is not None:
             return cached
 
@@ -80,7 +88,7 @@ def get_analysis(symbol: str) -> AnalysisResponse:
             audit_append(result, log_path=_AUDIT_LOG_PATH)
         except Exception:  # audit basarisizligi response'u bozmasin
             pass
-        _cache.set(normalized, result)
+        _cache.set(normalized, result, fingerprint)
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

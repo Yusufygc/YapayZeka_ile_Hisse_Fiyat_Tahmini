@@ -9,6 +9,28 @@ import sys
 from PySide6.QtCore import QObject, Signal, QProcess, QProcessEnvironment
 
 
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+
+def resolve_python_interpreter(project_root: str = None, environ=None) -> str:
+    """Alt süreç yorumlayıcısını çözer.
+
+    Sıra: AI_CORE_PYTHON (dosya varsa) -> proje .venv python -> sys.executable.
+    """
+    env = os.environ if environ is None else environ
+    root = project_root or _PROJECT_ROOT
+    override = env.get("AI_CORE_PYTHON")
+    if override and os.path.isfile(override):
+        return override
+    if os.name == "nt":
+        venv_python = os.path.join(root, ".venv", "Scripts", "python.exe")
+    else:
+        venv_python = os.path.join(root, ".venv", "bin", "python")
+    if os.path.isfile(venv_python):
+        return venv_python
+    return sys.executable
+
+
 class ProcessRunner(QObject):
     """
     QProcess tabanlı izole alt süreç yöneticisi.
@@ -26,11 +48,9 @@ class ProcessRunner(QObject):
         self.process.finished.connect(self._handle_finished)
         self.process.setProcessChannelMode(QProcess.SeparateChannels)
 
-        # Kullanıcının belirttiği conda ortamı python yorumlayıcısı
-        self.conda_python = r"C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe"
-        if not os.path.exists(self.conda_python):
-            # Fallback to current sys.executable if conda path doesn't exist
-            self.conda_python = sys.executable
+        # AI_CORE_PYTHON -> proje .venv -> sys.executable
+        # (attribute adı geriye dönük uyumluluk için korunur)
+        self.conda_python = resolve_python_interpreter()
 
     def start_process(self, module_name: str, args: list[str]):
         """
