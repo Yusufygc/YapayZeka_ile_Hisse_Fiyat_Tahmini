@@ -711,7 +711,7 @@ class WalkForwardEvaluationWorkflow(_EvaluationWorkflowBase):
             })
             self.dataset_metadata["signal_threshold_config"] = self._signal_threshold_metadata()
 
-        if getattr(self, "enable_signal_execution_calibration", True) and signal_calibration_backtest_inputs:
+        if self.enable_signal_execution_calibration and signal_calibration_backtest_inputs:
             return self._calibrate_walk_forward_signal_parameters(
                 wf_backtest_inputs=signal_calibration_backtest_inputs,
                 wf_evaluation_backtest_inputs=signal_evaluation_backtest_inputs,
@@ -719,8 +719,13 @@ class WalkForwardEvaluationWorkflow(_EvaluationWorkflowBase):
                 suffix="wf_calibration",
             )
 
+        execution_status = (
+            "disabled_by_config"
+            if not self.enable_signal_execution_calibration
+            else "skipped_insufficient_signal_calibration_folds"
+        )
         self.signal_threshold_calibration_summary.update({
-            "execution_calibration_status": "skipped_insufficient_signal_calibration_folds",
+            "execution_calibration_status": execution_status,
             "signal_calibration_split": signal_split_metadata,
             "final_holdout_used": False,
         })

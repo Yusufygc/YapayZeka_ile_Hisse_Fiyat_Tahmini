@@ -1,3 +1,13 @@
+## [2026-11-15] Bugfix | Sinyal yürütme kalibrasyonu bayrağı config'e uyuyor
+
+- `ExecutionConfig.enable_signal_execution_calibration` (varsayılan `False`) `EvaluationContext`'te
+  yoktu; workflow `getattr(..., True)` ile hatayı yutup kalibrasyonu her koşuda çalıştırıyordu.
+  Alan context'e eklendi (`from_config` otomatik eşler), workflow bayrağı doğrudan okur.
+- **Davranış değişikliği (kullanıcı kararı):** varsayılan koşularda WF sinyal yürütme
+  kalibrasyonu artık çalışmaz; `execution_calibration_status="disabled_by_config"`. Açmak için
+  `ExecutionConfig(enable_signal_execution_calibration=True)` (signal_research V2/V3 bunu yapar).
+- 926 test geçiyor.
+
 ## [2026-11-15] Refactor | Derin denetim Faz 3–4: operasyonel açıklar, nightly, sahte DI
 
 - F3 önbellek tazelik parmak izi + TTL 3600, F14 GUI sabit yol (`fc2e19e`).
@@ -6,8 +16,6 @@
 - Sahte DI katmanı kaldırıldı (`d9ec389`): EvaluationManager 1003->134, ModelTrainer 452->274.
 - Bugfix (`26c1e1c`): final holdout interval kalibrasyonu WF girdisini okuyamıyordu, üretimde
   `interval_calib` hep None idi; artık `EvaluationState.wf_backtest_inputs`.
-- Açık: `enable_signal_execution_calibration` config bayrağı okunmuyor (AttributeError getattr
-  ile yutuluyor, fiilen hep True) — davranış değişikliği olduğu için kullanıcı kararı bekliyor.
   DataManager property yönlendirmesi ertelendi.
 - Güncellenen sayfalar: `architecture.md`, `e1-owner-forward-epic.md`, `index.md`, arşiv yolları.
 

@@ -342,7 +342,8 @@ def test_trial_count_for_metrics_reflects_final_trials_after_adaptive_expansion(
 
 
 def test_wf_backtest_trial_count_is_models_times_calibration_trials(tmp_path):
-    manager = _make_manager(tmp_path)
+    # Yurutme kalibrasyonu varsayilan kapali (ExecutionConfig); bu test onu acar.
+    manager = _make_manager(tmp_path, enable_signal_execution_calibration=True)
     fixture = _wf_fixture()
 
     def fake_calibration(**kwargs):

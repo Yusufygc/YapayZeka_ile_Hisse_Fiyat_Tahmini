@@ -301,6 +301,11 @@ Modes:
 
 ## Signal Calibration
 
+> **2026-11-15:** WF sinyal yürütme kalibrasyonu (grid arama + OOS onayı) yalnız
+> `ExecutionConfig.enable_signal_execution_calibration=True` iken çalışır (varsayılan `False`).
+> Önceden bayrak okunmadığı için her koşuda çalışıyordu. Kalite eşiği kalibrasyonu
+> (`_calibrate_signal_quality_thresholds`) bayraktan bağımsızdır.
+
 Execution-parameter calibration is behavior-preserving and restricted to
 walk-forward training inputs. The calibration flow is decomposed into trial
 generation, trial evaluation, adaptive expansion, OOS confirmation, report-frame

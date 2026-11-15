@@ -68,6 +68,9 @@ class EvaluationContext:
     signal_calibration_require_oos_confirmation: bool = True
     signal_calibration_min_eval_excess_return: float = 0.0
     signal_calibration_min_eval_sharpe: float = 0.0
+    # ExecutionConfig ile ayni varsayilan (False). Onceden context'te yoktu; workflow
+    # AttributeError'u getattr(..., True) ile yutup kalibrasyonu hep calistiriyordu.
+    enable_signal_execution_calibration: bool = False
     signal_calibration_objective: str = "risk_adjusted"
     signal_calibration_profile: str = "production"
     signal_calibration_sampler: str = "adaptive_stratified"
