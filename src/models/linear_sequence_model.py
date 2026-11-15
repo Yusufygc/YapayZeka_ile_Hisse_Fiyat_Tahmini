@@ -50,7 +50,7 @@ except ImportError:  # pragma: no cover - minimal test runtimes
 
     class _PickleJoblib:
         @staticmethod
-        def dump(obj, path):
+        def dump(obj, path, **_kwargs):
             with open(path, "wb") as handle:
                 pickle.dump(obj, handle)
 
@@ -103,6 +103,7 @@ class _BaseLinearSequenceModel(BaseModel):
                 "extra_state": self._extra_state(),
             },
             path,
+            compress=3,
         )
         print(f"[OK] {self.model_name} sequence baseline kaydedildi -> {path}")
 

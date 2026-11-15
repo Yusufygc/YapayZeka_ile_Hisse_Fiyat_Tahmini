@@ -24,7 +24,7 @@ class RidgeReturnModel(BaseModel):
         return self.model.predict(X_test)
 
     def save(self, path: str) -> None:
-        joblib.dump(self.model, path)
+        joblib.dump(self.model, path, compress=3)
         print(f"[OK] Ridge return baseline kaydedildi -> {path}")
 
     def load(self, path: str) -> None:
@@ -49,7 +49,7 @@ class ElasticNetReturnModel(BaseModel):
         return self.model.predict(X_test)
 
     def save(self, path: str) -> None:
-        joblib.dump(self.model, path)
+        joblib.dump(self.model, path, compress=3)
         print(f"[OK] ElasticNet return baseline kaydedildi -> {path}")
 
     def load(self, path: str) -> None:

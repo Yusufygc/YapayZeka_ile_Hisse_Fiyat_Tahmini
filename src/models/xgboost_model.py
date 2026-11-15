@@ -196,7 +196,7 @@ class XGBoostModel(BaseModel):
 
     def save(self, path: str) -> None:
         """Modeli .pkl olarak kaydeder."""
-        joblib.dump(self.model, path)
+        joblib.dump(self.model, path, compress=3)
         print(f"[OK] XGBoost modeli kaydedildi -> {path}")
 
     def load(self, path: str) -> None:

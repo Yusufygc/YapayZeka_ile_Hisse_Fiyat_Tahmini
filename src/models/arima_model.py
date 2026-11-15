@@ -22,7 +22,7 @@ except ImportError:  # pragma: no cover - minimal test runtimes
 
     class _PickleJoblib:
         @staticmethod
-        def dump(obj, path):
+        def dump(obj, path, **_kwargs):
             with open(path, "wb") as handle:
                 pickle.dump(obj, handle)
 
@@ -97,6 +97,7 @@ class ARIMAModel(BaseModel):
                 "model_fit": self.model_fit,
             },
             path,
+            compress=3,
         )
         print(f"[OK] ARIMA baseline kaydedildi -> {path}")
 

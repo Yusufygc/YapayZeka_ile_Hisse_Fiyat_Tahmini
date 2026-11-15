@@ -78,7 +78,27 @@ def write_validation_and_quality_reports(pipeline: Any) -> None:
         print(f"  [WARN] Validation/data quality raporlari kaydedilemedi: {exc}")
 
 
-def write_run_manifest(pipeline: Any) -> None:
+def _read_started_at(manifest_path: str) -> Optional[str]:
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as fh:
+            prior = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+    value = prior.get("started_at") if isinstance(prior, dict) else None
+    return str(value) if value else None
+
+
+def write_run_manifest(
+    pipeline: Any,
+    status: str = "completed",
+    error: Optional[BaseException] = None,
+) -> None:
+    """Run manifest'ini yazar.
+
+    `status`: "running" (run basinda), "completed", "failed" veya "interrupted".
+    Run basinda "running" yazilir; surec sert olarak olurse manifest "running"
+    kalir (cokmus run'in izi).
+    """
     def _md5_file(path: str) -> str:
         h = hashlib.md5()
         try:
@@ -131,9 +151,13 @@ def write_run_manifest(pipeline: Any) -> None:
     except Exception as exc:
         logger.warning(f"Error parsing signal config for manifest: {exc}")
 
+    manifest_path = os.path.join(pipeline.outputs_dir, "run_manifest.json")
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
     manifest = {
         "run_id": pipeline.run_id,
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "status": status,
+        "started_at": _read_started_at(manifest_path) or now_iso,
+        "generated_at": now_iso,
         "stock_symbol": pipeline.stock_symbol,
         "data_hash": _md5_file(pipeline.data_file),
         "feature_pipeline_version": getattr(pipeline._cfg.data, "feature_mode", "unknown"),
@@ -156,8 +180,14 @@ def write_run_manifest(pipeline: Any) -> None:
         "lib_versions": _lib_versions(),
     }
 
-    manifest_path = os.path.join(pipeline.outputs_dir, "run_manifest.json")
+    if status != "running":
+        manifest["finished_at"] = now_iso
+    if error is not None:
+        manifest["error"] = {"type": type(error).__name__, "message": str(error)[:500]}
+
     os.makedirs(pipeline.outputs_dir, exist_ok=True)
-    with open(manifest_path, "w", encoding="utf-8") as fh:
+    tmp_path = manifest_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2, ensure_ascii=False)
-    print(f"  [OK] Run manifest yazildi -> {manifest_path}")
+    os.replace(tmp_path, manifest_path)
+    print(f"  [OK] Run manifest yazildi (status={status}) -> {manifest_path}")

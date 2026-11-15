@@ -3,17 +3,12 @@
 orchestrator.py - Ana ForecastingPipeline sinifi
 """
 
-import json
 import os
-import shutil
 import hashlib
 import re
-import subprocess
-import sys
-import time
 import warnings
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 from typing import List, Optional, Tuple
@@ -39,6 +34,7 @@ from src.pipeline.model_scope import (
 )
 from src.pipeline.model_trainer import ModelTrainer
 from src.pipeline.horizon_policy import assert_kola_production_horizon_supported
+from src.utils.output_paths import sync_latest_output
 from src.utils.reproducibility import set_global_seed
 from src.pipeline.artifacts import (
     write_validation_and_quality_reports,
@@ -265,69 +261,21 @@ class ForecastingPipeline:
     def _write_validation_and_quality_reports(self) -> None:
         write_validation_and_quality_reports(self)
 
-    def _write_run_manifest(self) -> None:
-        write_run_manifest(self)
+    def _write_run_manifest(self, status: str = "completed", error: Optional[BaseException] = None) -> None:
+        write_run_manifest(self, status=status, error=error)
+
+    def _write_running_manifest(self) -> None:
+        """Run basinda status="running" manifest; yazilamazsa run'i durdurmaz."""
+        try:
+            self._write_run_manifest(status="running")
+        except OSError as exc:
+            logger.warning("Baslangic run manifest yazilamadi: %s", exc)
 
     def _sync_latest_output(self) -> None:
-        root = os.path.abspath(self.output_root)
-        run_dir = os.path.abspath(self.outputs_dir)
-        latest_dir = os.path.abspath(self.latest_dir)
-        tmp_dir = os.path.abspath(os.path.join(self.output_root, f"latest.__tmp__{self.run_id}"))
-        lock_path = os.path.abspath(os.path.join(self.output_root, ".latest_sync.lock"))
-        root_prefix = root + os.sep
-        if not (
-            run_dir.startswith(root_prefix)
-            and latest_dir.startswith(root_prefix)
-            and tmp_dir.startswith(root_prefix)
-            and lock_path.startswith(root_prefix)
-        ):
-            raise RuntimeError("Output latest senkronizasyon hedefi output root disinda.")
-        if os.path.exists(tmp_dir):
-            shutil.rmtree(tmp_dir)
-        shutil.copytree(run_dir, tmp_dir)
-        try:
-            lock_fd = self._acquire_latest_sync_lock(lock_path)
-        except Exception:
-            if os.path.exists(tmp_dir):
-                shutil.rmtree(tmp_dir)
-            raise
-        try:
-            if os.path.exists(latest_dir):
-                shutil.rmtree(latest_dir)
-            os.replace(tmp_dir, latest_dir)
-        finally:
-            try:
-                os.close(lock_fd)
-            finally:
-                if os.path.exists(lock_path):
-                    os.unlink(lock_path)
-                if os.path.exists(tmp_dir):
-                    shutil.rmtree(tmp_dir)
-        print(f"  [OK] Latest output senkronlandi -> {latest_dir}")
-
-    @staticmethod
-    def _acquire_latest_sync_lock(
-        lock_path: str,
-        *,
-        timeout_seconds: float = 60.0,
-        stale_seconds: float = 900.0,
-    ) -> int:
-        start = time.monotonic()
-        while True:
-            try:
-                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, f"pid={os.getpid()} time={time.time()}\n".encode("utf-8"))
-                return fd
-            except FileExistsError:
-                try:
-                    if time.time() - os.path.getmtime(lock_path) > stale_seconds:
-                        os.unlink(lock_path)
-                        continue
-                except OSError:
-                    continue
-                if time.monotonic() - start >= timeout_seconds:
-                    raise TimeoutError(f"Latest output lock alinamadi: {lock_path}")
-                time.sleep(0.25)
+        latest_dir = sync_latest_output(
+            self.output_root, self.outputs_dir, self.latest_dir, self.run_id
+        )
+        print(f"  [OK] Latest output senkronlandi (hafif kopya + isaretci) -> {latest_dir}")
 
     def _auto_generate_forecast_after_training(self) -> None:
         if not self.auto_generate_forecast_after_training:
@@ -361,7 +309,26 @@ class ForecastingPipeline:
 
     def run_all(self) -> None:
         self.setup_environment()
+        self._write_running_manifest()
+        try:
+            self._execute_run()
+        except KeyboardInterrupt as exc:
+            self._finalize_manifest("interrupted", exc)
+            raise
+        except Exception as exc:
+            self._finalize_manifest("failed", exc)
+            raise
+        self._write_run_manifest(status="completed")
+        self._sync_latest_output()
+        print("\n  [OK] Pipeline completed successfully!")
 
+    def _finalize_manifest(self, status: str, error: BaseException) -> None:
+        try:
+            self._write_run_manifest(status=status, error=error)
+        except OSError as exc:
+            logger.warning("Run manifest '%s' durumuna guncellenemedi: %s", status, exc)
+
+    def _execute_run(self) -> None:
         self.data_manager.ingest_and_engineer()
         self.data_manager.split_data(self.validation_mode)
         self._write_validation_and_quality_reports()

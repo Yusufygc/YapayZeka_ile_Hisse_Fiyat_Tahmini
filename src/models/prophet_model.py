@@ -133,7 +133,7 @@ class ProphetModel(BaseModel):
     def save(self, path: str) -> None:
         if joblib is None:
             raise ImportError("joblib paketi kurulu degil; Prophet modeli kaydedilemez.")
-        joblib.dump(self.model, path)
+        joblib.dump(self.model, path, compress=3)
         print(f"[OK] Prophet modeli kaydedildi -> {path}")
 
     def load(self, path: str) -> None:

@@ -54,8 +54,8 @@ def save_forecast_artifact_package(
         raise ForecastArtifactError("model_path is required for artifact metadata")
     paths = artifact_sidecar_paths(model_path)
     os.makedirs(os.path.dirname(model_path) or ".", exist_ok=True)
-    joblib.dump(scaler_X, paths["scaler_X"])
-    joblib.dump(scaler_y, paths["scaler_y"])
+    joblib.dump(scaler_X, paths["scaler_X"], compress=3)
+    joblib.dump(scaler_y, paths["scaler_y"], compress=3)
     payload = dict(metadata)
     payload.setdefault("artifact_version", "forecast_artifact_v1")
     payload["model_path"] = model_path

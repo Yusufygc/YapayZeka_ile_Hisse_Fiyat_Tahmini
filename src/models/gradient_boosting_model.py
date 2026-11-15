@@ -17,7 +17,7 @@ except ImportError:  # pragma: no cover - minimal test runtimes
 
     class _PickleJoblib:
         @staticmethod
-        def dump(obj, path):
+        def dump(obj, path, **_kwargs):
             with open(path, "wb") as handle:
                 pickle.dump(obj, handle)
 
@@ -78,7 +78,7 @@ class LightGBMReturnModel(BaseModel):
     def save(self, path: str) -> None:
         if self.model is None:
             raise RuntimeError("Kaydedilecek LightGBM modeli yok.")
-        joblib.dump({"params": self.params, "model": self.model}, path)
+        joblib.dump({"params": self.params, "model": self.model}, path, compress=3)
         print(f"[OK] LightGBM return baseline kaydedildi -> {path}")
 
     def load(self, path: str) -> None:

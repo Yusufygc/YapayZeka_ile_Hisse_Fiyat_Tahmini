@@ -34,7 +34,7 @@ class NaiveLastValueModel(BaseModel):
         return np.full(len(X_test), self.last_value, dtype=float)
 
     def save(self, path: str) -> None:
-        joblib.dump({"last_value": self.last_value}, path)
+        joblib.dump({"last_value": self.last_value}, path, compress=3)
         print(f"[OK] NaiveLastValue baseline kaydedildi -> {path}")
 
     def load(self, path: str) -> None:
@@ -57,7 +57,7 @@ class NaiveZeroReturnModel(BaseModel):
         return np.zeros(len(X_test), dtype=float)
 
     def save(self, path: str) -> None:
-        joblib.dump({"type": "zero_return"}, path)
+        joblib.dump({"type": "zero_return"}, path, compress=3)
         print(f"[OK] NaiveZeroReturn baseline kaydedildi -> {path}")
 
     def load(self, path: str) -> None:
@@ -83,7 +83,7 @@ class NaiveDriftModel(BaseModel):
         return np.full(len(X_test), self.mean_return, dtype=float)
 
     def save(self, path: str) -> None:
-        joblib.dump({"mean_return": self.mean_return}, path)
+        joblib.dump({"mean_return": self.mean_return}, path, compress=3)
         print(f"[OK] NaiveDrift baseline kaydedildi -> {path}")
 
     def load(self, path: str) -> None:
