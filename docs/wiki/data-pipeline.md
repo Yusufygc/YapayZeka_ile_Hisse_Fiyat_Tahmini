@@ -270,7 +270,7 @@ To prevent transient data-gathering failures (such as EVDS API errors) from pois
 `src/features/pooled_feature_cache.py::PooledFeatureCache`, `PooledPanelLoader._engineer_features` içinde
 `FeaturePipeline.engineer_features` (macro_df=None, takvim kapalı) sonucunu sembol başına saklar.
 `PooledLoaderConfig.feature_cache_dir` (varsayılan `None` = kapalı). Açık olduğu yerler:
-`src/serving/nightly.py` (`--feature-cache-dir`, varsayılan `data/feature_cache/pooled`; kapatma `--no-feature-cache`)
+`src/serving/nightly.py` (varsayılan KAPALI: veri her gece değiştiği için hep ıska; açmak için `--feature-cache`, dizin `--feature-cache-dir`)
 ve `tools/e2_kolb_validity_report.py` (aynı bayraklar). Çapraz-kesit özellikler (`pooled_dataset.py`) önbelleksizdir.
 
 - **Depolama:** `{dir}/{SEMBOL}.parquet` (zstd), sembol başına TEK girdi (üzerine yazılır; dizin sembol sayısıyla sınırlı, TTL yok).

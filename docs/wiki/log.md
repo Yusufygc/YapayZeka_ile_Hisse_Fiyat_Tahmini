@@ -1,3 +1,7 @@
+## [2026-11-15] Config | Nightly özellik önbelleği varsayılan kapalı
+
+- Gece işinde veri her gün değiştiği için her sembol ıska oluyor ve yazma ~11 sn ekliyordu (soğuk 65,1 sn vs önbelleksiz 53,7 sn). `src/serving/nightly.py` artık varsayılan önbelleksiz; `--feature-cache` ile açılır (`--no-feature-cache` kaldırıldı). `tools/e2_kolb_validity_report.py` açık kalır (aynı veride tekrar koşular).
+
 ## [2026-11-15] Feature | Pooled sembol başı Parquet özellik önbelleği
 
 - Yeni: `src/features/pooled_feature_cache.py` (sembol başı Parquet, anahtar = kod parmak izi + girdi içeriği + mod/takvim + sembol, atomik yazma, bozuk dosya -> miss) ve `src/features/code_fingerprint.py` (AST ile transitif kaynak + pandas/numpy/ta sürümü sha256). `PooledLoaderConfig.feature_cache_dir` (varsayılan kapalı); nightly (`--feature-cache-dir`, `--no-feature-cache`) ve `tools/e2_kolb_validity_report.py` açık. `loader_meta["feature_cache"]` = {enabled, hits, misses, errors}.

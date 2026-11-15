@@ -161,10 +161,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "ornek: --fallback-dir data/yedek (K7)")
     ap.add_argument("--quarantine-jumps", action=argparse.BooleanOptionalAction, default=True,
                     help="|1g log-getiri|>0.30 olcek kiriklari etrafindaki satirlari at (K8)")
+    # Gece isinde veri her gun degisir -> her sembol iska + ~11 sn yazma maliyeti.
+    # Bu yuzden varsayilan KAPALI; ayni gun tekrar kosularinda --feature-cache ile ac.
+    ap.add_argument("--feature-cache", action="store_true",
+                    help="sembol basi Parquet ozellik onbellegini ac (ayni veride tekrar kosular icin)")
     ap.add_argument("--feature-cache-dir", default=os.path.join("data", "feature_cache", "pooled"),
-                    help="sembol basi Parquet ozellik onbellegi (girdi/kod degismediyse yeniden hesaplanmaz)")
-    ap.add_argument("--no-feature-cache", action="store_true",
-                    help="ozellik onbellegini kapat (her sembol yeniden hesaplanir)")
+                    help="ozellik onbellegi dizini (--feature-cache ile)")
     ap.add_argument("--sleep-s", type=float, default=0.0, help="yalniz tekli dusus yolunda semboller arasi bekleme")
     ap.add_argument("--skip-data", action="store_true")
     ap.add_argument("--skip-trading-gate", action="store_true")
@@ -207,7 +209,7 @@ def run_scoring(args: argparse.Namespace) -> int:
             data_dir=args.data_dir, universe_file=args.universe,
             target_horizon=args.horizon, min_rows=args.min_rows,
             fallback_dirs=tuple(args.fallback_dir), quarantine_jumps=args.quarantine_jumps,
-            feature_cache_dir=None if args.no_feature_cache else args.feature_cache_dir),
+            feature_cache_dir=args.feature_cache_dir if args.feature_cache else None),
         min_names=args.min_names, limit=args.limit)
     full_aug, aug, panel, feats, ci = ds.full, ds.aug, ds.labeled, ds.feats, ds.cat_idx
     # K5: segment kovalari nedensel (tarih-bazli); serving tablosu skorlama gunu satirlarindan.
