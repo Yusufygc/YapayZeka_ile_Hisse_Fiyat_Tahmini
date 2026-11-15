@@ -146,6 +146,7 @@ existing per-symbol product (it does not change training facades or
 | Module | Responsibility |
 |---|---|
 | `src/data/pooled_loader.py` | Long panel loader across ~589 stock CSVs; causal conditioning (sector, symbol_id, liq_log, vol) |
+| `src/data/pooled_parallel.py` | Pooled loader sembol-paralel hesap (loky süreç havuzu, `PooledLoaderConfig.n_jobs`); işçi hafif import, sonuç sekansiyelle birebir |
 | `src/data/cross_sectional.py` | Within-date rank target + cross-sectional rank/zscore features (leakage-safe) |
 | `src/models/global_pooled_model.py` | Pooled LightGBM (`GlobalPooledModel`) + feature builder |
 | `src/models/torch_mlp_model.py` | Pooled DEEP model: embedding'li feedforward MLP (`TorchMLPModel`), harness/serving uyumlu (Faz 9) |

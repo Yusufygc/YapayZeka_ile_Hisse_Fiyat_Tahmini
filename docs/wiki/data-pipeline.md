@@ -346,6 +346,43 @@ Amaç: panel kurulumunda 585 CSV'yi her koşuda okuyup `clean_ohlcv_csv` ile tem
   Not: gece işinde DataUpdater her CSV'ye yeni gün ekler -> her sembol `changed` olur; depo asıl kazancı aynı veride tekrar koşularda (doğrulama raporu, skorlama tekrarı, araştırma) sağlar.
 - Testler: `tests/test_clean_store.py`, `tests/test_data_services.py::test_dataset_hash_reflects_data_content_not_only_metadata`.
 
+### Pooled panel sembol-paralel hesap (2026-11-15)
+
+`PooledLoaderConfig.n_jobs` (varsayılan `1` = eski sekansiyel yol aynen; modül düzeyinde `FeaturePipeline`'ı patch'leyen testler bunu kullanır) ve
+`parallel_chunk_size` (0 = otomatik). `n_jobs=-1` -> `min(os.cpu_count()-1, 8)`; `>1` -> o kadar işçi; `0`/`<-1` -> `ValueError`.
+Açık: `src/serving/nightly.py` (`--n-jobs`, varsayılan -1) ve `tools/e2_kolb_validity_report.py` (`--n-jobs`, varsayılan -1).
+
+- **Tasarım (`src/data/pooled_parallel.py`):** işçinin yaptığı iş `PooledPanelLoader._engineer_symbol_safe` ile AYNI koddur (sekansiyel döngü de bunu çağırır; ayrı "işçi kopyası" yok).
+  `load()` sırasıyla: depo `refresh` (ana süreçte) -> sembol listesi -> delisted-hariç olanlar ana süreçte `delisted_excluded` -> kalanlar `SymbolTask`
+  (sembol, sektör, delisting tarihi, CSV yolu, depodan gelen temiz çerçeve) olarak `chunk`'lara bölünür -> `joblib.Parallel(backend="loky")` -> `ChunkResult`
+  (sembol sırasında; sembol başına `SymbolResult`: çerçeve, `report` durumu, `rejected_rows`, `quarantined_days`; parça başına önbellek `hits/misses/errors` + işçi WARNING logları).
+  Ana süreç sonuçları SEMBOL SIRASINDA tek döngüde birleştirir (report/rejected/quarantine sözlüklerinin ekleme sırası dahil sekansiyelle aynı), önbellek sayaçlarını toplar,
+  işçi uyarılarını (`_CaptureHandler` ile toplanır) ana süreç logger'larından yeniden yayınlar (`replay_logs`). Sembol başı hata `error:...` aynen (`_engineer_symbol_safe`).
+- **Backend: joblib/loky (süreç).** İş parçacığı GIL'e takılır (pandas/ta). `ProcessPoolExecutor` ile ölçüm eşdeğer (load 7,8-8,0 s vs 6,8-8,1 s; tek seferlik koşuda loky yeniden kullanımı kazandırmaz);
+  loky seçildi: cloudpickle, BLAS/OMP iş parçacığı sınırlaması işçide otomatik, `max_nbytes=None` (DataFrame'ler memmap'e yazılmaz), işçi çökmesinde net hata.
+- **Çerçeve geçirme:** depo açıkken ana süreç zaten 581 temiz çerçeveyi yükler (~0,4 s, toplam ~29 MB) -> parça başına yalnız o parçanın çerçeveleri pickle'lanır (işçiler Parquet'i yeniden okumaz, tüm panel her işçiye gitmez).
+  Depo kapalıyken işçi yolu alır ve CSV'yi KENDİ temizler (temizleme de paralelleşir: load 34,9 s -> 8,6 s). `refresh` her zaman ana süreçte.
+- **Parça boyutu:** 0 = `clamp(ceil(N / (işçi*4)), 4, 20)` (işçi başı ~4 görev, yük dengesi). Ölçüm: parça 5/20/40, 8 işçi -> 21,1 / 20,3 / 20,0 s (fark gürültü düzeyi); 581 sembolde otomatik ~18-20.
+- **İşçi import maliyeti:** `import src.data.pooled_parallel + pooled_loader + pooled_feature_cache` ~0,65 s (723 modül; `ta`, `pyarrow` var; tensorflow/torch/sklearn/lightgbm/scipy/matplotlib YOK; `engineer_features` çalıştıktan sonra da yok).
+  `pooled_parallel` üst düzeyinde yalnız stdlib+pandas import eder, `pooled_loader` işçi fonksiyonunda tembel yüklenir (döngüsel import yok). Soğuk havuz başlatma ~0,7-1 s (ilk `n_jobs=8` yükleme 7,5 s vs sıcak 6,8 s).
+- **Özellik önbelleği işçide:** işçi parça başına `PooledFeatureCache(dir, fingerprint=ana süreçten)` kurar (parmak izi tekrar hesaplanmaz); her sembol kendi dosyasını okur/yazar (atomik yazma zaten var); sayaçlar parça başına delta döner, ana süreç toplar -> `feature_cache_stats` sekansiyelle aynı.
+- **Ölçüm (581 sembol, 20 mantıksal CPU, nightly varsayılan yükleyici: min_rows=300, karantina açık, depo sıcak, önbellek kapalı):**
+
+  | n_jobs | `load()` | `build_pooled_dataset` toplam |
+  |---|---|---|
+  | 1 (sekansiyel) | 29,2 s | 42,8 s |
+  | 4 | 9,8 s | 23,6 s |
+  | 6 | 7,9 s | - |
+  | 8 (= `-1` otomatik) | 6,8-7,5 s | 21,0-21,7 s |
+  | 12 | 6,8 s | 21,0 s |
+  | 16 | 5,2 s | 18,7 s |
+  | 19 | 5,1 s | - |
+
+  Depo kapalı: 34,9 s -> 8,6 s (8 işçi). Toplamın ~14 s'si çapraz-kesit adımlar (paralel değil). Sınır 8 seçildi: 8->16 işçi yalnız ~1,5-2 s ek kazanç (toplamın ~%8'i), bellek/CPU gece işinin geri kalanıyla paylaşılıyor; gerekirse `n_jobs=16` elle verilir.
+- **Birebirlik:** `n_jobs=1` ile `-1/4/8/12/16` ve parça 5/20/40 için `full`, `aug`, `labeled` `assert_frame_equal(check_exact=True)`; `feats`, `cat_idx`, `loader_report` (sıra dahil), `loader_meta` (rejected_rows, quarantined_days, stale_symbols, feature_cache...) eşit.
+- **Dikkat:** Windows'ta betikler `if __name__ == "__main__":` korumalı olmalı (nightly ve doğrulama raporu öyle). `limit>0` (`build_pooled_dataset`) paralel yolda da çalışır; tek sembol/`n_jobs=1` sekansiyele düşer.
+- Testler: `tests/test_pooled_parallel.py` (gerçek FeaturePipeline + loky: sekansiyelle birebir, too_short/delisted/rejected/karantina; önbellek sayaç toplama; stub ile hata satırı, sıra, parça bağımsızlığı, delisted_excluded, log yeniden yayını).
+
 ### Macro feature-cache poisoning guard (2026-06-02 fix)
 
 The feature-cache key already includes `use_macro`, but a transient macro-fetch

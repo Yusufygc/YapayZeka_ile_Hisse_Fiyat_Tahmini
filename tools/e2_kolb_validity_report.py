@@ -120,6 +120,9 @@ def main() -> None:
     ap.add_argument("--clean-store-dir", default=os.path.join("data", "clean"),
                     help="temizlenmis OHLCV Parquet deposu (CSV kaynak kalir)")
     ap.add_argument("--no-clean-store", action="store_true", help="Parquet temiz veri deposunu kapat")
+    ap.add_argument("--n-jobs", type=int, default=-1,
+                    help="sembol-paralel ozellik hesabi isci sayisi: -1 otomatik (min(cpu-1, 8)), 1 sekansiyel; "
+                         "sonuc n_jobs'tan bagimsiz birebirdir")
     ap.add_argument("--out-dir", default=os.path.join("outputs", "_audits"))
     args = ap.parse_args()
 
@@ -130,7 +133,8 @@ def main() -> None:
                            fallback_dirs=tuple(args.fallback_dir),
                            quarantine_jumps=args.quarantine_jumps,
                            feature_cache_dir=None if args.no_feature_cache else args.feature_cache_dir,
-                           clean_store_dir=None if args.no_clean_store else args.clean_store_dir),
+                           clean_store_dir=None if args.no_clean_store else args.clean_store_dir,
+                           n_jobs=args.n_jobs),
         min_names=args.min_names, limit=args.limit)
     aug = ds.aug
     _log(f"panel: {len(aug)} etiketli satir, {aug['symbol'].nunique()} sembol, "

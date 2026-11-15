@@ -170,6 +170,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="temizlenmis OHLCV Parquet deposu (CSV kaynak kalir; yalniz degisenler yeniden temizlenir)")
     ap.add_argument("--no-clean-store", action="store_true",
                     help="Parquet temiz veri deposunu kapat (her kosuda tum CSV'ler temizlenir)")
+    ap.add_argument("--n-jobs", type=int, default=-1,
+                    help="sembol-paralel ozellik hesabi isci sayisi: -1 otomatik (min(cpu-1, 8)), 1 sekansiyel; "
+                         "sonuc n_jobs'tan bagimsiz birebirdir")
     ap.add_argument("--sleep-s", type=float, default=0.0, help="yalniz tekli dusus yolunda semboller arasi bekleme")
     ap.add_argument("--skip-data", action="store_true")
     ap.add_argument("--skip-trading-gate", action="store_true")
@@ -214,7 +217,8 @@ def run_scoring(args: argparse.Namespace) -> int:
             target_horizon=args.horizon, min_rows=args.min_rows,
             fallback_dirs=tuple(args.fallback_dir), quarantine_jumps=args.quarantine_jumps,
             feature_cache_dir=args.feature_cache_dir if args.feature_cache else None,
-            clean_store_dir=None if args.no_clean_store else args.clean_store_dir),
+            clean_store_dir=None if args.no_clean_store else args.clean_store_dir,
+            n_jobs=args.n_jobs),
         min_names=args.min_names, limit=args.limit)
     full_aug, aug, panel, feats, ci = ds.full, ds.aug, ds.labeled, ds.feats, ds.cat_idx
     # K5: segment kovalari nedensel (tarih-bazli); serving tablosu skorlama gunu satirlarindan.

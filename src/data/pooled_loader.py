@@ -36,6 +36,8 @@ from src.data.clean_store import CleanStore
 from src.data.freshness import DEFAULT_MAX_BUSINESS_DAYS, warn_if_stale
 from src.data.ohlcv_clean import clean_ohlcv_csv
 from src.data.panel_columns import PIPELINE_RAW_COLS
+from src.data.pooled_parallel import (
+    SymbolTask, SymbolResult, replay_logs, resolve_workers, run_parallel)
 from src.features.feature_pipeline import FeaturePipeline
 from src.features.pooled_feature_cache import PooledFeatureCache
 from src.features.sector_mapping import normalize_symbol  # tests monkeypatch eder
@@ -81,6 +83,18 @@ class PooledLoaderConfig:
     # Temizlenmis OHLCV'nin Parquet deposu (src/data/clean_store.py). CSV'ler kaynak kalir;
     # depo yalniz degisen CSV'leri yeniden temizler. None = kapali (eski per-CSV yol).
     clean_store_dir: str | None = None
+    # Sembol-paralel hesap (src/data/pooled_parallel.py; loky SUREC havuzu). 1 = sekansiyel
+    # (eski yol aynen; modul-seviyesi FeaturePipeline'i patch'leyen testler bunu kullanir),
+    # -1 = otomatik (min(cpu-1, 8)), >1 = o kadar isci. Sonuc n_jobs'tan BAGIMSIZ ve birebirdir.
+    n_jobs: int = 1
+    # Paralel yolda isci basina tek gorevdeki sembol sayisi; 0 = otomatik ([4, 20]).
+    parallel_chunk_size: int = 0
+
+    def __post_init__(self) -> None:
+        if self.n_jobs == 0 or self.n_jobs < -1:
+            raise ValueError(f"n_jobs 1, -1 (otomatik) veya >1 olmali, verilen: {self.n_jobs}")
+        if self.parallel_chunk_size < 0:
+            raise ValueError("parallel_chunk_size >= 0 olmali (0 = otomatik)")
 
 
 class PooledPanelLoader:
@@ -114,16 +128,18 @@ class PooledPanelLoader:
         self._report_survivorship(delisted)
         frames: list[pd.DataFrame] = []
         self._prepare_clean_store()
-        for sym in self._symbols():
+        symbols = self._symbols()
+        todo = [s for s in symbols if not (s in delisted and not self.cfg.include_delisted)]
+        parallel = self._compute_parallel(todo, sector_map, delisted)
+        for sym in symbols:
             if sym in delisted and not self.cfg.include_delisted:
                 self.report[sym] = "delisted_excluded"
                 continue
-            try:
-                f = self._engineer_symbol(
+            if parallel is None:
+                f = self._engineer_symbol_safe(
                     sym, sector_map.get(normalize_symbol(sym), "Unknown"), delisted.get(sym))
-            except Exception as exc:  # tek sembol hatasi paneli durdurmasin
-                self.report[sym] = f"error:{str(exc)[:60]}"
-                continue
+            else:
+                f = self._merge_result(parallel[sym])
             if f is None or f.empty:
                 continue
             frames.append(f)
@@ -142,6 +158,55 @@ class PooledPanelLoader:
         return panel
 
     # ---------------------------------------------------------------- helpers
+    def _engineer_symbol_safe(
+        self, symbol: str, sector: str, delisted_on: pd.Timestamp | None = None,
+    ) -> pd.DataFrame | None:
+        """`_engineer_symbol` + tek sembol hatasi paneli durdurmasin (report `error:...`).
+
+        Sekansiyel dongu ve paralel iscilerin ORTAK girisi (tek kod yolu)."""
+        try:
+            return self._engineer_symbol(symbol, sector, delisted_on)
+        except Exception as exc:  # tek sembol hatasi paneli durdurmasin; report'a yazilir
+            self.report[symbol] = f"error:{str(exc)[:60]}"
+            return None
+
+    def _compute_parallel(
+        self, todo: list[str], sector_map: dict[str, str], delisted: dict,
+    ) -> dict[str, SymbolResult] | None:
+        """n_jobs != 1 ise sembolleri surec havuzunda hesapla -> {sembol: SymbolResult}.
+        Sekansiyel kalinacaksa (n_jobs=1 / tek is) None."""
+        workers = resolve_workers(self.cfg.n_jobs, len(todo)) if self.cfg.n_jobs != 1 else 1
+        if workers <= 1 or len(todo) <= 1:
+            return None
+        paths = self._symbol_paths()
+        frames = self._clean_frames or {}
+        tasks = [SymbolTask(
+            symbol=s, sector=sector_map.get(normalize_symbol(s), "Unknown"),
+            delisted_on=delisted.get(s),
+            path=paths.get(s) or os.path.join(self.cfg.data_dir, f"{s}.csv"),
+            clean_frame=frames.get(s)) for s in todo]
+        fp = self._fcache.fingerprint if self._fcache else None
+        chunks = run_parallel(tasks, self.cfg, fp, workers, self.cfg.parallel_chunk_size)
+        out: dict[str, SymbolResult] = {}
+        for chunk in chunks:
+            out.update((r.symbol, r) for r in chunk.results)
+            replay_logs(chunk.logs)
+            if self._fcache is not None:
+                self._fcache.hits += chunk.cache["hits"]
+                self._fcache.misses += chunk.cache["misses"]
+                self._fcache.errors += chunk.cache["errors"]
+        return out
+
+    def _merge_result(self, res: SymbolResult) -> pd.DataFrame | None:
+        """Isci yan bilgisini sekansiyel yolun yazacagi sozluklere isle; cerceveyi dondur."""
+        if res.rejected_rows is not None:
+            self.rejected_rows[res.symbol] = res.rejected_rows
+        if res.quarantined_days is not None:
+            self.quarantined_days[res.symbol] = res.quarantined_days
+        if res.status is not None:
+            self.report[res.symbol] = res.status
+        return res.frame
+
     def _symbol_paths(self) -> dict[str, str]:
         """{sembol: csv yolu}. Birincil data_dir once; eksikler fallback_dirs'ten (K7)."""
         if self._paths is None:

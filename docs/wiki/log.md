@@ -1,3 +1,9 @@
+## [2026-11-15] Perf | Pooled panel paralel sembol hesabı
+
+- Yeni: `src/data/pooled_parallel.py` (loky süreç havuzu; `SymbolTask`/`SymbolResult`/`ChunkResult`, `run_chunk` işçisi, parça bölme, işçi uyarı loglarını yeniden yayınlama). `PooledLoaderConfig.n_jobs` (varsayılan 1 = eski yol; -1 = `min(cpu-1, 8)`) ve `parallel_chunk_size` (0 = otomatik 4-20). `PooledPanelLoader._engineer_symbol_safe` hem sekansiyel döngünün hem işçinin ortak girişi; sonuçlar sembol sırasında birleştirilir (report/rejected_rows/quarantined_days/önbellek sayaçları aynen). Nightly ve `e2_kolb_validity_report` `--n-jobs` (varsayılan -1).
+- Gerçek veri (581 sembol, nightly yükleyici, depo sıcak): `load()` 29,2 s -> 6,8-7,5 s (8 işçi), `build_pooled_dataset` 42,8 s -> ~21 s; 16 işçide 18,7 s. `full/aug/labeled/feats/cat_idx/loader_report/loader_meta` n_jobs 1/-1/4/8/12/16 ve parça 5/20/40 için `check_exact` birebir. İşçi import maliyeti ~0,65 s, tensorflow/torch yüklenmez. Ayrıntı: data-pipeline.md.
+- 11 yeni test (`tests/test_pooled_parallel.py`).
+
 ## [2026-11-15] Feature | Parquet temiz veri deposu
 
 - Yeni: `src/data/clean_store.py::CleanStore` (`data/clean/panel.parquet` uzun format + `manifest.parquet`; CSV'ler KAYNAK kalır, depo türevdir). `refresh(paths)`: boyut+mtime_ns hızlı yol -> sha256; yalnız değişen/yeni sembol yeniden temizlenir, kalkanlar düşer, atomik yazım + `csv_lock`; temizleyici kod parmak izi/şema sürümü değişirse veya dosya bozuksa uyarılı tam yeniden kurulum. `load()` sembol çerçeveleri `clean_ohlcv_csv` ile `check_exact` birebir (attrs manifesttan). `content_hash()` = sha256(sürüm + parmak izi + sıralı (sembol, kaynak sha256)).
