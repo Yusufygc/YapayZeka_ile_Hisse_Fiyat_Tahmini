@@ -69,6 +69,14 @@ CREATE TABLE IF NOT EXISTS peer_scores (
     kolb_price_high REAL,
     kolb_horizon_days INTEGER,
     kolb_band_level REAL,
+    risk_sigma_5d REAL,
+    risk_sigma_naive_5d REAL,
+    risk_vol_percentile REAL,
+    risk_level TEXT,
+    risk_z REAL,
+    risk_band_level REAL,
+    risk_horizon_days INTEGER,
+    risk_method TEXT,
     UNIQUE(run_id, symbol),
     FOREIGN KEY(run_id) REFERENCES global_model_runs(run_id)
 );
@@ -84,6 +92,8 @@ _PEER_COLS = [
     "xai_method", "xai_approximate", "xai_error", "xai_generated_at",
     "kolb_price_p50", "kolb_price_low", "kolb_price_high", "kolb_horizon_days",
     "kolb_band_level",
+    "risk_sigma_5d", "risk_sigma_naive_5d", "risk_vol_percentile", "risk_level",
+    "risk_z", "risk_band_level", "risk_horizon_days", "risk_method",
 ]
 
 # Eski DB'lere (run_id<3) eklenen kolonlar: ALTER TABLE ile geriye-uyumlu migrasyon.
@@ -101,6 +111,15 @@ _PEER_MIGRATIONS = {
     "kolb_price_high": "REAL",
     "kolb_horizon_days": "INTEGER",
     "kolb_band_level": "REAL",
+    # Risk (havuzlu oynaklik) tahmini — src/risk; ek (additive) nullable kolonlar.
+    "risk_sigma_5d": "REAL",
+    "risk_sigma_naive_5d": "REAL",
+    "risk_vol_percentile": "REAL",
+    "risk_level": "TEXT",
+    "risk_z": "REAL",
+    "risk_band_level": "REAL",
+    "risk_horizon_days": "INTEGER",
+    "risk_method": "TEXT",
 }
 
 

@@ -149,15 +149,6 @@ def test_probability_source_and_wording():
     assert trend_from_peer(None, None).probability_source is None
 
 
-def test_return_std_scales_with_symbol_vol_ratio():
-    base = trend_from_peer(90.0, 100).return_std
-    assert trend_from_peer(90.0, 100, symbol_vol_ratio=1.0).return_std == pytest.approx(base)
-    assert trend_from_peer(90.0, 100, symbol_vol_ratio=2.0).return_std == pytest.approx(2 * base)
-    # gecersiz oran -> 1.0'a duser
-    assert trend_from_peer(90.0, 100, symbol_vol_ratio=float("nan")).return_std == pytest.approx(base)
-    assert trend_from_peer(90.0, 100, symbol_vol_ratio=-1.0).return_std == pytest.approx(base)
-
-
 # ---------------------------------------------------------------- 3. confidence
 def test_confidence_not_high_when_n_eff_below_50():
     c = peer_confidence(1.5, "outperform", n_eff=30)

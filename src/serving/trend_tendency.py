@@ -31,8 +31,8 @@ etiketlenirken tablo Q2'ye P(yukarı)=0.487 ve +%0.32 veriyordu).
   tradability) ne kadar güvenileceğini AYRI yönetir; düşük güvende eğilim zayıf.
 - Tablo sabitleri model tasarımında kullanılan AYNI OOS dönemde tahmin edildi
   (kalibre edilmiş olasılık değil, in-sample frekans); rejim değişiminde kayabilir.
-- return_std quintile başına sabittir; `symbol_vol_ratio` (sembol trailing vol /
-  evren medyan vol) verilirse sembole göre ölçeklenir.
+- Fiyat bandı genişliği bu modülden DEĞİL, src/risk havuzlu oynaklık modelinden gelir
+  (nightly_scoring.attach_risk_and_band); burada yalnız yön/olasılık/beklenen getiri var.
 """
 from __future__ import annotations
 
@@ -52,10 +52,6 @@ class TrendCalibration:
     # Faz 7 mutlak-yön OOS frekans tablosu (full-evren OOS, quintile Q1..Q5).
     quintile_prob_up: tuple = (0.435, 0.487, 0.509, 0.519, 0.541)
     quintile_expected_return: tuple = (-0.0066, 0.0032, 0.0050, 0.0062, 0.0090)
-    # Faz 7b: her quintile'da gerçekleşen h=5 log-getiri std'si (pooled OOS).
-    # Pooled fiyat bandı (kolb_price_low/high) için dispersion; mean ile aynı
-    # OOS çalışmasından türetilir (tools/e2_faz7b_quintile_return_std.py).
-    quintile_return_std: tuple = (0.0480, 0.0420, 0.0400, 0.0395, 0.0430)
 
 
 @dataclass(frozen=True)
@@ -63,7 +59,6 @@ class TrendTendency:
     label: str                                  # yukarı | yatay | aşağı | belirsiz
     prob_up: Optional[float] = None             # OOS frekans tablosu P(getiri>0)
     expected_return: Optional[float] = None     # OOS tablosu ort. h-gün log-getiri
-    return_std: Optional[float] = None          # h-gün log-getiri std (band; vol-ölçekli)
     basis: str = ""                             # kısa açıklama
     reasons: list = field(default_factory=list)
     probability_source: Optional[str] = None    # "oos_quintile_frequency" (belirsiz -> None)
@@ -82,14 +77,12 @@ def trend_from_peer(
     peer_percentile: Optional[float],
     universe_size: Optional[int],
     cfg: Optional[TrendCalibration] = None,
-    symbol_vol_ratio: Optional[float] = None,
 ) -> TrendTendency:
     """peer_percentile -> mutlak trend eğilimi + OOS-frekans olasılığı/beklenen getiri.
 
     universe_size < min_names veya percentile NaN -> 'belirsiz' (tablo yok).
     Etiket ve prob_up/expected_return AYNI quintile'dan: Q1 aşağı, Q5 yukarı,
-    Q2-Q4 yatay. symbol_vol_ratio (sembol trailing vol / evren referans vol;
-    None/geçersiz -> 1.0) return_std'yi ölçekler.
+    Q2-Q4 yatay.
     """
     cfg = cfg or TrendCalibration()
     n = int(universe_size) if universe_size is not None else 0
@@ -97,26 +90,13 @@ def trend_from_peer(
 
     if n < cfg.min_names or not np.isfinite(pct):
         return TrendTendency(
-            "belirsiz", None, None, None,
+            "belirsiz", None, None,
             basis="Cross-sectional evren yetersiz veya skor yok.",
             reasons=["Belirsiz: evren < min_names ya da percentile yok."])
 
     qi = _quintile_index(pct)
     prob_up = float(cfg.quintile_prob_up[qi])
     exp_ret = float(cfg.quintile_expected_return[qi])
-    ret_std = (
-        float(cfg.quintile_return_std[qi])
-        if getattr(cfg, "quintile_return_std", None)
-        and qi < len(cfg.quintile_return_std)
-        else None
-    )
-
-    if ret_std is not None:
-        vr = float(symbol_vol_ratio) if symbol_vol_ratio is not None else 1.0
-        if not np.isfinite(vr) or vr <= 0:
-            vr = 1.0
-        ret_std *= vr
-
     # etiket olasılıkla aynı quintile'dan (tutarlılık)
     if qi == 4:
         label = "yukarı"
@@ -129,7 +109,7 @@ def trend_from_peer(
         f"Peer percentil {pct:.0f} (Q{qi+1}); OOS frekans tablosu P(yukarı)≈{prob_up:.2f}, "
         f"beklenen ~{exp_ret:+.2%} (h-gün). Olasılıksal eğilim, garanti değil."
     ]
-    return TrendTendency(label, prob_up, exp_ret, ret_std,
+    return TrendTendency(label, prob_up, exp_ret,
                          basis=("Faz 7 OOS frekans tablosu (tek dönem, tarih-kümelenmiş "
                                 "belirsizlik raporlanmadı; mutlak yön)."),
                          reasons=reasons, probability_source=PROBABILITY_SOURCE)

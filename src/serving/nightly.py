@@ -47,7 +47,6 @@ from src.serving.nightly_scoring import (
     liqlog_floor_from_turnover,
     segment_icir_from_table,
     segment_neff_from_table,
-    symbol_vol_ratios,
 )
 
 # BIST seans kapanisi ~18:00. Bundan sonraki kosular AYNI gunun seansini hedefler;
@@ -227,19 +226,6 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
-def assemble_serving_table(model, full_aug: pd.DataFrame, latest_rows: pd.DataFrame,
-                           as_of: pd.Timestamp, feats: list[str], seg_table: pd.DataFrame,
-                           icir_maps: dict, neff_maps: dict, **kwargs) -> pd.DataFrame:
-    """Kol-B alanlari dahil serving tablosu: segment n_eff + nedensel sembol vol orani.
-
-    vol orani: sembol trailing 20g vol / o gunku evren medyani, yalniz Date<=as_of
-    satirlarindan (`symbol_vol_ratios`). n_eff: ortusmeyen tarih sayisi (confidence kapisi).
-    """
-    return assemble_peer_table(
-        model, latest_rows, feats, seg_table, icir_maps=icir_maps,
-        neff_maps=neff_maps, symbol_vol_ratio=symbol_vol_ratios(full_aug, as_of), **kwargs)
-
-
 def run_scoring(args: argparse.Namespace) -> int:
     """Global modeli tum gecmise egit, en guncel evreni skorla, PeerStore'a yaz (surec-ici)."""
     # Agir bagimliliklar (lightgbm/torch) yalniz skorlamada yuklenir (--help / kapi hizli kalir).
@@ -250,6 +236,7 @@ def run_scoring(args: argparse.Namespace) -> int:
     from src.models.global_pooled_model import (
         GlobalPooledConfig, GlobalPooledModel, make_global_model_factory)
     from src.models.torch_mlp_model import TorchMLPConfig
+    from src.risk.serving import compute_risk_safe
     from src.serving.peer_store import GlobalRunMeta, PeerStore
     from src.validation.pooled_cv import PooledCVConfig, PooledPurgedWalkForward
     from src.validation.pooled_oos import PerSymbolOOSConfig, evaluate_per_symbol
@@ -365,9 +352,10 @@ def run_scoring(args: argparse.Namespace) -> int:
         return (last is None or s in stale_now
                 or (latest_global - last).days > args.stale_days)
 
-    table = assemble_serving_table(
-        model, full_aug, latest_rows, as_of, feats, seg_table, icir_maps, neff_maps,
-        tradable_for=tradable_for, stale_for=stale_for)
+    risk_table, risk_summary = compute_risk_safe(full_aug, as_of, log=_log)
+    table = assemble_peer_table(
+        model, latest_rows, feats, seg_table, icir_maps=icir_maps, neff_maps=neff_maps,
+        tradable_for=tradable_for, stale_for=stale_for, risk_table=risk_table)
     _log(f"scored {len(table)} symbols at {table['as_of_date'].iloc[0] if len(table) else '-'}")
 
     # --- persist ---
@@ -391,6 +379,7 @@ def run_scoring(args: argparse.Namespace) -> int:
                 "neff_maps": neff_maps, "trend_probability_source": prob_src,
                 "liq_floor_tl": args.liq_floor_tl, "stale_days": args.stale_days,
                 "warnings": warns,
+                "risk": risk_summary,
                 "stale_business_days": args.stale_business_days,
                 "stale_symbols_now": len(stale_now),
                 "panel_freshness": glob_fresh.message,

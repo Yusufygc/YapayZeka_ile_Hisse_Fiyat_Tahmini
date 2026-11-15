@@ -20,7 +20,7 @@ from typing import Callable, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-from src.forecasting.interval_calibration import z_for_level
+from src.risk.serving import RISK_COLUMNS
 from src.serving.confidence import ConfidenceThresholds, peer_confidence, select_segment_icir
 from src.serving.peer_scoring import PeerScoringConfig, score_latest_universe
 from src.serving.trend_tendency import TrendCalibration, trend_from_peer
@@ -76,33 +76,33 @@ def composite_n_eff(
     return min(vals) if vals else None
 
 
-def symbol_vol_ratios(
-    panel: pd.DataFrame, as_of: pd.Timestamp, window: int = 20,
-    date_col: str = "Date", close_col: str = "Close",
-) -> dict[str, float]:
-    """Sembol trailing `window`-gun log-getiri std'si / o gunku evren medyani (nedensel).
+def attach_risk_and_band(
+    merged: pd.DataFrame, risk_table: Optional[pd.DataFrame], last_closes: Mapping[str, float],
+) -> pd.DataFrame:
+    """risk_* kolonlarini ekle + fiyat bandi: Close * exp(exp_ret -/+ risk_z * risk_sigma_5d).
 
-    Yalniz `Date <= as_of` satirlari kullanilir (look-ahead yok). Ratio'su
-    hesaplanamayan (yetersiz gecmis/NaN) semboller dondurulmez -> trend_from_peer
-    1.0 varsayar.
+    p50 = Close * exp(exp_ret) (exp_ret Kol-B'den). Band genisligi YALNIZ risk modelinden
+    (src/risk): eski quintile-std tablosu ve vol-orani kaldirildi. Close/exp_ret/risk eksikse
+    ilgili band alanlari None (p50 yalniz Close+exp_ret ile dolar).
     """
-    if panel.empty or close_col not in panel.columns or pd.isna(as_of):
-        return {}
-    p = panel.loc[panel[date_col] <= as_of, ["symbol", date_col, close_col]]
-    p = p.sort_values(["symbol", date_col])
-    close = pd.to_numeric(p[close_col], errors="coerce").where(lambda c: c > 0)
-    lr = np.log(close).groupby(p["symbol"]).diff()
-    vol = lr.groupby(p["symbol"]).rolling(window, min_periods=max(5, window // 2)).std()
-    vol = vol.reset_index(level=0, drop=True).reindex(p.index)
-    last = pd.DataFrame({"symbol": p["symbol"], "d": p[date_col], "vol": vol})
-    last = last[last["d"] == pd.Timestamp(as_of)].dropna(subset=["vol"])
-    last = last[last["vol"] > 0]
-    if last.empty:
-        return {}
-    med = float(last["vol"].median())
-    if not np.isfinite(med) or med <= 0:
-        return {}
-    return {str(r.symbol): float(r.vol / med) for r in last.itertuples()}
+    out = merged.drop(columns=[c for c in RISK_COLUMNS if c in merged.columns])
+    if risk_table is not None and not risk_table.empty:
+        out = out.merge(risk_table[["symbol", *RISK_COLUMNS]], on="symbol", how="left")
+    else:
+        for c in RISK_COLUMNS:
+            out[c] = None
+    close = pd.to_numeric(out["symbol"].map(last_closes), errors="coerce")
+    exp_ret = pd.to_numeric(out["trend_expected_return"], errors="coerce")
+    half = (pd.to_numeric(out["risk_z"], errors="coerce")
+            * pd.to_numeric(out["risk_sigma_5d"], errors="coerce"))
+    ok_p = (close > 0) & np.isfinite(exp_ret)
+    ok_b = ok_p & np.isfinite(half)
+    out["kolb_price_p50"] = (close * np.exp(exp_ret)).where(ok_p)
+    out["kolb_price_low"] = (close * np.exp(exp_ret - half)).where(ok_b)
+    out["kolb_price_high"] = (close * np.exp(exp_ret + half)).where(ok_b)
+    out["kolb_horizon_days"] = pd.to_numeric(out["risk_horizon_days"], errors="coerce").where(ok_b)
+    out["kolb_band_level"] = pd.to_numeric(out["risk_band_level"], errors="coerce").where(ok_b)
+    return out
 
 
 def assemble_peer_table(
@@ -120,10 +120,8 @@ def assemble_peer_table(
     scoring_cfg: Optional[PeerScoringConfig] = None,
     thr: Optional[ConfidenceThresholds] = None,
     trend_cfg: Optional[TrendCalibration] = None,
-    price_band_level: float = 0.8,
-    price_horizon_days: int = 5,
     neff_maps: Optional[Mapping[str, Mapping[str, Optional[int]]]] = None,
-    symbol_vol_ratio: Optional[Mapping[str, float]] = None,
+    risk_table: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """En guncel evreni skorla + segment + confidence -> PeerStore'a hazir tablo.
 
@@ -134,8 +132,9 @@ def assemble_peer_table(
     tradable_for/stale_for : symbol -> bool (varsayilan: hepsi tradable, taze).
     neff_maps : {axis: {bucket: n_eff}} segment ICIR'inin ortusmeyen tarih sayisi;
         verilirse peer_confidence'a n_eff olarak gecer ('high' icin n_eff kapisi).
-    symbol_vol_ratio : {symbol: trailing vol / evren medyan vol}; trend_from_peer'a
-        gecer (return_std / fiyat bandi sembol oynakligina olceklenir).
+    risk_table : src.risk.serving.score_risk_table ciktisi (symbol + risk_* kolonlari);
+        sembol bazinda birlestirilir. Fiyat bandi genisligi buradan gelir:
+        low/high = Close * exp(exp_ret -/+ risk_z * risk_sigma_5d). Yoksa bant None.
     """
     scoring_cfg = scoring_cfg or PeerScoringConfig()
     thr = thr or ConfidenceThresholds()
@@ -184,16 +183,13 @@ def assemble_peer_table(
 
     # --- mutlak trend eğilimi (Faz 7 kalibrasyonu) ---
     tcfg = trend_cfg or TrendCalibration()
-    vol_ratios = symbol_vol_ratio or {}
-    t_labels, t_pup, t_exp, t_std, t_src = [], [], [], [], []
+    t_labels, t_pup, t_exp, t_src = [], [], [], []
     for _, r in merged.iterrows():
-        t = trend_from_peer(r["peer_percentile"], r["universe_size"], tcfg,
-                            symbol_vol_ratio=vol_ratios.get(r["symbol"]))
+        t = trend_from_peer(r["peer_percentile"], r["universe_size"], tcfg)
         t_src.append(t.probability_source)
         t_labels.append(t.label)
         t_pup.append(t.prob_up)
         t_exp.append(t.expected_return)
-        t_std.append(t.return_std)
     merged["trend_label"] = t_labels
     merged["trend_prob_up"] = t_pup
     merged["trend_expected_return"] = t_exp
@@ -201,46 +197,11 @@ def assemble_peer_table(
     # run config'inde saklanir; store eksik kolonlari yok sayar.
     merged["probability_source"] = t_src
 
-    # --- Kol-B pooled fiyat bandı ---
+    # --- risk (havuzlu oynaklik) + Kol-B fiyat bandi ---
     last_closes = {}
     if "Close" in panel_latest.columns:
         last_closes = panel_latest.set_index("symbol")["Close"].to_dict()
-
-    kolb_p50, kolb_low, kolb_high = [], [], []
-    kolb_horizon, kolb_level = [], []
-    z = z_for_level(price_band_level)
-
-    for idx, r in merged.iterrows():
-        sym = r["symbol"]
-        close_val = last_closes.get(sym)
-        exp_ret = r["trend_expected_return"]
-        std_val = t_std[idx]
-
-        if (close_val is not None and np.isfinite(close_val) and
-            exp_ret is not None and np.isfinite(exp_ret) and
-            std_val is not None and np.isfinite(std_val)):
-
-            p50 = float(close_val * np.exp(exp_ret))
-            low = float(close_val * np.exp(exp_ret - z * std_val))
-            high = float(close_val * np.exp(exp_ret + z * std_val))
-
-            kolb_p50.append(p50)
-            kolb_low.append(low)
-            kolb_high.append(high)
-            kolb_horizon.append(int(price_horizon_days))
-            kolb_level.append(float(price_band_level))
-        else:
-            kolb_p50.append(None)
-            kolb_low.append(None)
-            kolb_high.append(None)
-            kolb_horizon.append(None)
-            kolb_level.append(None)
-
-    merged["kolb_price_p50"] = kolb_p50
-    merged["kolb_price_low"] = kolb_low
-    merged["kolb_price_high"] = kolb_high
-    merged["kolb_horizon_days"] = kolb_horizon
-    merged["kolb_band_level"] = kolb_level
+    merged = attach_risk_and_band(merged, risk_table, last_closes)
     return merged
 
 

@@ -91,6 +91,16 @@ def _parse_peer_xai(v) -> Optional[dict]:
     }
 
 
+def _run_risk_validation(run: dict) -> Optional[dict]:
+    """Kosunun config_json['risk'] OOS metrikleri (yok/bozuk -> None)."""
+    try:
+        cfg = json.loads(run.get("config_json") or "{}")
+    except (ValueError, TypeError):
+        return None
+    risk = cfg.get("risk") if isinstance(cfg, dict) else None
+    return risk if isinstance(risk, dict) and risk else None
+
+
 class PeerEnrichmentService:
     def __init__(self, db_path: Optional[str] = None) -> None:
         self._db_path = db_path or _default_db_path()
@@ -131,6 +141,15 @@ class PeerEnrichmentService:
                 kolb_price_high=row.get("kolb_price_high"),
                 kolb_horizon_days=row.get("kolb_horizon_days"),
                 kolb_band_level=row.get("kolb_band_level"),
+                risk_sigma_5d=row.get("risk_sigma_5d"),
+                risk_sigma_naive_5d=row.get("risk_sigma_naive_5d"),
+                risk_vol_percentile=row.get("risk_vol_percentile"),
+                risk_level=row.get("risk_level"),
+                risk_z=row.get("risk_z"),
+                risk_band_level=row.get("risk_band_level"),
+                risk_horizon_days=row.get("risk_horizon_days"),
+                risk_method=row.get("risk_method"),
+                risk_validation=_run_risk_validation(run),
                 xai_available=xai is not None,
                 xai_method=str(row.get("xai_method") or ("" if xai is None else xai["method"])),
                 xai_caveat="" if xai is None else xai["caveat"],

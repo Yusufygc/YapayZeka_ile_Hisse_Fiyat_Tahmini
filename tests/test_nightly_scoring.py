@@ -149,7 +149,15 @@ def test_assemble_adds_trend_columns():
     panel_with_close["Close"] = 100.0
     out2 = assemble_peer_table(_StubModel(), panel_with_close, ["f0"],
                                _seg_table(), _ICIR).set_index("symbol")
+    # risk tablosu yok -> p50 dolu, bant None (genislik yalniz risk modelinden)
     assert not out2["kolb_price_p50"].isna().any()
+    assert out2["kolb_price_low"].isna().all() and out2["kolb_price_high"].isna().all()
+    risk = pd.DataFrame({
+        "symbol": [f"S{i}" for i in range(20)], "risk_sigma_5d": 0.04, "risk_sigma_naive_5d": 0.05,
+        "risk_vol_percentile": 50.0, "risk_level": "orta", "risk_z": 1.2, "risk_band_level": 0.8,
+        "risk_horizon_days": 5, "risk_method": "har_x_ridge"})
+    out2 = assemble_peer_table(_StubModel(), panel_with_close, ["f0"], _seg_table(), _ICIR,
+                               risk_table=risk).set_index("symbol")
     assert (out2["kolb_price_low"] < out2["kolb_price_p50"]).all()
     assert (out2["kolb_price_p50"] < out2["kolb_price_high"]).all()
     assert (out2["kolb_horizon_days"] == 5).all()

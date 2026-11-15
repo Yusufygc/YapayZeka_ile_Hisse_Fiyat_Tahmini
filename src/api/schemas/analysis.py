@@ -167,6 +167,16 @@ class PeerBlock(BaseModel):
     kolb_price_high: Optional[float] = None
     kolb_horizon_days: Optional[int] = None
     kolb_band_level: Optional[float] = None
+    # Risk: havuzlu oynaklik modeli (src/risk) — 5g sigma + kalibre %80 bant
+    risk_sigma_5d: Optional[float] = None         # 5g log-getiri std tahmini
+    risk_sigma_naive_5d: Optional[float] = None   # naive persistence (son 21g RMS * sqrt(5))
+    risk_vol_percentile: Optional[float] = None   # 0-100, gun evreni icinde
+    risk_level: Optional[str] = None              # düşük | orta | yüksek (evren tertile)
+    risk_z: Optional[float] = None                # konformal band z (Gaussal 1.28 DEGIL)
+    risk_band_level: Optional[float] = None
+    risk_horizon_days: Optional[int] = None
+    risk_method: Optional[str] = None             # har_x_ridge | naive_fallback
+    risk_validation: Optional[Dict[str, Any]] = None  # kosunun OOS metrikleri + kapi
     # E2 Kol-B XAI — pooled modelin per-symbol feature attribution'i (SHAP, additive).
     xai_available: bool = False
     xai_method: str = ""                          # shap_tree | permutation_fallback

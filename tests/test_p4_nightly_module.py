@@ -80,22 +80,18 @@ def _seg(n=20):
 _MAPS = {"liq": {"Q1": 1.4}, "vol": {"Q5": 1.4}, "sector": {"Ind": 1.4}}
 
 
-def test_vol_ratio_and_probability_source_passed_to_trend(monkeypatch):
-    calls = []
-    real = ns.trend_from_peer
-
-    def spy(pct, n, cfg=None, symbol_vol_ratio=None):
-        calls.append(symbol_vol_ratio)
-        return real(pct, n, cfg, symbol_vol_ratio=symbol_vol_ratio)
-
-    monkeypatch.setattr(ns, "trend_from_peer", spy)
-    ratios = {f"S{i}": 0.5 + i / 10 for i in range(20)}
+def test_probability_source_and_risk_band_width_from_risk_table():
+    risk = pd.DataFrame({
+        "symbol": [f"S{i}" for i in range(20)],
+        "risk_sigma_5d": [0.02 + 0.005 * i for i in range(20)],
+        "risk_sigma_naive_5d": 0.03, "risk_vol_percentile": 50.0, "risk_level": "orta",
+        "risk_z": 1.1, "risk_band_level": 0.8, "risk_horizon_days": 5,
+        "risk_method": "har_x_ridge"})
     out = ns.assemble_peer_table(_Stub(), _latest(), ["f0"], _seg(), icir_maps=_MAPS,
-                                 symbol_vol_ratio=ratios)
-    assert sorted(calls) == sorted(ratios.values())
+                                 risk_table=risk)
     assert (out["probability_source"] == "oos_quintile_frequency").all()
-    # yuksek vol orani -> daha genis bant
     lo = out.set_index("symbol")
+    # yuksek risk sigma -> daha genis bant
     assert (lo.loc["S19", "kolb_price_high"] - lo.loc["S19", "kolb_price_low"]) > \
            (lo.loc["S18", "kolb_price_high"] - lo.loc["S18", "kolb_price_low"])
 
@@ -134,31 +130,15 @@ def test_segment_icir_prefers_nonoverlap_and_neff_table():
     assert ns.segment_neff_from_table(t[["segment", "icir"]]) == {"Q1": None, "Q2": None, "Q3": None}
 
 
-def test_symbol_vol_ratios_causal():
-    rng = np.random.default_rng(0)
-    dates = pd.bdate_range("2026-01-01", periods=60)
-    rows = []
-    for i, sd in enumerate([0.01, 0.02, 0.04]):
-        px = 100 * np.exp(np.cumsum(rng.normal(0, sd, len(dates))))
-        rows += [{"symbol": f"S{i}", "Date": d, "Close": p} for d, p in zip(dates, px)]
-    panel = pd.DataFrame(rows)
-    as_of = dates[-1]
-    r1 = ns.symbol_vol_ratios(panel, as_of)
-    assert r1["S2"] > r1["S1"] > r1["S0"] and r1["S1"] == pytest.approx(1.0, abs=0.6)
-    # gelecek satirlar eklense de as_of sonucu degismez (nedensel)
-    fut = panel.copy()
-    fut = pd.concat([fut, pd.DataFrame({"symbol": ["S0"], "Date": [as_of + pd.Timedelta(days=3)],
-                                        "Close": [1e6]})])
-    assert ns.symbol_vol_ratios(fut, as_of) == r1
-
-
-def test_assemble_serving_table_passes_ratio_and_neff(monkeypatch):
+def test_assemble_peer_table_passes_neff_maps(monkeypatch):
     got = {}
-    monkeypatch.setattr(nl, "assemble_peer_table",
-                        lambda *a, **k: got.update(k) or pd.DataFrame())
-    full = _latest().assign(Date=pd.Timestamp("2026-06-03"))
-    monkeypatch.setattr(nl, "symbol_vol_ratios", lambda p, a: {"S1": 1.7})
-    nl.assemble_serving_table(_Stub(), full, full, pd.Timestamp("2026-06-03"), ["f0"], _seg(),
-                              _MAPS, {"liq": {"Q1": 77}})
-    assert got["symbol_vol_ratio"] == {"S1": 1.7}
-    assert got["neff_maps"] == {"liq": {"Q1": 77}} and got["icir_maps"] == _MAPS
+    real = ns.peer_confidence
+
+    def spy(*a, **k):
+        got.setdefault("n_eff", set()).add(k.get("n_eff"))
+        return real(*a, **k)
+
+    monkeypatch.setattr(ns, "peer_confidence", spy)
+    ns.assemble_peer_table(_Stub(), _latest(), ["f0"], _seg(), icir_maps=_MAPS,
+                           neff_maps={"liq": {"Q1": 77}})
+    assert got["n_eff"] == {77}
