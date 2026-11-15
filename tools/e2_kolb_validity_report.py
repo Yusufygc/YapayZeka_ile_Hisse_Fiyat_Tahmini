@@ -114,6 +114,9 @@ def main() -> None:
                          "ornek: --fallback-dir data/yedek (K7)")
     ap.add_argument("--quarantine-jumps", action=argparse.BooleanOptionalAction, default=True,
                     help="|1g log-getiri|>0.30 olcek kiriklari etrafindaki satirlari at (K8)")
+    ap.add_argument("--feature-cache-dir", default=os.path.join("data", "feature_cache", "pooled"),
+                    help="sembol basi Parquet ozellik onbellegi")
+    ap.add_argument("--no-feature-cache", action="store_true", help="ozellik onbellegini kapat")
     ap.add_argument("--out-dir", default=os.path.join("outputs", "_audits"))
     args = ap.parse_args()
 
@@ -122,7 +125,8 @@ def main() -> None:
         PooledLoaderConfig(data_dir=args.data_dir, universe_file=args.universe,
                            target_horizon=args.horizon, min_rows=args.min_rows,
                            fallback_dirs=tuple(args.fallback_dir),
-                           quarantine_jumps=args.quarantine_jumps),
+                           quarantine_jumps=args.quarantine_jumps,
+                           feature_cache_dir=None if args.no_feature_cache else args.feature_cache_dir),
         min_names=args.min_names, limit=args.limit)
     aug = ds.aug
     _log(f"panel: {len(aug)} etiketli satir, {aug['symbol'].nunique()} sembol, "

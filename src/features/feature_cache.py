@@ -8,6 +8,7 @@ Motivasyon:
   bu maliyeti ortadan kaldirmak icin disk tabanli bir cache kullanilir.
 
 Cache anahtari (MD5):
+  kod parmak izi (code_fingerprint.py: feature/macro pipeline kaynaklari + pandas/numpy/ta surumu) +
   data_file absolutepath + mtime + feature_mode + use_macro +
   macro_rate_lag_days + macro_cpi_lag_days + prune_correlated_features +
   correlation_threshold + lag_feature_count + training_window_years
@@ -32,6 +33,8 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+
+from src.features.code_fingerprint import PIPELINE_ROOTS, code_fingerprint
 
 
 class FeatureCache:
@@ -81,6 +84,8 @@ class FeatureCache:
 
         fingerprint = {
             "_cache_version": self._VERSION,
+            # ozellik kodu/kutuphane degisince anahtar otomatik degisir (elle _VERSION sart degil)
+            "code_fingerprint": code_fingerprint(PIPELINE_ROOTS),
             "abs_path": abs_path,
             "mtime": round(mtime, 3),
             "universe_file": self._file_fingerprint(getattr(data_cfg, "universe_file", None)),

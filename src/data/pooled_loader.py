@@ -36,6 +36,7 @@ from src.data.freshness import DEFAULT_MAX_BUSINESS_DAYS, warn_if_stale
 from src.data.ohlcv_clean import clean_ohlcv_csv
 from src.data.panel_columns import PIPELINE_RAW_COLS
 from src.features.feature_pipeline import FeaturePipeline
+from src.features.pooled_feature_cache import PooledFeatureCache
 from src.features.sector_mapping import normalize_symbol  # tests monkeypatch eder
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,9 @@ class PooledLoaderConfig:
     # geride olan semboller uyari ile raporlanir (panelden ATILMAZ; karar cagirana ait).
     freshness_max_business_days: int = DEFAULT_MAX_BUSINESS_DAYS
     freshness_today: pd.Timestamp | None = None   # None -> Istanbul bugunu (test icin enjekte)
+    # Sembol basi Parquet ozellik onbellegi (src/features/pooled_feature_cache.py).
+    # None = kapali (varsayilan; FeaturePipeline'i patch'leyen testler etkilenmez).
+    feature_cache_dir: str | None = None
 
 
 class PooledPanelLoader:
@@ -86,6 +90,14 @@ class PooledPanelLoader:
         self.rejected_rows: dict[str, int] = {}      # symbol -> karantinaya alinan bozuk satir
         self.stale_symbols: dict[str, str] = {}      # symbol -> bayatlik mesaji (veri tazeligi)
         self._paths: dict[str, str] | None = None
+        self._fcache = (PooledFeatureCache(cfg.feature_cache_dir)
+                        if cfg.feature_cache_dir else None)
+
+    @property
+    def feature_cache_stats(self) -> dict[str, int | bool]:
+        """{enabled, hits, misses, errors}; onbellek kapaliyken sayaclar 0."""
+        base = self._fcache.stats() if self._fcache else {"hits": 0, "misses": 0, "errors": 0}
+        return {"enabled": self._fcache is not None, **base}
 
     # ----------------------------------------------------------------- public
     def load(self) -> pd.DataFrame:
@@ -107,6 +119,10 @@ class PooledPanelLoader:
                 continue
             frames.append(f)
             self.report[sym] = "ok"
+        if self._fcache is not None:
+            logger.info("Pooled ozellik onbellegi: %d hit, %d miss, %d hata (%s)",
+                        self._fcache.hits, self._fcache.misses, self._fcache.errors,
+                        self.cfg.feature_cache_dir)
         if not frames:
             return pd.DataFrame()
         panel = pd.concat(frames, ignore_index=True)
@@ -230,9 +246,7 @@ class PooledPanelLoader:
         raw = raw[std_cols]
 
         # Ozellikler (per-symbol). Tests modul-seviyesi FeaturePipeline'i patch'ler.
-        fp = FeaturePipeline(feature_mode=self.cfg.feature_mode,
-                             enable_calendar_features=False)
-        feat = fp.engineer_features(raw, macro_df=None, symbol=symbol)
+        feat = self._engineer_features(symbol, raw)
         if feat is None or feat.empty or "Date" not in feat.columns:
             self.report[symbol] = "no_features"
             return None
@@ -261,6 +275,19 @@ class PooledPanelLoader:
             "target", "target_date", "sector", "liq_log", "vol"
         ]
         return merged[keep]
+
+    def _engineer_features(self, symbol: str, raw: pd.DataFrame) -> pd.DataFrame | None:
+        """FeaturePipeline (macro_df=None); `feature_cache_dir` verildiyse Parquet onbellekli."""
+        def compute() -> pd.DataFrame | None:
+            fp = FeaturePipeline(feature_mode=self.cfg.feature_mode,
+                                 enable_calendar_features=False)
+            return fp.engineer_features(raw, macro_df=None, symbol=symbol)
+
+        if self._fcache is None:
+            return compute()
+        return self._fcache.get_or_compute(
+            symbol, raw, feature_mode=self.cfg.feature_mode,
+            enable_calendar_features=False, compute=compute)
 
     def _apply_jump_quarantine(
         self, symbol: str, raw: pd.DataFrame, merged: pd.DataFrame,

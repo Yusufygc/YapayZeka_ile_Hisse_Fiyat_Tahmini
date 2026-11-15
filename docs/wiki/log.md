@@ -1,3 +1,10 @@
+## [2026-11-15] Feature | Pooled sembol başı Parquet özellik önbelleği
+
+- Yeni: `src/features/pooled_feature_cache.py` (sembol başı Parquet, anahtar = kod parmak izi + girdi içeriği + mod/takvim + sembol, atomik yazma, bozuk dosya -> miss) ve `src/features/code_fingerprint.py` (AST ile transitif kaynak + pandas/numpy/ta sürümü sha256). `PooledLoaderConfig.feature_cache_dir` (varsayılan kapalı); nightly (`--feature-cache-dir`, `--no-feature-cache`) ve `tools/e2_kolb_validity_report.py` açık. `loader_meta["feature_cache"]` = {enabled, hits, misses, errors}.
+- Kol-A `FeatureCache` anahtarına aynı kod parmak izi eklendi (elle `_VERSION` tek yol değil). `requirements.txt`: `pyarrow==26.0.1`.
+- Gerçek veri (581 sembol): önbelleksiz 53,7 s / soğuk 65,1 s / sıcak 34,5 s; özellik adımı 57,5 s -> 2,6 s. `full/aug/labeled` önbelleksizle birebir eşit (`check_exact`). Artımlı hesap uygulanmadı (özyinelemeli göstergeler bit-bit eşit değil; bkz. data-pipeline.md).
+- 11 yeni test; toplam 1001 test geçiyor.
+
 ## [2026-11-15] Data | Sektör etiketleri dolduruldu, outputs temizliği uygulandı
 
 - `tools/backfill_sectors.py` ile `data/bist_universe.csv` `Sector` kolonu yfinance GICS sektörüyle tek tip dolduruldu: 592 sembolün 578'i çözüldü, 14 `Unknown` (önce 584 boş, pooled panelde satırların %98,7'si Unknown). `Sector_Index` dokunulmadı. Yedek: `data/yedek_bak_20261115/bist_universe.csv.bak`. Betik artık dosya biçimini (BOM yok, CRLF) korur.

@@ -265,6 +265,34 @@ Feature generation is split across:
 Feature engineering caching uses `FeatureCache` (a disk-based cache under `data/feature_cache`) to avoid redundant preprocessing. 
 To prevent transient data-gathering failures (such as EVDS API errors) from poisoning the cache with macro-less (degraded) datasets when `use_macro=True` is requested, `DataIngestionService._engineer_features_cached` implements a self-healing eviction check. If macro features are expected but the cached feature names lack the central policy interest rate feature (`Rate_Level`), the cache entry is considered degraded, gets automatically evicted via `_cache._evict()`, and the features are regenerated.
 
+### Kol-B sembol başı Parquet özellik önbelleği (2026-11-15)
+
+`src/features/pooled_feature_cache.py::PooledFeatureCache`, `PooledPanelLoader._engineer_features` içinde
+`FeaturePipeline.engineer_features` (macro_df=None, takvim kapalı) sonucunu sembol başına saklar.
+`PooledLoaderConfig.feature_cache_dir` (varsayılan `None` = kapalı). Açık olduğu yerler:
+`src/serving/nightly.py` (`--feature-cache-dir`, varsayılan `data/feature_cache/pooled`; kapatma `--no-feature-cache`)
+ve `tools/e2_kolb_validity_report.py` (aynı bayraklar). Çapraz-kesit özellikler (`pooled_dataset.py`) önbelleksizdir.
+
+- **Depolama:** `{dir}/{SEMBOL}.parquet` (zstd), sembol başına TEK girdi (üzerine yazılır; dizin sembol sayısıyla sınırlı, TTL yok).
+  Anahtar Parquet şema metadata'sında (`tsfl.feature_cache_key`). Atomik yazma (geçici dosya + `os.replace`).
+  Bozuk dosya -> uyarı + miss + yeniden yazım. Sembol adı regex ile doğrulanır (path traversal). `.gitignore`: `data/feature_cache/`.
+- **Anahtar (sha256):** `_SCHEMA_VERSION` (biçim değişince elle) + kod parmak izi + temizlenmiş girdi çerçevesinin tam içeriği
+  (kolon adı, dtype, değer baytları; index hariç) + `feature_mode` + takvim bayrağı (+ takvim açıksa FOMC csv özeti) + sembol.
+- **Kod parmak izi** (`src/features/code_fingerprint.py`): kökten AST ile `src.*` importları transitif izlenir; Kol-B için dosyalar:
+  `src/features/feature_pipeline.py`, `correlation_pruning.py`, `sector_mapping.py`, `src/xai/feature_dictionary.py`.
+  Kaynak baytları (CRLF->LF) + pandas/numpy/ta sürümleri sha256'lanır, süreç başına bir kez hesaplanır.
+  Özellik koduna dokunmak önbelleği otomatik geçersiz kılar (elle sürüm artırma gerekmez). Kol-A `FeatureCache` anahtarı da
+  aynı yardımcıyı kullanır (kökler: feature_pipeline + macro_pipeline); `_VERSION` yine duruyor ama tek geçersiz kılma yolu değil.
+- **Raporlama:** yükleme sonunda tek log satırı; `PooledDataset.loader_meta["feature_cache"] = {enabled, hits, misses, errors}`.
+- **Ölçüm** (585 CSV, 581 sembol, bu makine): önbelleksiz 53,7 s; soğuk 65,1 s (581 miss, yazma maliyeti); sıcak 34,5 s (581 hit).
+  Sıcakta özellik adımı 57,5 s -> 2,6 s; kalan süre CSV temizleme (~14 s) ve çapraz-kesit adımlar. `full/aug/labeled/feats`
+  önbelleksiz yapımla `assert_frame_equal(check_exact=True)` ile BİREBİR eşit. Disk: 581 dosya, ~356 MB.
+- **Artımlı (son K satır) hesap bilinçli olarak YOK:** sonlu pencere en fazla 200 (SMA_200), ama EMA/MACD/RSI/ATR/ADX
+  özyinelemeli (sonsuz bellek) ve OBV kümülatif. THYAO'da son 400/800/1500 satırla yeniden hesap, tam hesaptan 3.5e-9 / 9.5e-12 / 2.3e-12
+  farklı (bit-bit eşit değil) -> yalnız durum (state) saklanarak kesin olur. Bir gün eklenince girdi hash'i değiştiği için
+  her sembol yeniden hesaplanır; kazanç tekrarlı koşularda (kapı yeniden denemesi, skorlama/araştırma tekrarı) olur.
+- Testler: `tests/test_pooled_feature_cache.py` (isabet, değer/parmak izi değişimi, bozuk dosya, dtype, yükleyici entegrasyonu).
+
 The project favors stationary or normalized features:
 
 - Relative moving-average features instead of raw moving-average price levels.

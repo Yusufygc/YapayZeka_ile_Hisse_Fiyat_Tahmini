@@ -28,6 +28,8 @@ pydantic==2.14.3
 httpx==0.28.1
 lime==0.2.0.1
 filelock==4.1.0
+# pyarrow: Kol-B sembol basi Parquet ozellik onbellegi (src/features/pooled_feature_cache.py)
+pyarrow==26.0.1
 # --- Test/gelistirme ---
 pytest==9.2.0
 pytest-cov==7.1.0

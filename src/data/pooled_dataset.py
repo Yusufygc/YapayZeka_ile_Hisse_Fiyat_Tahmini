@@ -65,5 +65,6 @@ def build_pooled_dataset(
             "quarantined_days": dict(loader.quarantined_days),
             "rejected_rows": dict(loader.rejected_rows),
             "stale_symbols": dict(loader.stale_symbols),
+            "feature_cache": dict(loader.feature_cache_stats),
         },
     )
