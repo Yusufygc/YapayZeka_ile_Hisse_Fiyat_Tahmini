@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import NamedTuple, Optional
 
 import pandas as pd
@@ -13,6 +13,9 @@ from src.api.constants import DATA_STALENESS_MAX_TRADING_DAYS
 _DEFAULT_CALENDAR_PATH = os.path.join(
     os.path.dirname(__file__), "..", "..", "..", "data", "meta", "bist_calendar.csv"
 )
+
+
+_ISTANBUL = timezone(timedelta(hours=3))  # Turkiye sabit UTC+3 (DST yok)
 
 
 class FreshnessResult(NamedTuple):
@@ -72,12 +75,12 @@ def compute_freshness(
         return FreshnessResult(status="stale_data", staleness_days=-1)
 
     if today is None:
-        today_date = datetime.now().date()
+        today_date = datetime.now(_ISTANBUL).date()
     else:
         try:
             today_date = pd.Timestamp(today).date()
         except Exception:
-            today_date = datetime.now().date()
+            today_date = datetime.now(_ISTANBUL).date()
 
     if last_date >= today_date:
         return FreshnessResult(status="fresh", staleness_days=0)

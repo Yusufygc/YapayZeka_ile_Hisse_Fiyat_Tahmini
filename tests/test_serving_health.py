@@ -47,16 +47,16 @@ def test_coverage_warnings():
     assert coverage_warnings(5, 0, pd.NaT, today) == []     # evren bilinmiyor / tarih yok
 
 
-def test_health_exposes_serving_pool_additively(tmp_path, monkeypatch):
+def test_health_exposes_serving_pool(monkeypatch):
     from fastapi.testclient import TestClient
 
     import src.api.main as api_main
-    from src.database.stock_model_db import StockModelDB
 
-    monkeypatch.setattr(api_main, "_get_db", lambda: StockModelDB(str(tmp_path / "s.db")))
     monkeypatch.setattr(api_main, "serving_pool_status",
                         lambda: {"available": True, "as_of_date": "2026-05-26", "stale": True})
+    monkeypatch.setattr(api_main, "nightly_run_status", lambda: {"available": False})
     body = TestClient(api_main.app).get("/health").json()
     assert body["serving_pool"]["as_of_date"] == "2026-05-26"
-    for key in ("status", "db_accessible", "schema", "registered_symbols", "timestamp"):
-        assert key in body                          # mevcut alanlar degismedi
+    assert body["status"] == "degraded"             # bayat havuz -> degraded
+    for key in ("status", "api_version", "serving_pool", "nightly_run", "timestamp"):
+        assert key in body

@@ -7,9 +7,4 @@ INVESTMENT_DISCLAIMER = (
     "nihai karar kullanıcıya aittir."
 )
 
-XAI_CAVEAT = (
-    "XAI, modelin tahmininde öne çıkan değişkenleri gösterir; "
-    "nedensellik kanıtı değildir."
-)
-
 DATA_STALENESS_MAX_TRADING_DAYS = 1

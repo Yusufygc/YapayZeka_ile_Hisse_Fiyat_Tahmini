@@ -1,146 +1,129 @@
 ﻿# -*- coding: utf-8 -*-
-"""
-tests.test_gui_smoke - Smoke tests for PySide6 Desktop GUI components.
-"""
+"""tests.test_gui_smoke - PySide6 masaustu GUI duman testleri (offscreen)."""
 
-import sys
 import os
+import sys
+
+import pandas as pd
 import pytest
 
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QComboBox, QGroupBox
+pytest.importorskip("PySide6")
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-# Proje kökünü sys.path'e ekle
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton  # noqa: E402
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from src.gui.core import DBHelper, ProcessRunner
-from src.gui.styles import get_combined_stylesheet
-from src.gui.tabs import DashboardTab, TrainingTab, ForecastTab
-from src.gui.main import MainWindow
+from src.gui.core import PeerReader  # noqa: E402
+from src.gui.main import MainWindow  # noqa: E402
+from src.gui.styles import get_combined_stylesheet  # noqa: E402
+from src.gui.tabs import DashboardTab  # noqa: E402
+from src.serving.peer_store import GlobalRunMeta, PeerStore  # noqa: E402
+from src.serving.run_status import NightlyRunStatus, status_path_for_db  # noqa: E402
 
 
 @pytest.fixture(scope="session")
 def q_app():
-    """
-    Test süresince tek bir QApplication örneği sağlar.
-    """
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
     yield app
 
 
+def _seed(tmp_path, with_status: bool = True) -> str:
+    db = str(tmp_path / "serving_pool.db")
+    store = PeerStore(db)
+    rid = store.insert_run(GlobalRunMeta(model_name="EnsemblePooled", as_of_date="2026-11-15",
+                                         n_symbols=3))
+    store.insert_peer_scores(rid, pd.DataFrame({
+        "symbol": ["TUPRS", "AKBNK", "ASELS"],
+        "as_of_date": ["2026-11-15"] * 3,
+        "peer_percentile": [81.0, 12.5, 55.0],
+        "peer_label": ["outperform", "underperform", "inline"],
+        "segment_sector": ["Industrials", "Banks", None],
+        "trend_label": ["yukarı", "aşağı", "yatay"],
+        "trend_prob_up": [0.56, 0.44, 0.50],
+        "kolb_price_low": [97.0, 40.0, None],
+        "kolb_price_high": [105.0, 44.0, None],
+        "confidence_label": ["high", "low", "medium"],
+        "confidence_reasons": [[], [], []], "confidence_warnings": [[], [], []],
+    }))
+    if with_status:
+        NightlyRunStatus(status_path_for_db(db)).finish(0)
+    return db
+
+
 def test_styles_loading():
-    """
-    Stil dosyalarının başarıyla okunup birleştirildiğini doğrular.
-    """
     qss = get_combined_stylesheet()
     assert isinstance(qss, str)
-    # Temel QSS öğelerinin içerikte bulunup bulunmadığını kontrol et
-    assert "QMainWindow" in qss
-    assert "QPushButton" in qss
-    assert "status_card" in qss
-    assert "QMessageBox" in qss
+    for token in ("QMainWindow", "QPushButton", "status_card", "QMessageBox", "QTableView"):
+        assert token in qss
 
 
-def test_db_helper_smoke():
-    """
-    DBHelper sınıfının çökmeden başlatılabildiğini ve sorgu yapabildiğini doğrular.
-    """
-    db = DBHelper()
-    # Veritabanı olmasa bile fonksiyonlar boş liste dönmeli, çökmemeli
-    stocks = db.get_available_stocks()
-    assert isinstance(stocks, list)
-
-    best_models = db.get_best_models_summary()
-    assert isinstance(best_models, list)
+def test_peer_reader_missing_db_does_not_create_file(tmp_path):
+    db = tmp_path / "serving_pool.db"
+    snap = PeerReader(str(db)).load()
+    assert snap.run is None and snap.rows == [] and snap.error
+    assert not db.exists()
 
 
-def test_gui_components_instantiation(q_app):
-    """
-    Ana pencere ve sekmelerin çökmeden başlatılabildiğini doğrular.
-    """
-    db_helper = DBHelper()
-    runner = ProcessRunner()
+def test_peer_reader_reads_latest_run_and_nightly_status(tmp_path):
+    snap = PeerReader(_seed(tmp_path)).load()
+    assert snap.run["as_of_date"] == "2026-11-15"
+    assert {r["symbol"] for r in snap.rows} == {"TUPRS", "AKBNK", "ASELS"}
+    assert snap.nightly["completed"] is True and snap.nightly["exit_code"] == 0
+    # NaN -> None
+    asels = next(r for r in snap.rows if r["symbol"] == "ASELS")
+    assert asels["kolb_price_low"] is None
 
-    # Bağımsız sekmelerin başlatılması
-    d_tab = DashboardTab(db_helper)
-    assert d_tab is not None
 
-    t_tab = TrainingTab(db_helper, runner)
-    assert t_tab is not None
+def test_dashboard_table_sorts_numerically_and_filters(q_app, tmp_path):
+    tab = DashboardTab(PeerReader(_seed(tmp_path)))
+    assert tab.model.rowCount() == 3
+    headers = [tab.model.horizontalHeaderItem(i).text() for i in range(tab.model.columnCount())]
+    assert headers[0] == "Hisse" and "Risk Seviyesi" in headers and "Fiyat Bandı Alt" in headers
 
-    f_tab = ForecastTab(db_helper, runner)
-    assert f_tab is not None
+    pct_col = headers.index("Akran Yüzdeliği")
+    tab.table_view.sortByColumn(pct_col, Qt.AscendingOrder)
+    assert tab.displayed_symbols() == ["AKBNK", "ASELS", "TUPRS"]  # 12.5 < 55 < 81 (metin degil sayi)
+    tab.table_view.sortByColumn(pct_col, Qt.DescendingOrder)
+    assert tab.displayed_symbols()[0] == "TUPRS"
 
-    # Ana pencerenin başlatılması
-    window = MainWindow()
-    assert window is not None
+    tab.txt_search.setText("akb")
+    assert tab.displayed_symbols() == ["AKBNK"]
+    tab.close()
+
+
+def test_dashboard_missing_risk_columns_show_dash(q_app, tmp_path):
+    tab = DashboardTab(PeerReader(_seed(tmp_path)))
+    headers = [tab.model.horizontalHeaderItem(i).text() for i in range(tab.model.columnCount())]
+    col = headers.index("Risk Seviyesi")
+    assert all(tab.model.item(r, col).text() == "—" for r in range(tab.model.rowCount()))
+    assert tab.card_asof.lbl_value.text() == "2026-11-15"
+    assert tab.card_nightly.lbl_value.text() == "Başarılı"
+    tab.close()
+
+
+def test_dashboard_empty_state_shows_message(q_app, tmp_path):
+    tab = DashboardTab(PeerReader(str(tmp_path / "none.db")))
+    assert tab.model.rowCount() == 0 and tab.lbl_info.text()
+    tab.close()
+
+
+def test_main_window_single_tab_and_no_mojibake(q_app, tmp_path):
+    window = MainWindow(PeerReader(_seed(tmp_path)))
     assert window.windowTitle() == "BIST AI Forecasting Lab - Karar Destek Paneli"
-    assert window.tabs.tabText(0) == "Özet ve Liderlik Tablosu"
-    assert window.tabs.tabText(1) == "Model Eğitimi Kontrolü"
-    assert window.tabs.tabText(2) == "İleri Yönlü Tahminler (XAI)"
+    assert window.tabs.count() == 1
+    assert window.tabs.tabText(0) == "Gecelik Havuz Özeti"
 
-    # Temizlik
+    bad_markers = ("Ã", "Ä", "Å", "â", "Â", "�")
+    texts = [window.windowTitle(), window.tabs.tabText(0)]
+    texts += [window.dashboard_tab.model.horizontalHeaderItem(i).text()
+              for i in range(window.dashboard_tab.model.columnCount())]
+    for widget_type in (QLabel, QPushButton):
+        texts += [w.text() for w in window.findChildren(widget_type)]
+    assert all(not any(m in t for m in bad_markers) for t in texts)
     window.close()
-    d_tab.close()
-    t_tab.close()
-    f_tab.close()
-
-
-def test_visible_gui_text_has_no_mojibake(q_app):
-    """
-    Görünür GUI metinlerinde UTF-8 mojibake belirteci kalmadığını doğrular.
-    """
-    bad_markers = ("\u00c3", "\u00c4", "\u00c5", "\u00e2", "\u00c2", "\ufffd")
-    window = MainWindow()
-    texts = [
-        window.windowTitle(),
-        *(window.tabs.tabText(i) for i in range(window.tabs.count())),
-        *(window.dashboard_tab.model.horizontalHeaderItem(i).text() for i in range(window.dashboard_tab.model.columnCount())),
-        window.training_tab.cmb_stock.itemText(0),
-        *(window.training_tab.cmb_preset.itemText(i) for i in range(window.training_tab.cmb_preset.count())),
-        window.forecast_tab.empty_state.text(),
-    ]
-
-    for widget_type in (QLabel, QPushButton, QComboBox, QGroupBox):
-        for widget in window.findChildren(widget_type):
-            if hasattr(widget, "text"):
-                texts.append(widget.text())
-            if hasattr(widget, "placeholderText"):
-                texts.append(widget.placeholderText())
-
-    assert all(not any(marker in text for marker in bad_markers) for text in texts)
-    window.close()
-
-
-def test_dashboard_percent_values_are_not_double_scaled(q_app):
-    """
-    Dashboard yüzdeleri veritabanındaki 0-100 formatını tekrar 100 ile çarpmaz.
-    """
-    assert DashboardTab._format_percent(66.1) == "66.1%"
-    assert DashboardTab._format_percent(None) == "—"
-
-
-def test_process_runner_decodes_legacy_windows_turkish_output():
-    """
-    CP1254 üreten eski Windows CLI çıktısı replacement karakterine düşmez.
-    """
-    raw = "Model eğitim süreci başlatılıyor".encode("cp1254")
-    assert ProcessRunner._decode_output(raw) == "Model eğitim süreci başlatılıyor"
-
-
-def test_forecast_empty_state_mentions_selected_symbol(q_app):
-    """
-    Forecast sekmesi seçili sembol varken genel "hisse seçin" mesajında kalmaz.
-    """
-    db_helper = DBHelper()
-    runner = ProcessRunner()
-    f_tab = ForecastTab(db_helper, runner)
-    f_tab.cmb_stock.setEditText("GARAN")
-    f_tab._clear_ui()
-
-    assert "GARAN" in f_tab.empty_state.text()
-    assert "Tahmini Göster" in f_tab.empty_state.text()
-    f_tab.close()
