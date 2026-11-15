@@ -473,7 +473,7 @@ REEDR,2024-03-21,,Active,auto-discovered,Technology,,Auto-populated from REEDR.c
 RGYAS,2024-05-02,,Active,auto-discovered,Real Estate,,Auto-populated from RGYAS.csv first trading date
 RNPOL,2021-12-06,,Active,auto-discovered,Basic Materials,,Auto-populated from RNPOL.csv first trading date
 RODRG,2015-01-01,,Active,auto-discovered,Consumer Cyclical,,Auto-populated from RODRG.csv first trading date
-ROYAL,2015-01-01,,Active,auto-discovered,Unknown,,Auto-populated from ROYAL.csv first trading date
+ROYAL,2015-01-01,,Inactive,auto-discovered,Unknown,,Auto-populated from ROYAL.csv first trading date
 RTALB,2015-01-01,,Active,auto-discovered,Healthcare,,Auto-populated from RTALB.csv first trading date
 RUBNS,2022-07-07,,Active,auto-discovered,Consumer Cyclical,,Auto-populated from RUBNS.csv first trading date
 RUZYE,2015-01-01,,Active,auto-discovered,Energy,,Auto-populated from RUZYE.csv first trading date

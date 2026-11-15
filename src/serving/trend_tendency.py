@@ -55,7 +55,7 @@ class TrendCalibration:
     # Faz 7b: her quintile'da gerçekleşen h=5 log-getiri std'si (pooled OOS).
     # Pooled fiyat bandı (kolb_price_low/high) için dispersion; mean ile aynı
     # OOS çalışmasından türetilir (tools/e2_faz7b_quintile_return_std.py).
-    quintile_return_std: tuple = (0.045, 0.040, 0.038, 0.037, 0.039)
+    quintile_return_std: tuple = (0.0480, 0.0420, 0.0400, 0.0395, 0.0430)
 
 
 @dataclass(frozen=True)
