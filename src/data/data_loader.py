@@ -12,17 +12,14 @@ import os
 import pandas as pd
 import numpy as np
 
+from src.data.ohlcv_clean import (
+    apply_adj_close_adjustment,
+    dedupe_sort_by_date,
+    read_ohlcv_csv,
+)
 
-# ── Sütun eşleştirme tablosu (TR -> EN) ──────────────────────────────────────
-_COLUMN_MAP = {
-    "Tarih": "Date",
-    "Açılış": "Open",
-    "Yüksek": "High",
-    "Düşük": "Low",
-    "Kapanış": "Close",
-    "Düzeltilmiş_Kapanış": "Adj_Close",
-    "Hacim": "Volume",
-}
+
+# Sütun eşleştirme (TR -> EN) ortak modülde: src/data/ohlcv_clean.py::COLUMN_MAP
 
 _ADJ_CLOSE_ANOMALY_THRESHOLD_PCT = 1000.0
 _ADJ_CLOSE_TRUST_FULL_DIFF_PCT = _ADJ_CLOSE_ANOMALY_THRESHOLD_PCT
@@ -44,17 +41,11 @@ def load_and_clean(csv_path: str, drop_zero_volume: bool = True) -> pd.DataFrame
     pd.DataFrame
         Temizlenmiş, tarih sıralı DataFrame.
     """
-    df = pd.read_csv(csv_path)
-    df.rename(columns=_COLUMN_MAP, inplace=True)
-
-    # Tarih parse — Karışık formatlara (mixed) karşı esneklik
-    try:
-        df["Date"] = pd.to_datetime(df["Date"], format="mixed", dayfirst=True)
-    except Exception:
-        df["Date"] = pd.to_datetime(df["Date"], dayfirst=True)
-    
-    df.sort_values("Date", inplace=True)
-    df.reset_index(drop=True, inplace=True)
+    # Satir-alan-sayisi dogrulamali okuma (kolon kaydirma yok), parse_dates ile tarih,
+    # tekrar eden tarihlerde son satir tutulur (pooled loader ile ortak: ohlcv_clean).
+    symbol_label = os.path.splitext(os.path.basename(csv_path))[0]
+    df = read_ohlcv_csv(csv_path, label=symbol_label)
+    df = dedupe_sort_by_date(df, label=symbol_label)
 
     corporate_action_report = {
         "adj_close_available": False,
@@ -119,14 +110,9 @@ def load_and_clean(csv_path: str, drop_zero_volume: bool = True) -> pd.DataFrame
                         f"duzeltilmis kapanis uzerinden yapilacak (max fark={max_abs_diff:.4%})."
                     )
                 # Close = Adj_Close iken Open/High/Low ham kalirsa OHLC tutarsiz olur
-                # (Low > Close vb.). Ayni faktorle (Adj/Close) olceklenir; faktor
-                # yalniz her ikisi de sonlu ve > 0 ise uygulanir, aksi halde 1. Hacim olceklenmez.
-                factor = (adj_close / raw_close).where(valid & (adj_close > 0), 1.0)
-                factor = factor.replace([np.inf, -np.inf], np.nan).fillna(1.0)
-                for ohl_col in ("Open", "High", "Low"):
-                    if ohl_col in df.columns:
-                        df[ohl_col] = pd.to_numeric(df[ohl_col], errors="coerce") * factor
-                df["Close"] = adj_close.combine_first(raw_close)
+                # (Low > Close vb.): ortak ohlcv_clean.apply_adj_close_adjustment ayni
+                # faktorle (Adj/Close) olcekler ve Close = Adj_Close (yoksa ham) yapar.
+                df = apply_adj_close_adjustment(df)
         else:
             corporate_action_report.update({
                 "adj_close_available": True,

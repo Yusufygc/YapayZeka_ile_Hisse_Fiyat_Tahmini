@@ -63,5 +63,7 @@ def build_pooled_dataset(
             "fallback_symbols": sorted(
                 s for s, d in loader.source_dir.items() if d != loader_cfg.data_dir),
             "quarantined_days": dict(loader.quarantined_days),
+            "rejected_rows": dict(loader.rejected_rows),
+            "stale_symbols": dict(loader.stale_symbols),
         },
     )

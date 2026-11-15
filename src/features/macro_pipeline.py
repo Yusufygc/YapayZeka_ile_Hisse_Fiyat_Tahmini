@@ -62,6 +62,7 @@ from typing import Optional
 
 import pandas as pd
 
+from src.data.dates import parse_dates
 from src.features import macro_feature_engineering, macro_transforms
 
 try:
@@ -369,7 +370,7 @@ class MacroPipeline:
             except ValueError:
                 continue
             rows.append({
-                "Date": pd.to_datetime(date_value, dayfirst=True, errors="coerce"),
+                "Date": parse_dates(date_value).iloc[0],
                 value_name: numeric_value,
             })
 

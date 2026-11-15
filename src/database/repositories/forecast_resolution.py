@@ -44,25 +44,43 @@ class ForecastResolutionRepository:
                 "SELECT * FROM forecast_runs WHERE stock_symbol = ?",
                 (stock_symbol,),
             ).fetchall()
+            if not runs:
+                return 0
+            # N+1 yok: sembolün tüm noktaları tek sorguda gelir, run_id'ye göre gruplanır.
+            points_by_run: Dict[int, list] = {}
+            for point in conn.execute(
+                """
+                SELECT fp.*
+                FROM forecast_points fp
+                JOIN forecast_runs fr ON fr.id = fp.run_id
+                WHERE fr.stock_symbol = ?
+                ORDER BY fp.run_id ASC, fp.horizon_index ASC
+                """,
+                (stock_symbol,),
+            ):
+                points_by_run.setdefault(int(point["run_id"]), []).append(point)
             for run in runs:
-                resolved += self._resolve_run(conn, run, normalized_actuals, now)
-                self.refresh_forecast_accuracy(conn, int(run["id"]))
+                newly = self._resolve_run(
+                    conn, run, points_by_run.get(int(run["id"]), []), normalized_actuals, now
+                )
+                if newly:
+                    resolved += newly
+                    self.refresh_forecast_accuracy(conn, int(run["id"]))
         return resolved
 
-    def _resolve_run(self, conn, run, actuals: Dict[str, float], now: str) -> int:
-        points = conn.execute(
-            """
-            SELECT *
-            FROM forecast_points
-            WHERE run_id = ?
-            ORDER BY horizon_index ASC
-            """,
-            (int(run["id"]),),
-        ).fetchall()
+    def _resolve_run(self, conn, run, points, actuals: Dict[str, float], now: str) -> int:
+        """Run'ın henüz çözülmemiş noktalarını çözer; çözülmüş noktaları atlar.
+
+        Zincir (önceki gerçekleşen kapanış) çözülmüş noktaların `actual_close`
+        değeriyle ilerler; ardışıklık bozulursa sonraki noktalar çözülmez.
+        """
         previous_actual = float(run["last_close"])
         contiguous = True
-        resolved = 0
+        updates = []
         for point in points:
+            if point["resolved_at"] is not None and point["actual_close"] is not None:
+                previous_actual = float(point["actual_close"])
+                continue
             target_date = str(point["target_date"])[:10]
             actual_close = actuals.get(target_date)
             if actual_close is None:
@@ -70,12 +88,24 @@ class ForecastResolutionRepository:
                 continue
             if not contiguous:
                 continue
-            self._update_point_resolution(conn, point, actual_close, previous_actual, now)
+            updates.append(self._point_resolution_params(point, actual_close, previous_actual, now))
             previous_actual = actual_close
-            resolved += 1
-        return resolved
+        if updates:
+            conn.executemany(
+                """
+                UPDATE forecast_points
+                SET actual_close = ?,
+                    actual_return = ?,
+                    abs_error = ?,
+                    direction_correct = ?,
+                    resolved_at = ?
+                WHERE id = ?
+                """,
+                updates,
+            )
+        return len(updates)
 
-    def _update_point_resolution(self, conn, point, actual_close: float, previous_actual: float, now: str) -> None:
+    def _point_resolution_params(self, point, actual_close: float, previous_actual: float, now: str) -> tuple:
         predicted = self.db._optional_float(point["bounded_predicted_close"])
         predicted_return = self.db._optional_float(point["predicted_return"])
         actual_return = (actual_close / previous_actual) - 1.0 if previous_actual else None
@@ -83,18 +113,7 @@ class ForecastResolutionRepository:
         direction_correct = None
         if predicted_return is not None and actual_return is not None:
             direction_correct = int(self.db._sign(predicted_return) == self.db._sign(actual_return))
-        conn.execute(
-            """
-            UPDATE forecast_points
-            SET actual_close = ?,
-                actual_return = ?,
-                abs_error = ?,
-                direction_correct = ?,
-                resolved_at = ?
-            WHERE id = ?
-            """,
-            (actual_close, actual_return, abs_error, direction_correct, now, int(point["id"])),
-        )
+        return (actual_close, actual_return, abs_error, direction_correct, now, int(point["id"]))
 
     def refresh_forecast_accuracy(self, conn: sqlite3.Connection, run_id: int) -> None:
         """Verilen forecast run'ı için toplu doğruluk metriklerini yeniden hesaplar."""
@@ -209,12 +228,14 @@ class ForecastResolutionRepository:
         """
         import pandas as pd
 
+        from src.data.dates import parse_dates
+
         df = pd.read_csv(csv_path)
         date_col = _find_column(df.columns, ["Date", "Tarih"])
         close_col = _find_column(df.columns, ["Close", "Kapanış", "Kapanis", "Adj Close", "Düzeltilmiş_Kapanış"])
         if date_col is None or close_col is None:
             raise ValueError("CSV must include Date/Tarih and Close/Kapanış columns.")
-        df["Date"] = pd.to_datetime(df[date_col], dayfirst=True, errors="coerce").dt.strftime("%Y-%m-%d")
+        df["Date"] = parse_dates(df[date_col]).dt.strftime("%Y-%m-%d")
         df["Close"] = pd.to_numeric(df[close_col], errors="coerce")
         actuals = {
             row["Date"]: float(row["Close"])

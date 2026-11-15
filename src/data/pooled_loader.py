@@ -32,15 +32,14 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from src.data.freshness import DEFAULT_MAX_BUSINESS_DAYS, warn_if_stale
+from src.data.ohlcv_clean import clean_ohlcv_csv
 from src.data.panel_columns import PIPELINE_RAW_COLS
-from src.features.feature_pipeline import FeaturePipeline  # tests monkeypatch eder
+from src.features.feature_pipeline import FeaturePipeline
+from src.features.sector_mapping import normalize_symbol  # tests monkeypatch eder
 
 logger = logging.getLogger(__name__)
 
-_COL_MAP = {
-    "Tarih": "Date", "Açılış": "Open", "Yüksek": "High",
-    "Düşük": "Low", "Düzeltilmiş_Kapanış": "Close", "Hacim": "Volume",
-}
 _EXCLUDE_STEMS = {"bist_universe", "advisory_history"}
 _NON_FEATURE = PIPELINE_RAW_COLS      # tek tanim: src/data/panel_columns.py
 
@@ -70,6 +69,10 @@ class PooledLoaderConfig:
     quarantine_jumps: bool = False
     jump_threshold: float = 0.30
     quarantine_rows: int = 63
+    # Veri tazeligi: son tarihi bugunden `freshness_max_business_days` is gunuden fazla
+    # geride olan semboller uyari ile raporlanir (panelden ATILMAZ; karar cagirana ait).
+    freshness_max_business_days: int = DEFAULT_MAX_BUSINESS_DAYS
+    freshness_today: pd.Timestamp | None = None   # None -> Istanbul bugunu (test icin enjekte)
 
 
 class PooledPanelLoader:
@@ -80,6 +83,8 @@ class PooledPanelLoader:
         self.survivorship_status: str = "unknown"
         self.quarantined_days: dict[str, int] = {}   # symbol -> atilan satir sayisi (K8)
         self.source_dir: dict[str, str] = {}         # symbol -> yuklenen klasor (K7)
+        self.rejected_rows: dict[str, int] = {}      # symbol -> karantinaya alinan bozuk satir
+        self.stale_symbols: dict[str, str] = {}      # symbol -> bayatlik mesaji (veri tazeligi)
         self._paths: dict[str, str] | None = None
 
     # ----------------------------------------------------------------- public
@@ -94,7 +99,7 @@ class PooledPanelLoader:
                 continue
             try:
                 f = self._engineer_symbol(
-                    sym, sector_map.get(sym, "Unknown"), delisted.get(sym))
+                    sym, sector_map.get(normalize_symbol(sym), "Unknown"), delisted.get(sym))
             except Exception as exc:  # tek sembol hatasi paneli durdurmasin
                 self.report[sym] = f"error:{str(exc)[:60]}"
                 continue
@@ -105,6 +110,7 @@ class PooledPanelLoader:
         if not frames:
             return pd.DataFrame()
         panel = pd.concat(frames, ignore_index=True)
+        self._check_freshness(panel)
         panel = panel.sort_values(["Date", "symbol"]).reset_index(drop=True)
         codes = {s: i for i, s in enumerate(sorted(panel["symbol"].unique()))}
         panel["symbol_id"] = panel["symbol"].map(codes).astype(int)
@@ -128,6 +134,19 @@ class PooledPanelLoader:
     def _symbols(self) -> list[str]:
         return sorted(self._symbol_paths())
 
+    def _check_freshness(self, panel: pd.DataFrame) -> None:
+        """Sembol bazinda son Date bugunden cok geride ise tek ozet uyari + kayit."""
+        last = panel.groupby("symbol")["Date"].max()
+        stale = warn_if_stale(
+            last.to_dict(), "Pooled panel veri tazeligi", self.cfg.freshness_today,
+            self.cfg.freshness_max_business_days)
+        self.stale_symbols = {s: r.message for s, r in stale.items()}
+        if self.rejected_rows:
+            logger.warning(
+                "Pooled panel: %d sembolde toplam %d bozuk satir karantinaya alindi "
+                "(tools/repair_symbol_csv.py ile onarin).",
+                len(self.rejected_rows), sum(self.rejected_rows.values()))
+
     def _sector_map(self) -> dict[str, str]:
         if not os.path.exists(self.cfg.universe_file):
             return {}
@@ -138,7 +157,7 @@ class PooledPanelLoader:
         for _, r in uni.iterrows():
             val = r.get("Sector")
             sec = "" if pd.isna(val) else str(val).strip()
-            out[str(r["Symbol"]).strip().upper()] = sec or "Unknown"
+            out[normalize_symbol(r["Symbol"])] = sec or "Unknown"
         return out
 
     def _universe_frame(self) -> pd.DataFrame | None:
@@ -186,12 +205,17 @@ class PooledPanelLoader:
         if not os.path.exists(path):
             self.report[symbol] = "no_csv"
             return None
-        raw = pd.read_csv(path, encoding="utf-8-sig").rename(columns=_COL_MAP)
-        if "Date" not in raw.columns or "Close" not in raw.columns:
+        # Tek-sembol loader ile ORTAK temizleme (src/data/ohlcv_clean.py): alan-sayisi
+        # dogrulamasi (bozuk satir karantina, kolon kaymasi yok), parse_dates, tekrar
+        # tarih (son tutulur), Open/High/Low'u Adj/Close ile olcekleme, sifir-hacim atma.
+        raw = clean_ohlcv_csv(path, label=symbol)
+        if raw.empty or "Date" not in raw.columns or "Close" not in raw.columns:
             self.report[symbol] = "bad_schema"
             return None
-        raw["Date"] = pd.to_datetime(raw["Date"], errors="coerce")
-        raw = raw.dropna(subset=["Date", "Close"]).sort_values("Date").reset_index(drop=True)
+        rejected = int(raw.attrs.get("rejected_rows", 0))
+        if rejected:
+            self.rejected_rows[symbol] = rejected
+        raw = raw.dropna(subset=["Date", "Close"]).reset_index(drop=True)
         if delisted_on is not None:
             # delisting sonrasi satirlar (bayat/dolgu) panelde yer almaz
             raw = raw[raw["Date"] <= delisted_on].reset_index(drop=True)

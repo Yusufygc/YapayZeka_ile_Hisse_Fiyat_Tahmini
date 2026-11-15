@@ -79,9 +79,15 @@ def compute_psi_30d(symbol_csv_path: str) -> DataQualityResult:
             stale_warning=True,
             reason="csv_missing",
         )
+    # Ortak temizleyici: TR/EN basliklari (Tarih/Kapanis...) Date/Close'a cevirir,
+    # tarih ayristirma + tekrar + Adj Close olcekleme loader'larla aynidir.
+    # Onceden ham read_csv + "Date"/"Close" kontrolu TR basliklarda hep
+    # missing_required_columns donuyordu (PSI kapisi fiilen kapaliydi).
+    from src.data.ohlcv_clean import clean_ohlcv_csv
+
     try:
-        df = pd.read_csv(symbol_csv_path)
-    except Exception as exc:  # pragma: no cover - defensive
+        df = clean_ohlcv_csv(symbol_csv_path)
+    except (OSError, ValueError, pd.errors.ParserError) as exc:
         return DataQualityResult(
             psi_30d=None,
             psi_status="unavailable",
@@ -97,7 +103,6 @@ def compute_psi_30d(symbol_csv_path: str) -> DataQualityResult:
             reason="missing_required_columns",
         )
 
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df = df.dropna(subset=["Date"]).sort_values("Date").reset_index(drop=True)
     feats = _build_features(df)
     if len(feats) < _HOLDOUT_DAYS + _TRAIN_DAYS // 4:

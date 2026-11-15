@@ -319,7 +319,6 @@ def _find_column(columns, candidates: list[str]) -> Optional[str]:
 
 
 def _parse_dates(values) -> pd.Series:
-    parsed = pd.to_datetime(values, errors="coerce")
-    if parsed.notna().any():
-        return parsed
-    return pd.to_datetime(values, dayfirst=True, errors="coerce")
+    from src.data.dates import parse_dates
+
+    return parse_dates(values)

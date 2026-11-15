@@ -22,6 +22,8 @@ from typing import Iterable
 
 import pandas as pd
 
+from src.data.dates import parse_dates
+
 try:
     from filelock import FileLock, Timeout as FileLockTimeout
 
@@ -55,10 +57,7 @@ def _read_csv_first_date(csv_path: str) -> str | None:
     if df.empty or "Tarih" not in df.columns:
         return None
 
-    try:
-        dates = pd.to_datetime(df["Tarih"], format="mixed", dayfirst=True, errors="coerce")
-    except Exception:
-        dates = pd.to_datetime(df["Tarih"], dayfirst=True, errors="coerce")
+    dates = parse_dates(df["Tarih"])
 
     dates = dates.dropna()
     if dates.empty:

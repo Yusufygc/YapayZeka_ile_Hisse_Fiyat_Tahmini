@@ -453,26 +453,9 @@ def _history_years(*, symbol: str, data_dir: str | Path | None) -> tuple[Optiona
 
 def parse_history_dates(values: Any) -> pd.Series:
     """Parse mixed BIST CSV dates without shifting ISO YYYY-MM-DD values."""
-    raw = pd.Series(values)
-    text = raw.astype(str).str.strip()
-    iso_mask = text.str.match(r"^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$", na=False)
-    parsed = pd.Series(pd.NaT, index=raw.index, dtype="datetime64[ns]")
-    if iso_mask.any():
-        parsed.loc[iso_mask] = pd.to_datetime(
-            raw.loc[iso_mask],
-            errors="coerce",
-            yearfirst=True,
-        )
-    if (~iso_mask).any():
-        parsed.loc[~iso_mask] = pd.to_datetime(
-            raw.loc[~iso_mask],
-            errors="coerce",
-            dayfirst=True,
-        )
-    missing = parsed.isna()
-    if missing.any():
-        parsed.loc[missing] = pd.to_datetime(raw.loc[missing], errors="coerce")
-    return parsed
+    from src.data.dates import parse_dates
+
+    return parse_dates(values)
 
 
 def _resolve_long_history_years(
