@@ -98,7 +98,7 @@ python -m src.serving.nightly --db data/serving_pool.db --model ensemble --fallb
 python -m src.serving.nightly --help
 
 # API (binds 127.0.0.1; override with AI_CORE_API_HOST / AI_CORE_API_PORT)
-uvicorn src.api.main:app --port 8000
+python -m src.api.main   # 127.0.0.1:8001 (AI_CORE_API_PORT ile degisir)
 
 # Desktop GUI
 python -m src.gui.main

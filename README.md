@@ -56,7 +56,7 @@ Kayıt: `data/serving_pool.db` (`global_model_runs`, `peer_scores`) ve `data/nig
 **API:**
 
 ```bash
-uvicorn src.api.main:app --port 8000     # /docs: Swagger
+python -m src.api.main                  # 127.0.0.1:8001, /docs: Swagger
 ```
 
 | Endpoint | Açıklama |

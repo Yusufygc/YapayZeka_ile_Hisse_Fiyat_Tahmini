@@ -1,3 +1,9 @@
+## [2026-11-16] Update | API varsayılan portu 8001
+
+- `python -m src.api.main` artık varsayılan olarak `127.0.0.1:8001` dinler (8000 bu makinede başka bir
+  servisçe kullanılıyor). `AI_CORE_API_PORT` ile değiştirilebilir. README, AGENTS/CLAUDE ve
+  [Persistence and API](persistence-and-api.md) güncellendi; PortfoySimulasyonu istemcisinin varsayılanı da 8001.
+
 ## [2026-11-16] Fix | Gece tazelemesi yedekte kalan evren sembollerini atlıyordu
 
 - Gerçek koşu kontrolünde KCHOL, SASA, TUPRS, SAHOL, ENKAI, LOGO ve ARDYZ'nin hiç skorlanmadığı

@@ -3,11 +3,11 @@
 src/api/main.py - ts_forecasting_lab FastAPI Sonuç Servisi (API v2)
 
 Proje kökünden çalıştır:
-    uvicorn src.api.main:app --reload --port 8000
+    python -m src.api.main            (127.0.0.1:8001; AI_CORE_API_PORT ile degisir)
 
 Interaktif docs:
-    http://localhost:8000/docs       (Swagger UI)
-    http://localhost:8000/redoc      (ReDoc)
+    http://localhost:8001/docs       (Swagger UI)
+    http://localhost:8001/redoc      (ReDoc)
 
 Servis YALNIZ gecelik havuz çıktısını (data/serving_pool.db, PeerStore) sunar:
 
@@ -134,10 +134,10 @@ def _bind_address() -> tuple[str, int]:
     """Varsayilan YALNIZ loopback (127.0.0.1); disariya acmak icin AI_CORE_API_HOST/PORT."""
     host = os.getenv("AI_CORE_API_HOST", "127.0.0.1").strip() or "127.0.0.1"
     try:
-        port = int(os.getenv("AI_CORE_API_PORT", "8000"))
+        port = int(os.getenv("AI_CORE_API_PORT", "8001"))
     except ValueError:
-        logger.warning("AI_CORE_API_PORT gecersiz; 8000 kullaniliyor")
-        port = 8000
+        logger.warning("AI_CORE_API_PORT gecersiz; 8001 kullaniliyor")
+        port = 8001
     return host, port
 
 

@@ -47,7 +47,7 @@ skorlama atlanır, çıkış 3) -> pooled panel (`quarantine_jumps`) -> Kol-B sk
 Kaldırılan: `/best-model`, `/experiments`, `/metrics`, `/leaderboard`, `/run/*`, `/refresh/*` (404).
 Sembol regex `^[A-Z0-9]{1,10}$` (geçersiz -> 400, dosya yoluna girmeden önce). CORS: `src/api/runtime_config.py`.
 Hız sınırı: `AI_CORE_RATE_LIMIT_PER_MINUTE`. **Bağlanma:** `python -m src.api.main` varsayılan
-`127.0.0.1:8000` (`AI_CORE_API_HOST`, `AI_CORE_API_PORT`); `uvicorn src.api.main:app` serbesttir.
+`127.0.0.1:8001` (`AI_CORE_API_HOST`, `AI_CORE_API_PORT`; 8000 makinede başka servisçe kullanıldığı için); `uvicorn src.api.main:app` serbesttir.
 
 ## `/analysis/{symbol}` yanıt şekli (`api_version="2"`)
 

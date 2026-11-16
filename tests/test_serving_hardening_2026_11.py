@@ -388,7 +388,7 @@ def test_health_has_no_internal_paths(env, monkeypatch):
 def test_bind_address_defaults_to_loopback_and_env_overrides(monkeypatch):
     monkeypatch.delenv("AI_CORE_API_HOST", raising=False)
     monkeypatch.delenv("AI_CORE_API_PORT", raising=False)
-    assert api_main._bind_address() == ("127.0.0.1", 8000)
+    assert api_main._bind_address() == ("127.0.0.1", 8001)
     monkeypatch.setenv("AI_CORE_API_HOST", "0.0.0.0")
     monkeypatch.setenv("AI_CORE_API_PORT", "9001")
     assert api_main._bind_address() == ("0.0.0.0", 9001)
