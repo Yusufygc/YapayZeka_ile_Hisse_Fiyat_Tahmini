@@ -6,7 +6,6 @@ lightgbm==4.7.0
 ta==0.11.0
 joblib==1.6.0
 yfinance==1.8.0
-requests==2.34.2
 pandas-market-calendars==4.4.0
 shap==0.49.1
 PySide6==6.12.0

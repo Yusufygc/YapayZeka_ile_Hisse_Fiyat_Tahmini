@@ -370,11 +370,11 @@ class PooledPanelLoader:
         return merged[keep]
 
     def _engineer_features(self, symbol: str, raw: pd.DataFrame) -> pd.DataFrame | None:
-        """FeaturePipeline (macro_df=None); `feature_cache_dir` verildiyse Parquet onbellekli."""
+        """FeaturePipeline (makro katman yok); `feature_cache_dir` verildiyse Parquet onbellekli."""
         def compute() -> pd.DataFrame | None:
             fp = FeaturePipeline(feature_mode=self.cfg.feature_mode,
                                  enable_calendar_features=False)
-            return fp.engineer_features(raw, macro_df=None, symbol=symbol)
+            return fp.engineer_features(raw, symbol=symbol)
 
         if self._fcache is None:
             return compute()

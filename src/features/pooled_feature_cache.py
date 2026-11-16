@@ -5,8 +5,7 @@
 (~0.12 sn/sembol; ~585 sembolde ~65 sn). Girdi (temizlenmis OHLCV) ve kod degismediyse
 sonuc deterministiktir -> diskten okunur.
 
-Kapsam: yalniz `macro_df=None` cagrilari (pooled yukleyici). Sonuc `symbol`'e bagli
-degildir ama anahtara yine de girer (dosya basina tek sembol).
+Sonuc `symbol`'e bagli degildir ama anahtara yine de girer (dosya basina tek sembol).
 
 Anahtar (sha256):
   _SCHEMA_VERSION (biçim degisikligi icin elle) + kod parmak izi (`code_fingerprint`:

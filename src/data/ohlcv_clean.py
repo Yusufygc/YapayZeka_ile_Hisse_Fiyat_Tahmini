@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Sembol OHLCV CSV'leri icin ORTAK okuma/temizleme (tek dogruluk kaynagi).
 
-`src/data/data_loader.py` (tek sembol) ve `src/data/pooled_loader.py` (panel) ayni
-adimlari kullanir; boylece iki yol arasinda hedef/ozellik sapmasi olmaz:
+`src/data/pooled_loader.py` (panel), `src/data/clean_store.py` ve `/analysis` piyasa-sonu
+okumasi ayni adimlari kullanir; boylece yollar arasinda hedef/ozellik sapmasi olmaz:
 
   1. `read_ohlcv_csv`  : satir basina alan sayisi dogrulanir. Baslikla ayni sayida
      alani olmayan (orn. Adj Close eksik 6 alanli) satir KARANTINAYA alinir ve

@@ -15,11 +15,6 @@ from typing import Iterable
 
 import pandas as pd
 
-try:  # Optional dependency requested by the serving plan.
-    import pandas_market_calendars as _pmc  # noqa: F401
-except Exception:  # pragma: no cover - dependency may be absent in light envs
-    _pmc = None
-
 
 _FIXED_CLOSURES = {
     (1, 1): "New Year's Day",

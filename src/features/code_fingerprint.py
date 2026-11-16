@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """Ozellik uretim kodunun parmak izi (onbellek otomatik gecersiz kilma).
 
-Ozellik onbelleklerinin (Kol-A `feature_cache.py`, Kol-B `pooled_feature_cache.py`)
-anahtarina eklenir: ozellik ciktisini belirleyen kaynak dosyalardan biri degisirse
+Kol-B ozellik onbellegi (`pooled_feature_cache.py`) anahtarina eklenir: ozellik ciktisini belirleyen kaynak dosyalardan biri degisirse
 anahtar degisir -> eski girdiler kullanilmaz. Elle surum artirmaya gerek kalmaz.
 
 Dosya listesi AST ile bulunur: kok modullerden baslayip `src.*` importlari
@@ -26,9 +25,6 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Kol-B (sembol basi): FeaturePipeline cikti belirler.
 POOLED_ROOTS: tuple[str, ...] = ("src/features/feature_pipeline.py",)
-# Kol-A: FeaturePipeline + MacroPipeline.
-PIPELINE_ROOTS: tuple[str, ...] = (
-    "src/features/feature_pipeline.py", "src/features/macro_pipeline.py")
 LIBRARIES: tuple[str, ...] = ("pandas", "numpy", "ta")
 
 
@@ -55,7 +51,7 @@ def _imported_modules(path: Path) -> set[str]:
             else:
                 mod = node.module or ""
             found.add(mod)
-            # `from src.features import macro_transforms` -> alt modul de aday
+            # `from src.features import correlation_pruning` -> alt modul de aday
             found.update(f"{mod}.{a.name}" for a in node.names)
     return found
 

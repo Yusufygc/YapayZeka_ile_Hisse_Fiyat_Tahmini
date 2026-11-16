@@ -24,7 +24,7 @@ def model_feature_names(columns) -> list[str]:
     """Kolon listesinden model girdisi olacak ozellikler (ham OHLCV/yardimci haric)."""
     return [c for c in columns if c not in PIPELINE_RAW_COLS and c != "Adj_Close"]
 
-# stationary_features + makro var + takvim acik -> model ozellikleri
+# stationary_features + takvim acik (makro katman 2026-11'de kaldirildi) -> model ozellikleri
 CURATED_STATIONARY_FEATURES = [
     "Return",
     "SMA_7_rel", "SMA_21_rel", "SMA_50_rel",
@@ -32,16 +32,13 @@ CURATED_STATIONARY_FEATURES = [
     "RSI_14", "MACD_Diff_norm",
     "LogRet_Lag_1",
     "day_of_week",
-    "USDTRY_Return", "USDTRY_Volatility7", "BIST100_Return", "BIST100_MA7",
-    "Relative_Strength",
-    "momentum_60d", "market_momentum_60d", "relative_to_market_60d",
 ]
 
 N_ROWS = 1500
 MAX_ABS_SPEARMAN = 0.95
 
 
-def _synthetic_ohlcv_and_macro(seed: int = 0, n: int = N_ROWS):
+def _synthetic_ohlcv(seed: int = 0, n: int = N_ROWS):
     rng = np.random.default_rng(seed)
     dates = pd.bdate_range("2018-01-01", periods=n)
     eps = rng.standard_t(5, n) / np.sqrt(5 / 3)
@@ -60,24 +57,14 @@ def _synthetic_ohlcv_and_macro(seed: int = 0, n: int = N_ROWS):
         "Date": dates, "Open": open_, "High": high, "Low": low, "Close": close,
         "Volume": rng.integers(100_000, 1_000_000, n).astype(float),
     })
-    bist_ret = rng.normal(0.0004, 0.012, n)
-    bist_lvl = 1000.0 * np.exp(np.cumsum(bist_ret))
-    usd_ret = rng.normal(0.0005, 0.006, n)
-    macro = pd.DataFrame({
-        "Date": dates,
-        "USDTRY_Return": usd_ret,
-        "USDTRY_Volatility7": pd.Series(usd_ret).rolling(7).std().to_numpy(),
-        "BIST100_Return": bist_ret,
-        "BIST100_MA7": bist_lvl / pd.Series(bist_lvl).rolling(7).mean().to_numpy() - 1.0,
-    }).dropna().reset_index(drop=True)
-    return raw, macro
+    return raw
 
 
 @pytest.fixture(scope="module")
 def engineered():
-    raw, macro = _synthetic_ohlcv_and_macro()
+    raw = _synthetic_ohlcv()
     fp = FeaturePipeline()
-    frame = fp.engineer_features(raw, macro_df=macro, symbol="SYN")
+    frame = fp.engineer_features(raw, symbol="SYN")
     return fp, frame
 
 
@@ -85,7 +72,7 @@ def test_stationary_feature_set_equals_curated_list(engineered):
     fp, frame = engineered
     features = model_feature_names(fp.feature_names)
     assert sorted(features) == sorted(CURATED_STATIONARY_FEATURES)
-    assert len(features) == len(set(features)) == 19
+    assert len(features) == len(set(features)) == 11
     # frame kolonlarindan turetilen model girdisi (tensor hazirlama yolu) ayni sette
     assert sorted(model_feature_names(frame.columns)) == sorted(CURATED_STATIONARY_FEATURES)
 
@@ -105,7 +92,7 @@ def test_no_feature_pair_exceeds_spearman_threshold(engineered):
 def test_frame_has_no_nan_and_history_is_not_truncated(engineered):
     _, frame = engineered
     assert not frame.isna().any().any()
-    # yalniz pencere isinmasi (momentum_60d -> ~60 satir) kaybolur
+    # yalniz pencere isinmasi (SMA_50 / MACD ~ 50 satir) kaybolur
     assert len(frame) >= N_ROWS - 80
 
 
@@ -119,36 +106,20 @@ def test_market_regime_is_computed_but_not_a_model_feature(engineered):
     assert "Log_Return" not in frame.columns
 
 
-def test_without_macro_only_stock_level_features_remain():
-    raw, _ = _synthetic_ohlcv_and_macro(seed=3, n=400)
+def test_sector_mapping_report_stays_disabled():
     fp = FeaturePipeline()
-    fp.engineer_features(raw, macro_df=None)
-    features = model_feature_names(fp.feature_names)
-    assert sorted(features) == sorted(
-        [
-            "Return", "SMA_7_rel", "SMA_21_rel", "SMA_50_rel",
-            "RollStd_14_norm", "RollStd_21_norm", "NATR_14",
-            "RSI_14", "MACD_Diff_norm", "LogRet_Lag_1", "day_of_week",
-        ]
-    )
     assert fp.sector_mapping_report["status"] == "disabled"
     assert fp.sector_mapping_report["feature_created"] is False
 
 
-def test_default_lag_feature_count_is_one_everywhere(tmp_path):
-    from types import SimpleNamespace
+def test_engineer_features_has_no_macro_parameter_or_macro_columns(engineered):
+    import inspect
 
-    from src.features.feature_cache import FeatureCache
+    assert "macro_df" not in inspect.signature(FeaturePipeline.engineer_features).parameters
+    _, frame = engineered
+    for banned in ("BIST100_Return", "USDTRY_Return", "momentum_60d", "Relative_Strength"):
+        assert banned not in frame.columns
 
+
+def test_default_lag_feature_count_is_one():
     assert FeaturePipeline().lag_feature_count == 1
-
-    # lag_feature_count verilmeyen config, cache anahtarinda 1 olarak sayilir.
-    cache = FeatureCache(cache_dir=str(tmp_path / "cache"))
-    data_file = tmp_path / "TEST.csv"
-    data_file.write_text("Date,Close\n2024-01-01,1\n", encoding="utf-8")
-    base = {"feature_mode": "stationary_features", "use_macro": True}
-    implicit = SimpleNamespace(**base)
-    explicit_one = SimpleNamespace(**base, lag_feature_count=1)
-    explicit_five = SimpleNamespace(**base, lag_feature_count=5)
-    assert cache.make_key(str(data_file), implicit) == cache.make_key(str(data_file), explicit_one)
-    assert cache.make_key(str(data_file), implicit) != cache.make_key(str(data_file), explicit_five)

@@ -44,10 +44,6 @@ import numpy as np
 
 @dataclass(frozen=True)
 class TrendCalibration:
-    # DEPRECATED: etiket artık quintile'dan türetilir (Q1 aşağı, Q5 yukarı);
-    # lo_pct/hi_pct etiketi etkilemez, yalnız geriye uyum için tutulur.
-    lo_pct: float = 30.0
-    hi_pct: float = 70.0
     min_names: int = 15        # bundan az evren -> belirsiz
     # Faz 7 mutlak-yön OOS frekans tablosu (full-evren OOS, quintile Q1..Q5).
     quintile_prob_up: tuple = (0.435, 0.487, 0.509, 0.519, 0.541)

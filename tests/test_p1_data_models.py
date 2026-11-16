@@ -2,7 +2,6 @@
 """P1 derin denetim (2026-11) — veri katmani duzeltmeleri.
 
 1. DataUpdater: overlap'li indirme; split/temettu sonrasi tam yeniden indirme.
-2. data_loader: Close=Adj_Close iken O/H/L ayni faktorle olceklenir.
 
 Ag erisimi yok: indirici sahte provider ile enjekte edilir.
 """
@@ -109,30 +108,3 @@ def test_updater_never_appends_future_dated_rows(tmp_path):
     assert pd.to_datetime(after["Date"]).max() <= pd.Timestamp(datetime.today().date())
 
 
-# --------------------------------------------------------------------------- #
-#  5) data_loader OHLC tutarliligi                                             #
-# --------------------------------------------------------------------------- #
-def test_loader_scales_ohl_with_adj_close_factor(tmp_path):
-    from src.data.data_loader import load_and_clean
-
-    n = 6
-    dates = pd.date_range("2024-01-02", periods=n, freq="B")
-    raw_close = np.array([100.0, 102.0, 104.0, 106.0, 108.0, 110.0])
-    adj = raw_close * np.array([0.5, 0.5, 0.5, 1.0, 1.0, np.nan])  # son satir NaN
-    csv = tmp_path / "X.csv"
-    pd.DataFrame({
-        "Date": dates.strftime("%Y-%m-%d"),
-        "Open": raw_close * 1.01, "High": raw_close * 1.02, "Low": raw_close * 0.99,
-        "Close": raw_close, "Adj_Close": adj, "Volume": np.full(n, 1000.0),
-    }).to_csv(csv, index=False)
-
-    out = load_and_clean(str(csv))
-
-    factor = np.array([0.5, 0.5, 0.5, 1.0, 1.0, 1.0])
-    np.testing.assert_allclose(out["Close"], raw_close * factor)
-    np.testing.assert_allclose(out["Open"], raw_close * 1.01 * factor)
-    np.testing.assert_allclose(out["High"], raw_close * 1.02 * factor)
-    np.testing.assert_allclose(out["Low"], raw_close * 0.99 * factor)
-    np.testing.assert_allclose(out["Volume"], 1000.0)  # hacim olceklenmez
-    # tutarlilik: Low <= Close <= High korunur
-    assert (out["Low"] <= out["Close"]).all() and (out["Close"] <= out["High"]).all()

@@ -63,10 +63,12 @@ def test_quintile_boundaries_map_correctly():
     assert trend_from_peer(50.0, 100, cfg).prob_up == cfg.quintile_prob_up[2]
 
 
-def test_custom_calibration_thresholds():
-    cfg = TrendCalibration(lo_pct=20.0, hi_pct=80.0)
-    assert trend_from_peer(75.0, 100, cfg).label == "yatay"  # 70<75<80
+def test_calibration_has_no_deprecated_percentile_thresholds():
+    cfg = TrendCalibration()
+    assert not hasattr(cfg, "lo_pct") and not hasattr(cfg, "hi_pct")
+    # etiket quintile'dan gelir (Q1 asagi, Q5 yukari), esik parametresinden degil
     assert trend_from_peer(85.0, 100, cfg).label == "yukarı"
+    assert trend_from_peer(5.0, 100, cfg).label == "aşağı"
 
 
 def test_result_type_and_reasons():

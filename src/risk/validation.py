@@ -53,7 +53,6 @@ class RiskValidationConfig:
     conformal_window_days: int = 252      # z icin son N tarih (onceki OOS)
     alpha: float = 1.0
     feature_cols: tuple[str, ...] = RISK_FEATURE_COLS
-    max_date: Optional[pd.Timestamp] = None   # None: tum etiketli tarihler
 
 
 @dataclass
@@ -141,8 +140,6 @@ def run_risk_validation(frame: pd.DataFrame, cfg: Optional[RiskValidationConfig]
     """OOS walk-forward + metrikler + kapi. `frame` = features.build_risk_frame ciktisi."""
     cfg = cfg or RiskValidationConfig()
     lab = labeled_rows(frame, cfg.feature_cols)
-    if cfg.max_date is not None:
-        lab = lab[lab["Date"] <= pd.Timestamp(cfg.max_date)]
     lab = lab.sort_values(["Date", "symbol"]).reset_index(drop=True)
     if lab.empty:
         raise ValueError("risk dogrulama: etiketli satir yok")

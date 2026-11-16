@@ -9,11 +9,9 @@ import pandas as pd
 import pytest
 
 import src.data.pooled_loader as pl
-import src.features.feature_cache as fc_mod
 from src.data.pooled_loader import PooledLoaderConfig, PooledPanelLoader
 from src.features.code_fingerprint import (
-    PIPELINE_ROOTS, POOLED_ROOTS, code_fingerprint, module_closure)
-from src.features.feature_cache import FeatureCache
+    POOLED_ROOTS, code_fingerprint, module_closure)
 from src.features.pooled_feature_cache import PooledFeatureCache, frame_content_hash
 
 KW = {"feature_mode": "stationary_features", "enable_calendar_features": False}
@@ -143,22 +141,9 @@ def test_code_fingerprint_closure_and_stability():
     pooled = set(module_closure(POOLED_ROOTS))
     assert {"src/features/feature_pipeline.py", "src/features/correlation_pruning.py",
             "src/features/sector_mapping.py", "src/xai/feature_dictionary.py"} <= pooled
-    assert pooled < set(module_closure(PIPELINE_ROOTS))
-    assert "src/features/macro_pipeline.py" in module_closure(PIPELINE_ROOTS)
+    assert not any("macro" in rel for rel in pooled)      # makro katman kaldirildi
     assert code_fingerprint(POOLED_ROOTS) == code_fingerprint(POOLED_ROOTS)
-    assert code_fingerprint(POOLED_ROOTS) != code_fingerprint(PIPELINE_ROOTS)
     assert len(code_fingerprint(POOLED_ROOTS)) == 64
-
-
-def test_kol_a_key_includes_code_fingerprint(tmp_path, monkeypatch):
-    csv = os.path.join(str(tmp_path), "x.csv")
-    open(csv, "w").write("a\n1\n")
-    cfg = SimpleNamespace(feature_mode="stationary_features")
-    cache = FeatureCache(os.path.join(str(tmp_path), "fc"))
-    k1 = cache.make_key(csv, cfg)
-    assert k1 == cache.make_key(csv, cfg)
-    monkeypatch.setattr(fc_mod, "code_fingerprint", lambda roots: "changed")
-    assert cache.make_key(csv, cfg) != k1
 
 
 # ----------------------------------------------------------- loader wiring
