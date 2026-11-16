@@ -359,7 +359,7 @@ when no peer data exists for the symbol; existing absolute `forecast`/
 | `universe_size` | int | names ranked that date |
 | `segment_liq/vol/sector` | string | liquidity/volatility/sector bucket |
 | `segment_icir` | float | composite segment ICIR (tradability-aware) |
-| `confidence_label` | string | low / medium / high: segment ICIR'inin skorlama günü evrenindeki tertili (üst 1/3 high); bayat veri / ince evren → low. Likidite etiketi düşürmez, `confidence_warnings`'e "Likidite düşük" uyarısı ekler (2026-11-16) |
+| `confidence_label` | string | low / medium / high: segment ICIR'inin skorlama günü evrenindeki tertili (üst 1/3 high; alt tertil yalnız ICIR < 0,5 ise low); bayat veri / ince evren → low. Likidite etiketi düşürmez, `confidence_warnings`'e "Likidite düşük" uyarısı ekler (2026-11-16) |
 | `confidence_reasons` / `confidence_warnings` | string[] | human-readable |
 | `model_run_id` | int | `global_model_runs.run_id` |
 | `icir_overall` | float | run-level ICIR |

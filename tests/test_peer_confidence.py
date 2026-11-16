@@ -47,6 +47,15 @@ def test_relative_thresholds_split_universe_into_terciles():
     assert labels == ["low"] * 3 + ["medium"] * 3 + ["high"] * 3
 
 
+def test_bottom_tercile_above_absolute_floor_is_medium_not_low():
+    from src.serving.confidence import relative_thresholds
+    vals = [0.55, 0.60, 0.66, 0.78, 0.82, 0.86, 0.95, 1.10, 1.30]   # hepsi >= 0.5
+    thr = relative_thresholds(vals)
+    labels = [peer_confidence(v, "inline", thr=thr, n_eff=100).label for v in vals]
+    assert "low" not in labels
+    assert labels[-3:] == ["high"] * 3
+
+
 def test_relative_thresholds_floor_and_fallback():
     from src.serving.confidence import ConfidenceThresholds, relative_thresholds
     thr = relative_thresholds([-0.3, -0.2, -0.1])   # hepsi negatif -> floor 0: hepsi low

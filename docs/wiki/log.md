@@ -1,3 +1,9 @@
+## [2026-11-16] Fix | Güven etiketinde low için mutlak taban
+
+- run 6'da saf tertil likit büyük hisselerin çoğunu `low` yaptı (API `low_confidence`).
+  `relative_thresholds`: alt tertil yalnız ICIR < 0,5 ise `low`; aksi halde `medium`.
+  İleriye dönük: high IC 0,118, medium IC 0,087. Ayrıntı: [Validation](validation-and-backtesting.md).
+
 ## [2026-11-16] Fix | Güven etiketi göreli tertil, trend tablosu yeniden kalibre, prob_outperform
 
 - `src/serving/confidence.py`: `relative_thresholds` (segment ICIR'inin evren içi tertilleri);

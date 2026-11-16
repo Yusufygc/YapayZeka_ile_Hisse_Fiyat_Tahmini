@@ -9,7 +9,8 @@ Sert kapilar her zaman bastirir: bayat / ince-evren -> `low`.
 2026-11-16 kalibrasyon olcumu (`tools/calibration_report.py`, docs/wiki/validation-and-backtesting.md):
 sabit 1.0/0.5 esikleri satirlarin %95'ini `medium` yapiyordu ve etiket ayirt edici degildi;
 surekli segment ICIR'i ise sonraki IC'yi siraliyordu. Bu yuzden serving esikleri
-`relative_thresholds` ile skorlama gununun evreni icinde TERTILDIR (ust 1/3 high).
+`relative_thresholds` ile skorlama gununun evreni icinde TERTILDIR (ust 1/3 high); `low` icin
+ek olarak mutlak taban (ICIR < 0.5) gerekir.
 Likidite kapisi artik etiketi dusurmez: en az likit segmentte sinyal en guclu cikti
 (IC 0.159); bunun yerine ayri "islem zor" uyarisi eklenir.
 
@@ -44,8 +45,11 @@ def relative_thresholds(
 ) -> ConfidenceThresholds:
     """Evren ici tertil esikleri: segment ICIR'i ust 1/3 -> high, orta 1/3 -> medium.
 
-    `floor` mutlak alt sinir: ICIR < floor olan segment tertili ne olursa olsun `low`.
-    3'ten az sonlu deger -> `base` (sabit esikler).
+    Alt tertil yalniz ICIR'i AYRICA `base.icir_medium`'un (mutlak taban, 0.5) altindaysa `low`:
+    medium esigi = min(alt tertil siniri, base.icir_medium). 2026-11-16 run 6: saf tertil likit
+    hisselerin cogunu (THYAO, EREGL, KCHOL; ICIR 0.50-0.76) `low` yapiyordu; bu dilimin IC'si
+    zayif ama anlamli (0.067), "guvenilmez" degil. `floor` mutlak alt sinir: ICIR < floor
+    hep `low`. 3'ten az sonlu deger -> `base` (sabit esikler).
     """
     base = base or ConfidenceThresholds()
     v = np.asarray([float(x) for x in icirs if x is not None and np.isfinite(x)], dtype=float)
@@ -53,7 +57,8 @@ def relative_thresholds(
         return base
     lo, hi = np.quantile(v, [1.0 / 3.0, 2.0 / 3.0])
     lo = float(np.nextafter(lo, np.inf))   # alt tertil siniri dahil low (esit degerlerde)
-    return ConfidenceThresholds(icir_high=float(max(hi, floor)), icir_medium=float(max(lo, floor)),
+    medium = min(lo, base.icir_medium)      # low icin mutlak taban: tertil + ICIR < 0.5
+    return ConfidenceThresholds(icir_high=float(max(hi, floor)), icir_medium=float(max(medium, floor)),
                                 min_n_eff_high=base.min_n_eff_high)
 
 

@@ -49,6 +49,11 @@ Yapılan düzeltmeler (aynı gün):
   | eski (1,0/0,5, likidite→low) | %1, IC −0,12 | %95, IC 0,096 | %4, IC 0,159 |
 
   Yeni şema monoton; high ile medium'un güven aralıkları örtüşüyor (fark küçük), low açıkça zayıf.
+- **Mutlak taban (aynı gün, run 6 sonrası):** saf tertil likit hisselerin çoğunu `low` yaptı
+  (Q5 likidite diliminde 72/115; THYAO, EREGL, KCHOL ICIR 0,62–0,66). Alt tertil artık yalnız
+  ICIR < 0,5 ise `low` (medium eşiği = min(alt tertil, 0,5)). İleriye dönük ölçüm: high %28,
+  IC 0,118 [0,100, 0,135]; medium %72, IC 0,087 [0,074, 0,099]. Bu OOS'ta hiçbir satır
+  ICIR < 0,5 değil; `low` pratikte sert kapılardan (bayat veri, ince evren, ICIR yok) gelir.
 
 Çıktı: `outputs/_audits/calibration_<tarih>.json|.md` (gitignore'da).
 
