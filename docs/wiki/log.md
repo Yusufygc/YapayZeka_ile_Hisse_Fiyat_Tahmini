@@ -1,3 +1,11 @@
+## [2026-11-16] Update | API peer bloğuna koşu IC metrikleri
+
+- `PeerBlock` `ic_mean` ve `pct_ic_positive` alanlarını taşır (`global_model_runs` satırından, satırın
+  `run_id`'si ile). `icir_overall` ve `risk_validation` ile birlikte istemcinin "Performans" bölümünü besler:
+  hisse bazlı yön isabeti/RMSE/Sharpe artık yok; yerine havuz modelinin kesitsel IC/ICIR'ı ve risk modelinin
+  naive'e göre hata oranı, bant kapsaması ve DM t'si gösterilir.
+- Güncellenen sayfa: [Persistence and API](persistence-and-api.md).
+
 ## [2026-11-16] Refactor | A+C: Kol-A emekliye ayrıldı, havuz risk modeli, API v2
 
 - **Ürün:** yalnız gecelik havuz çıktısı sunulur (Kol-B + `src/risk/` havuzlu oynaklık modeli). API v2

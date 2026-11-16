@@ -77,6 +77,7 @@ def test_peer_block_attaches_peer_block(tmp_path):
     assert peer.confidence_label == "high"
     assert peer.segment_icir == 1.35
     assert peer.icir_overall == 1.55
+    assert peer.ic_mean == 0.099 and peer.pct_ic_positive == 0.93
     assert peer.confidence_reasons == ["Segment sinyali guclu"]
     assert peer.trend_label == "yukarı"
     assert abs(peer.trend_prob_up - 0.541) < 1e-9

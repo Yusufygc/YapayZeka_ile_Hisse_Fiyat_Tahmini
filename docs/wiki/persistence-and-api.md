@@ -87,3 +87,10 @@ Bir kademe düşüren: `risk_method == naive_fallback`; **`risk_method` NULL** (
 
 `tests/test_analysis_api_v2.py`, `tests/test_serving_hardening_2026_11.py`, `tests/test_peer_service.py`,
 `tests/test_peer_store.py`, `tests/test_serving_health.py`, `tests/test_response_cache.py`.
+
+### Peer bloğu doğrulama metrikleri (2026-11-16)
+
+`peer` bloğu koşu düzeyindeki örneklem dışı metrikleri de taşır: `ic_mean` (günlük kesitsel IC ortalaması),
+`pct_ic_positive` (IC > 0 gün oranı), `icir_overall`, satır düzeyinde `segment_icir` ve
+`risk_validation` (`mse_ratio`, `dm_t`, `coverage`, `qlike_*`, gate durumu). İstemci bunları "Performans"
+bölümünde Türkçe açıklamalarıyla gösterir.
