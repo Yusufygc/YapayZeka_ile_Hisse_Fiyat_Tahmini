@@ -1,11 +1,13 @@
 ---
 title: Product Decision Support Design
 type: feature-plan
-status: active
-last_updated: 2026-06-04
+status: historical
+last_updated: 2026-11-16
 owner: llm
 source_count: 10
 ---
+
+> **TARİHSEL (2026-11-16):** Tasarım Kol-A tabanlı masaüstü ürününü anlatır; ürün gecelik havuz servisine indirildi. Güncel durum için [Architecture](architecture.md), [Persistence and API](persistence-and-api.md) ve [Risk Modeli](risk-model.md) sayfalarına bakın. Bu sayfa yalnız referans içindir; kod > test > wiki.
 
 # Product Decision Support Design
 

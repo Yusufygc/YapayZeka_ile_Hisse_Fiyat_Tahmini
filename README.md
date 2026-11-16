@@ -25,7 +25,8 @@ data/*.csv (yfinance)  ->  src/serving/nightly.py  ->  data/serving_pool.db (Pee
 | Dizin | Görev |
 |---|---|
 | `src/data/` | OHLCV indirme/temizleme, panel yükleyici, tazelik, temiz depo (Parquet) |
-| `src/features/` | Teknik/makro özellik üretimi, Parquet özellik önbelleği |
+| `src/features/` | Teknik özellik üretimi (makro katman kaldırıldı), Parquet özellik önbelleği |
+| `src/risk/` | Havuzlu oynaklık (risk) modeli: HAR-X Ridge, konformal %80 bant, kabul kapısı |
 | `src/models/` | Kol-B modelleri: `global_pooled_model`, `torch_mlp_model`, `ensemble_pooled_model` |
 | `src/validation/` | Pooled purged CV, OOS değerlendirme, segment IC, baz çizgileri |
 | `src/serving/` | Gece işi, skorlama, `PeerStore` (SQLite), güven etiketi, trend eğilimi, XAI |

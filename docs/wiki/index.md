@@ -21,31 +21,40 @@ linked pages below.
 
 ## System Knowledge
 
-- [Architecture](architecture.md): Main components, technology stack, database schema, and runtime structure.
-- [Data Pipeline](data-pipeline.md): OHLCV loading, corporate action handling, kürate 19 özellik seti (2026-11-16), makro (USDTRY/BIST100), scaling, and leakage controls.
-- [Model Catalog](model-catalog.md): Benchmarks, 3 production candidates (XGBoost, Ridge Return, LightGBM Return), the single ensemble (`Ensemble Inverse RMSE`), and removed models.
-- [Validation and Backtesting](validation-and-backtesting.md): Single split, walk-forward, final holdout, signal gates, backtest metrics, and leakage boundaries.
-- [Backtest Signal Improvement Plan](backtest-signal-improvement-plan.md): Draft plan for improving signal logic and model tiers before API integration or cost modelling.
-- [Persistence and API](persistence-and-api.md): Outputs, SQLite registry, forecast persistence, FastAPI endpoints, and downstream integration.
-- [Analytics Layer](analytics-layer.md): Salt-okunur DuckDB analiz katmanı (çapraz-koşu/çapraz-kaynak analitik; servis için değil), view'lar, adlandırılmış sorgular, CLI, ağdan eklenti yok.
-- [Testing and Quality](testing-and-quality.md): Test suites, quality gates, smoke tests, configured tools, and known verification commands.
-- [Staged Code Review Guide](code-review-stages.md): Project split into 8 dependency-ordered stages for staged code review; per-stage files, checklist, tests, and dependency notes.
+- [Architecture](architecture.md): Gecelik havuz servisi mimarisi, dizinler, teknoloji, `serving_pool.db` şeması, salt-okunur okuyucu kuralı.
+- [Risk Modeli](risk-model.md): Havuzlu oynaklık modeli (hedef, özellikler, Ridge, bias faktörü, konformal z, kabul kapısı, gerçek veri doğrulaması, durumlar).
+- [Data Pipeline](data-pipeline.md): Güncel havuz paneli, kürate makrosuz özellik seti, K8 karantina (ASELS kök nedeni), tazelik; altında Kol-A dönemi tarihsel bölümler.
+- [Model Catalog](model-catalog.md): Kalan modeller (Kol-B LightGBM/MLP/ensemble + risk Ridge) ve emekli Kol-A.
+- [Validation and Backtesting](validation-and-backtesting.md) **[tarihsel]**: Single split, walk-forward, final holdout, signal gates, backtest metrics, and leakage boundaries.
+- [Backtest Signal Improvement Plan](backtest-signal-improvement-plan.md) **[tarihsel]**: Draft plan for improving signal logic and model tiers before API integration or cost modelling.
+- [Persistence and API](persistence-and-api.md): PeerStore, `nightly_status.json`, API v2 şekli/durumları (`unavailable` 503, `no_data`), kaldırılan endpoint'ler, önbellek, güvenlik.
+- [Analytics Layer](analytics-layer.md) **[tarihsel]**: Salt-okunur DuckDB analiz katmanı (çapraz-koşu/çapraz-kaynak analitik; servis için değil), view'lar, adlandırılmış sorgular, CLI, ağdan eklenti yok.
+- [Testing and Quality](testing-and-quality.md): Güncel test alanları, komut ve kalite değişmezleri.
+- [Staged Code Review Guide](code-review-stages.md) **[tarihsel]**: Project split into 8 dependency-ordered stages for staged code review; per-stage files, checklist, tests, and dependency notes.
 - [Code Quality and Refactoring](code-quality-and-refactoring.md): Code thresholds, file/class size limits, input validation guidelines, error handling, and datetime policy.
-- [Code Quality Audit (2026-05-31)](code-quality-audit.md): God-object/SOLID/DRY findings, bloated file/function metrics, and the phased docstring/comment plan.
-- [Staged Refactor Plan (2026-05-31)](refactor-plan.md): Per-stage god-object/complexity/SOLID-KISS-DRY findings mapped to the 8 review stages, behavior-preserving refactor actions, cross-cutting epics (owner-forward removal, DRY, god constructors), and risk-tiered execution order.
-- [Refactor Analysis 2026-06-12](refactor-analysis-2026-06-12.md): Source-grounded quant/architecture audit after E1/E2; horizon-aware alignment, pooled serving calibration, remaining owner-state workflow, backtest, and memory priorities.
-- [XAI Audit 2026-06-12](xai-audit-2026-06-12.md): Source-grounded explainability audit covering Kol-A XAI, walk-forward attribution, sequence/attention diagnostics, Kol-B peer XAI, API contract gaps, and phased improvement plan.
-- [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md): Tier 3'un kalan kismi — owner-forward magic'i tamamen kaldirip servisleri `EvaluationContext`/`EvaluationState` DI'ya cevirme; karakterizasyon testi stratejisi + 7 fazli plan. Dal: `refactor/e1-owner-forward-di`.
+- [Code Quality Audit (2026-05-31)](code-quality-audit.md) **[tarihsel]**: God-object/SOLID/DRY findings, bloated file/function metrics, and the phased docstring/comment plan.
+- [Staged Refactor Plan (2026-05-31)](refactor-plan.md) **[tarihsel]**: Per-stage god-object/complexity/SOLID-KISS-DRY findings mapped to the 8 review stages, behavior-preserving refactor actions, cross-cutting epics (owner-forward removal, DRY, god constructors), and risk-tiered execution order.
+- [Refactor Analysis 2026-06-12](refactor-analysis-2026-06-12.md) **[tarihsel]**: Source-grounded quant/architecture audit after E1/E2; horizon-aware alignment, pooled serving calibration, remaining owner-state workflow, backtest, and memory priorities.
+- [XAI Audit 2026-06-12](xai-audit-2026-06-12.md) **[tarihsel]**: Source-grounded explainability audit covering Kol-A XAI, walk-forward attribution, sequence/attention diagnostics, Kol-B peer XAI, API contract gaps, and phased improvement plan.
+- [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md) **[tarihsel]**: Tier 3'un kalan kismi — owner-forward magic'i tamamen kaldirip servisleri `EvaluationContext`/`EvaluationState` DI'ya cevirme; karakterizasyon testi stratejisi + 7 fazli plan. Dal: `refactor/e1-owner-forward-di`.
 - [E2 Faz 2 Pooled CV Design](e2-faz2-pooled-cv-design.md): Pooled panel loader + tarih-bazli purged coklu-pencere CV detayli tasarimi; leakage taksonomisi (capraz-sembol / horizon / feature), modul plani (`src/data/pooled_loader.py`, `src/validation/pooled_cv.py`), test plani, acceptance, acik sorular.
 - [E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md): Egitim tarafi redesign — tek-hisse overfit'i gidermek icin ~592 hisseyi havuzlayan tek kosullu global model; per-symbol urun/`GET /analysis/{symbol}` kontrati korunur; grup-purged coklu-pencere OOS, cold-start, opsiyonel per-symbol fine-tune. Dal: `feat/e2-pooled-global-model`.
-- [Product Decision Support Design](product-decision-support-design.md): Desktop AI decision-support product boundary, target architecture, MVP scope, and phase roadmap.
-- [Desktop GUI Application](desktop-gui-application.md): PySide6-based corporate desktop application interface, subprocess architecture, modular QSS styling, and testing.
-- [Analysis API Contract](analysis-api-contract.md): `GET /analysis/{symbol}` response schema, status codes, and confidence label definition.
-- [Confidence and Risk Policy](confidence-and-risk-policy.md): Confidence label derivation rules, signal-diagnosis mapping, eligibility status, and data-quality gates.
+- [Product Decision Support Design](product-decision-support-design.md) **[tarihsel]**: Desktop AI decision-support product boundary, target architecture, MVP scope, and phase roadmap.
+- [Desktop GUI Application](desktop-gui-application.md): PySide6 tek tablo (salt-okunur PeerReader).
+- [Analysis API Contract](analysis-api-contract.md) **[tarihsel]**: `GET /analysis/{symbol}` response schema, status codes, and confidence label definition.
+- [Confidence and Risk Policy](confidence-and-risk-policy.md) **[tarihsel]**: Confidence label derivation rules, signal-diagnosis mapping, eligibility status, and data-quality gates.
 - [LLM Explanation Policy](llm-explanation-policy.md): AI explanation layer role, forbidden actions, response structure, system prompt skeleton, and disclaimer.
 
 ## Current Project State
 
+- **A+C (2026-11-16):** Kol-A (hisse başına yön modelleri), `ForecastingPipeline`, backtest, makro katman
+  ve `stock_models.db` kaldırıldı. Ürün yalnız gecelik havuz çıktısını sunar: Kol-B yön/göreli sinyal +
+  havuzlu risk modeli (`src/risk/`, %80 fiyat bandı). **API v2** (`/health`, `/symbols`,
+  `/analysis/{symbol}`; durumlar `ok|stale_data|low_confidence|no_data|unavailable`), GUI tek tablo.
+  Okuyucular salt-okunur; risk adımı durumu `nightly_status.json`/`/health`'e yansır; `as_of` geriliği,
+  kapı değişimi ve risk tahmini olmayan sembol nedenleri izlenir. Sayfalar: [Architecture](architecture.md),
+  [Risk Modeli](risk-model.md), [Persistence and API](persistence-and-api.md). **Aşağıdaki maddelerden
+  Kol-A/`ForecastingPipeline`/model-scope/`stock_models.db`/owner-forward anlatanlar tarihseldir.**
 - The project is a production-oriented research platform for BIST equity forecasting.
 - **Özellik ve model temizliği (2026-11-16, `fix/deep-audit-2026-11`):** model özellik seti
   63'ten 19'a indi (IC denetimi; sektör endeksi ve makro'nun USDTRY/BIST100 dışı kolonları

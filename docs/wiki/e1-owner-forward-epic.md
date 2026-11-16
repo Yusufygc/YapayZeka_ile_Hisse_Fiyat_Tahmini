@@ -1,12 +1,14 @@
 ---
 title: E1 Owner-Forward Removal Epic
 type: plan
-status: done
-last_updated: 2026-11-15
+status: historical
+last_updated: 2026-11-16
 owner: llm
 source_count: 9
 branch: refactor/e1-owner-forward-di (silindi; main'e merge edildi c62b35d)
 ---
+
+> **TARİHSEL (2026-11-16):** Epic'in konusu olan Kol-A değerlendirme servisleri ve `ForecastingPipeline` silindi. Güncel durum için [Architecture](architecture.md), [Persistence and API](persistence-and-api.md) ve [Risk Modeli](risk-model.md) sayfalarına bakın. Bu sayfa yalnız referans içindir; kod > test > wiki.
 
 # E1 — Owner-Forward Kaldırma Epiği (Tam DI'ya Geçiş)
 

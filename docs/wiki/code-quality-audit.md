@@ -1,11 +1,13 @@
 ---
 title: Code Quality Audit (2026-05-31)
 type: audit
-status: active
-last_updated: 2026-05-31
+status: historical
+last_updated: 2026-11-16
 owner: llm
 source_count: 8
 ---
+
+> **TARİHSEL (2026-11-16):** Denetim, silinen Kol-A modüllerinin metriklerini içerir. Güncel durum için [Architecture](architecture.md), [Persistence and API](persistence-and-api.md) ve [Risk Modeli](risk-model.md) sayfalarına bakın. Bu sayfa yalnız referans içindir; kod > test > wiki.
 
 # Code Quality Audit — 2026-05-31
 

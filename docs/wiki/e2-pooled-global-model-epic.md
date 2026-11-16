@@ -7,6 +7,8 @@ owner: llm
 branch: feat/e2-pooled-global-model
 ---
 
+> **Not (2026-11-16):** Kol-B (havuzlu model, peer skor, trend) güncel ürünün çekirdeğidir; ancak bu epic'teki "per-symbol `/analysis` kontratı korunur / Kol-A yan yana" ifadeleri eskidir — Kol-A emekli oldu, API v2 yalnız gecelik havuz çıktısını sunar ([Persistence and API](persistence-and-api.md)); risk/fiyat bandı için [Risk Modeli](risk-model.md).
+
 # E2 Pooled Global Model Epic
 
 Training-side redesign to fix overfitting and the absence of demonstrable alpha

@@ -1,3 +1,27 @@
+## [2026-11-16] Refactor | A+C: Kol-A emekliye ayrıldı, havuz risk modeli, API v2
+
+- **Ürün:** yalnız gecelik havuz çıktısı sunulur (Kol-B + `src/risk/` havuzlu oynaklık modeli). API v2
+  (`/health`, `/symbols`, `/analysis/{symbol}`), GUI tek tablo; `/best-model`, `/experiments`, `/metrics`,
+  `/leaderboard`, `/run/*`, `/refresh/*` kaldırıldı.
+- **Okuyucular salt-okunur:** `PeerStore.open_readonly` (`mode=ro`); API/GUI DB oluşturmaz, migre etmez,
+  journal_mode değiştirmez. DB yok/kilitli/bozuk -> `analysis_status="unavailable"` (HTTP 503), sembol yok ->
+  `no_data`; ikisi de önbelleğe alınmaz; önbellek 1024 girdilik LRU; parmak izi İstanbul tarihi.
+- **Risk görünürlüğü:** `nightly_status.json` `risk` alanı (`ok|fallback|failed`), `/health` `degraded`
+  (failed), `/analysis` risk_method NULL için uyarı + bir kademe düşürme; neden sınıflaması
+  `risk.missing` (`quarantine|short_history|gap`). Kapı değişimi (har_x_ridge <-> naive_fallback) loglanır.
+- **Tazelik:** `peer.as_of_date` CSV son tarihinden > 1 işlem günü geride -> `stale_data` + uyarı.
+- **Diğer:** trend `belirsiz` iken bant merkezi 0; `--horizon` yalnız 5; run metadata satırın `run_id`'sinden;
+  500 yanıtları genel mesaj, `/health` iç yol vermez, bind 127.0.0.1 (`AI_CORE_API_HOST`).
+- **ASELS (madde 13) kök neden:** K8 ölçek-kırığı karantinası (2026-06-09 bölünmesi) sıçrama sonrası 63 satırı
+  panelden atar; `rv_63` penceresi (>= %80 geçerli gün) dolana dek risk özellikleri NaN. Eğitimle aynı kural,
+  bilinçli bırakıldı; uyarı nedeni söyler. Bkz. [Risk Modeli](risk-model.md).
+- **Ölü kod:** `data_loader`, `quality`, `universe_sync`, `database/paths`, `feature_cache`, `macro_*`,
+  `interval_calibration`, `utils/risk_free_rate`, `FeaturePipeline` makro/momentum/recompute yolu, `requests`
+  bağımlılığı, `new_plan.md` silindi; havuz paneli öncesi/sonrası bit-bit aynı.
+- **Wiki:** yeni `risk-model.md`; `architecture`, `persistence-and-api`, `model-catalog`, `testing-and-quality`,
+  `desktop-gui-application`, `source-map`, `index` yeniden yazıldı; `data-pipeline` başına güncel bölüm eklendi;
+  Kol-A sayfaları "tarihsel" bannerı aldı. AGENTS.md/CLAUDE.md güncel ürüne göre yeniden yazıldı.
+
 ## [2026-11-16] Fix | İnceleme bulguları
 
 - **Recursive forecast (1-2):** artifact `feature_frame` artık `Open/High/Low/Volume` taşır;

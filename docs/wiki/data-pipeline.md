@@ -9,6 +9,36 @@ source_count: 11
 
 # Data Pipeline
 
+## Güncel durum (2026-11-16, Kol-A emekli, makro kaldırıldı)
+
+Ürün yalnız **havuzlu (pooled) panel** üretir; aşağıdaki "Tarihsel" bölümlerin çoğu (tensörler,
+bölme/ölçekleme, recursive forecast, makro projeksiyon, momentum, `DataManager`, `src.cli.*`) Kol-A'ya
+aittir ve artık kodda YOKTUR.
+
+- **Ham veri:** `data/*.csv` (+ `data/yedek` yedek klasör, `--fallback-dir`). Okuma/temizleme tek yerde
+  (`src/data/ohlcv_clean.py`: alan sayısı doğrulama, `dd/mm/yyyy` değer-bazlı tarih, tekrar tarih,
+  Adj/Close ile O/H/L ölçekleme, sıfır-hacim atma); Parquet temiz depo `src/data/clean_store.py`.
+- **Panel:** `src/data/pooled_loader.py` (`PooledPanelLoader`; sembol-paralel `n_jobs`, `keep_unlabeled`
+  ile son h satır skorlama için kalır). Özellikler `FeaturePipeline` ile sembol başına: Return,
+  SMA_{7,21,50}_rel, RollStd_{14,21}_norm, NATR_14, RSI_14, MACD_Diff_norm, LogRet_Lag_1 (takvim kapalı);
+  çapraz-kesit özellikler/hedef `src/data/cross_sectional.py`. **Makro katman (MacroPipeline, USDTRY/
+  BIST100, momentum_60d, Relative_Strength, risk-free rate) ve `macro_df` yolu 2026-11'de silindi**;
+  havuz paneli kaldırma öncesi/sonrası 4 gerçek sembolde bit-bit aynı doğrulandı. Özellik önbelleği
+  (`pooled_feature_cache`) anahtarı kod parmak izine bağlı olduğundan kaldırma önbelleği kendiliğinden geçersiz kıldı.
+- **K8 ölçek-kırığı karantinası** (`quarantine_jumps=True`): `|1g log-getiri| > 0.30` (bölünme / düzeltilmemiş
+  seri) etrafında satırlar atılır: hedefi sıçramayı içeren `[p-h, p-1]`, sıçrama günü ve sonraki 63 satır.
+  Risk modeli bu panelden kurulduğu için karantinalı sembolde `rv_63` (>= %80 geçerli gün) yeniden dolana dek
+  (~63+51 işlem günü) risk tahmini NaN olur (ör. ASELS 2026-06-09 bölünmesi); API uyarısı nedeni söyler,
+  bkz. [Risk Modeli](risk-model.md).
+- **Tazelik:** `src/data/freshness.py` (sembol bazlı), API tarafı `analysis_freshness.py`
+  (CSV son tarihi; havuz `as_of_date` CSV'den > 1 işlem günü geriyse `stale_data`).
+- **Takvim:** `data/meta/bist_calendar.csv` (2027-06'ya kadar); bakım yardımcısı `src/forecasting/bist_calendar.py`.
+- **Silinen modüller:** `data_loader`, `quality` (eski PSI), `universe_sync`, `database/paths`, `feature_cache`
+  (Kol-A), `macro_*`, `interval_calibration`, `utils/risk_free_rate`.
+
+> **Tarihsel (Kol-A dönemi):** bu satırdan sonrası eski mimariyi anlatır ve yalnız referans içindir.
+> Kod > test > wiki sırası gereği güncel davranış için yukarıdaki bölüme bakın.
+
 The data layer turns BIST OHLCV CSV files into model-ready tabular and sequence
 tensors while enforcing chronological order and leakage controls.
 

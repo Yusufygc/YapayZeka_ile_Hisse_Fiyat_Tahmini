@@ -4,319 +4,65 @@ type: concept
 status: active
 last_updated: 2026-11-16
 owner: llm
-source_count: 14
 ---
 
 # Architecture
 
-`ts_forecasting_lab` is a production-oriented time series forecasting lab for BIST
-equities. It combines data ingestion, feature engineering, model training,
-walk-forward validation, final-holdout selection, financial backtesting,
-explainability, model registries, and forward forecast persistence.
+`ts_forecasting_lab` artık **gecelik havuzlu analiz servisidir**. Hisse başına yön modelleri (Kol-A),
+`ForecastingPipeline`, backtest motoru, sinyal kalibrasyonu, `stock_models.db` ve onlara özgü
+CLI/GUI/endpoint'ler 2026-11'de kaldırıldı (karar "A+C"; eski mimari için git geçmişi, f9ca736 öncesi).
 
-## Design Pattern
-
-The core application follows a Facade + Strategy style:
+## Akış
 
 ```text
-ForecastingPipeline                         src/pipeline/orchestrator.py
-|-- DataManager                             src/pipeline/data_manager.py
-|   |-- DataLoader / DataUpdater            src/data/
-|   |-- Preprocessor                        src/data/preprocessor.py
-|   |-- FeaturePipeline                     src/features/feature_pipeline.py
-|   |-- MacroPipeline                       src/features/macro_pipeline.py
-|   |-- FeatureCache                        src/features/feature_cache.py
-|   |-- CleanStore (Kol-B, Parquet)         src/data/clean_store.py  (CSV'lerden türetilen temiz OHLCV deposu, data/clean/)
-|   `-- TimeSeriesSplitter                  src/utils/data_splitter.py
-|-- ModelTrainer                            src/pipeline/model_trainer.py
-|   |-- Model implementations               src/models/
-|   `-- WalkForwardValidator                src/validation/walk_forward.py
-`-- EvaluationManager                       src/pipeline/evaluation_manager.py
-    |-- PredictionService                   src/pipeline/evaluation_services.py
-    |-- BacktestService                     src/pipeline/evaluation_services.py
-    |-- SignalCalibrationService            src/pipeline/evaluation_services.py
-    `-- MetricsReportingService             src/pipeline/evaluation_services.py
+data/*.csv (yfinance) -> src/serving/nightly.py -> data/serving_pool.db (PeerStore)
+   gate (BIST işlem günü)   refresh (DataUpdater)      |-> src/api  (FastAPI, API v2; salt-okunur)
+   pooled panel + Kol-B skor  risk modeli (src/risk)   |-> src/gui  (PySide6 tek tablo; salt-okunur)
+                                                       `-> data/nightly_status.json  (/health)
 ```
 
-## Pipeline Service Decomposition
+Giriş noktaları (erişilebilirlik kökleri): `src.api.main`, `src.gui.main`, `src.serving.nightly`,
+`tools/*.py`, `scripts/*.ps1`. Bunlardan erişilemeyen kod ölü sayılır ve silinir.
 
-The 2026-05-17 Phase 3 refactor keeps the main pipeline classes as public
-facades while moving stage orchestration into workflow/service classes:
+## Dizinler
 
-```text
-DataManager
-|-- DataIngestionService
-|-- TensorPreparationService
-|-- ValidationSplitService
-`-- DataQualityReportingService
-
-ModelTrainer
-|-- SingleSplitTrainingWorkflow
-|-- WalkForwardTrainingWorkflow
-`-- FinalHoldoutTrainingWorkflow
-
-EvaluationManager
-|-- SingleSplitEvaluationWorkflow
-|-- WalkForwardEvaluationWorkflow
-`-- FinalHoldoutEvaluationWorkflow
-```
-
-These classes are internal implementation details, not new public APIs. The
-facades still own state and preserve existing method names such as
-`ingest_and_engineer`, `split_data`, `prepare_tensors`, `train_*`, and
-`evaluate_*`. This keeps compatibility while reducing the complexity of the
-three largest pipeline files.
-
-### Evaluation Services: Owner-Forward → Explicit DI (E1 epic, closed)
-
-The original evaluation services (`PredictionService`, `BacktestService`,
-`SignalCalibrationService`, `MetricsReportingService`) were *owner-backed*:
-they inherited `_OwnerBackedService`, whose `__getattr__`/`__setattr__` forwarded
-every attribute access to the owning `EvaluationManager`. The
-[E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md) replaces that "magic"
-with explicit dependency injection: each service takes `(ctx, state)` in its
-constructor, where `EvaluationContext` is the read-only config/identity bag and
-`EvaluationState` is the mutable runtime-output bag (both in
-`evaluation_services.py`). The mixin bodies now read/write `self.ctx.X` /
-`self.state.X` instead of forwarding to the owner.
-
-Migration status (2026-06-14, E1 closed at Faz 7, P2-C applied): all four evaluation services —
-`PredictionService` (Faz 3.1), `BacktestService` (Faz 3.2),
-`SignalCalibrationService` (Faz 3.3) and `MetricsReportingService` (Faz 3.4) —
-are converted to DI and no longer inherit `_OwnerBackedService`. `ForecastRunner`
-moved to `ForecastContext` DI and `_OwnerBackedForecastService` was deleted
-(Faz 5). The four `DataManager` services were made fail-loud (Faz 6), then
-P2-A converted `TensorPreparationService` and `ValidationSplitService` to
-explicit `DataManagerContext`/`DataManagerState` DI. P2-B converted
-`DataIngestionService` and `DataQualityReportingService` to the same explicit
-contract, including symbol/project/macro/universe context and dataset/report
-state fields. P2-C converted the three evaluation workflows and three training
-workflows to explicit context/state DI and removed the last forwarding base.
-`_OwnerBackedService` no longer exists in `src/pipeline/evaluation_services.py`;
-the remaining owner-forward scope is 0 classes.
-
-`EvaluationManager` still exposes `manager.X ⇄ manager.context.X` /
-`manager.state.X` property forwards so the workflows keep reading the same
-context/state. Behavior is unchanged and locked by characterization golden tests
-(`tests/test_owner_forward_contract.py`).
-
-## Operational Hardening Phase
-
-The 2026-05-20 operational hardening work keeps the public facades but changes
-the production-serving path in three important ways:
-
-- `ForecastingPipeline.run_all()` can automatically create a fresh five-day
-  forecast after training, controlled by
-  `ExecutionConfig.auto_generate_forecast_after_training`.
-- Forward forecasts load saved model/scaler/metadata sidecars instead of
-  silently retraining at serving time. The forecast artifact package is written
-  next to the model file during single-split and final-holdout evaluation.
-- `GET /analysis/{symbol}` can queue a SQLite-backed refresh job when the best
-  model has no matching forecast or the forecast is stale. The job updates data,
-  refreshes macro features, resolves old forecast points, and generates a new
-  forecast in a background worker when serving from the project default DB.
-
-Operational support modules added in this phase:
-
-| Module | Responsibility |
+| Dizin | Görev |
 |---|---|
-| `src/api/runtime_config.py` | Local-first CORS settings from `AI_CORE_CORS_ORIGINS` |
-| `src/api/observability.py` | JSON-line rotating log events under `logs/ai_core.log` |
-| `src/api/services/data_refresh_service.py` | Analysis refresh job orchestration |
-| `src/cli/db_maintenance.py` | SQLite summary and backup-reset commands |
-| `src/forecasting/artifacts.py` | Forecast model/scaler/metadata sidecar persistence (+ optional `interval_calib` sidecar) |
-| `src/forecasting/interval_calibration.py` | Model-agnostik olasılıksal interval kalibrasyonu: B2 residual σ band + C conformal (q̂, ACI) |
-| `src/forecasting/bist_calendar.py` | Deterministic BIST calendar generation and merge with manual overrides |
+| `src/data/` | OHLCV indirme/temizleme (`ohlcv_clean`), panel yükleyici (`pooled_loader`), temiz depo (`clean_store`), tazelik, çapraz-kesit özellik/hedef |
+| `src/features/` | `feature_pipeline` (sembol başına teknik özellikler; makro katman yok), Parquet özellik önbelleği, kod parmak izi, korelasyon budama |
+| `src/models/` | Kol-B: `global_pooled_model` (LightGBM), `torch_mlp_model`, `ensemble_pooled_model` |
+| `src/risk/` | Havuzlu oynaklık modeli ([Risk Modeli](risk-model.md)) |
+| `src/validation/` | Pooled purged CV, OOS, segment IC, baz çizgileri |
+| `src/serving/` | `nightly`, `nightly_scoring`, `nightly_risk`, `peer_store`, `peer_scoring`, `confidence`, `trend_tendency`, `peer_xai`, `run_status`, `paths` |
+| `src/xai/` | Özellik sözlüğü, SHAP/permütasyon, grup özeti |
+| `src/api/` | FastAPI v2 (`routers/analysis`, `services/*`) |
+| `src/gui/` | PySide6 özet tablosu (`core/peer_reader`, `tabs/dashboard_tab`) |
+| `src/forecasting/bist_calendar.py` | Takvim CSV üretim/bakım yardımcısı (`data/meta/bist_calendar.csv`; girişlerden çağrılmaz, bakım aracı olarak tutulur) |
 
-Forward forecast olasılıksal aralık akışı: eğitimde `_build_interval_calibration`
-(`evaluation_workflows.py`) walk-forward residual'larından B2+C kalibrasyonunu üretir
-→ `{model}.interval_calib.json` sidecar. Serve'de `roll_forward_recursive`
-kalibrasyonu yükler, `interval_calibration.py` band fonksiyonlarıyla
-`p10/p50/p90` üretir (yeniden eğitim yok), BIST clip uygular, persist eder. Detay:
-[Validation and Backtesting](validation-and-backtesting.md),
-[Persistence and API](persistence-and-api.md).
+## Teknoloji
 
-## E2 Pooled Serving Subsystem (Faz 5–8)
+Python 3.13, pandas/numpy, scikit-learn (risk Ridge), LightGBM + PyTorch (Kol-B), joblib/loky
+(sembol-paralel özellik), pyarrow (Parquet), SQLite (WAL; yazar `PeerStore`, okuyucular `mode=ro`),
+FastAPI/uvicorn/pydantic, PySide6, yfinance, pandas-market-calendars (XIST işlem günü kapısı),
+SHAP (XAI). `requests` kaldırıldı (kullanılmıyordu).
 
-The E2 pooled global model adds a serving path that is **additive** to the
-existing per-symbol product (it does not change training facades or
-`best_models`). Modules under `src/serving/` plus `src/data/` and
-`src/validation/` helpers:
+## Veritabanı şeması (`data/serving_pool.db`)
 
-| Module | Responsibility |
-|---|---|
-| `src/data/pooled_loader.py` | Long panel loader across ~589 stock CSVs; causal conditioning (sector, symbol_id, liq_log, vol) |
-| `src/data/pooled_parallel.py` | Pooled loader sembol-paralel hesap (loky süreç havuzu, `PooledLoaderConfig.n_jobs`); işçi hafif import, sonuç sekansiyelle birebir |
-| `src/data/cross_sectional.py` | Within-date rank target + cross-sectional rank/zscore features (leakage-safe) |
-| `src/models/global_pooled_model.py` | Pooled LightGBM (`GlobalPooledModel`) + feature builder |
-| `src/models/torch_mlp_model.py` | Pooled DEEP model: embedding'li feedforward MLP (`TorchMLPModel`), harness/serving uyumlu (Faz 9) |
-| `src/models/ensemble_pooled_model.py` | `EnsemblePooledModel`: LGB + çok-seed MLP, tarih-içi pct-rank blend (50/50); serving final skorlama (Faz 9) |
-| `src/validation/pooled_cv.py` | Group-purged date-based walk-forward CV |
-| `src/validation/pooled_oos.py` | Per-symbol OOS aggregation + daily cross-sectional IC/ICIR |
-| `src/validation/segment_ic.py` | Stratified per-segment (liq/vol/sector) IC |
-| `src/serving/peer_scoring.py` | Rank one date's universe → peer_score/percentile/label |
-| `src/serving/confidence.py` | Segment-ICIR confidence with hard tradability/freshness gates |
-| `src/serving/trend_tendency.py` | Peer percentile → absolute trend (yukarı/yatay/aşağı) + calibrated P(up)/expected return (Faz 7b) |
-| `src/serving/nightly_scoring.py` | `assemble_peer_table`: score + segment + confidence + trend |
-| `src/serving/peer_store.py` | Isolated SQLite `PeerStore` (`data/serving_pool.db`) with idempotent migration |
-| `src/api/services/peer_service.py` | Attaches additive `peer` block to `GET /analysis/{symbol}` |
-| `tools/e2_nightly_pipeline.py` | Nightly orchestrator: XIST trading-day gate → data refresh → scoring |
-| `scripts/nightly_serving.ps1` / `register_nightly_task.ps1` | Windows Task Scheduler wrapper + registration (daily 21:00) |
+- `global_model_runs`: run_id, created_at (UTC), as_of_date, model_name, data_snapshot_hash,
+  n_symbols, n_rows, horizon, ic_mean, icir, pct_ic_positive, `config_json` (risk özeti, uyarılar,
+  `risk.missing`, kapı değişimi, karantina/fallback sayıları).
+- `peer_scores` (run_id x symbol, UNIQUE): peer_score/percentile/label, segment_liq/vol/sector,
+  segment_icir, confidence_label/reasons/warnings, trend_label/prob_up/expected_return, xai_*,
+  `kolb_price_p50/low/high`, `kolb_horizon_days`, `kolb_band_level`, `risk_sigma_5d`,
+  `risk_sigma_naive_5d`, `risk_vol_percentile`, `risk_level`, `risk_z`, `risk_band_level`,
+  `risk_horizon_days`, `risk_method`. Şema değişiklikleri eklemelidir (`_PEER_MIGRATIONS`, ALTER).
+- Yazar `PeerStore(path)` şemayı/WAL'i kurar; okuyucular `PeerStore.open_readonly(path)`
+  (`file:...?mode=ro`) kullanır — oluşturma, migrasyon veya journal_mode değişikliği yapmaz;
+  eski şemada eksik risk kolonları `None` okunur. Ortak yol yardımcısı: `src/serving/paths.py`.
 
-Validation hierarchy is cross-sectional (within-date, across-symbol), not
-per-symbol absolute — IC/ICIR is the right metric. See
-[E2 Pooled Global Model Epic](e2-pooled-global-model-epic.md) and
-[Persistence and API](persistence-and-api.md).
+## Zaman ve hata kuralları
 
-## Modular Extraction Phase
+Tarih/saat tz-aware (UTC veya İstanbul UTC+3, DST yok); servis günü İstanbul tarihidir (önbellek
+parmak izi dahil). Boş `except` yasak; dosyalar <= 500 satır. Ayrıntı: [Code Quality](code-quality-and-refactoring.md).
 
-The 2026-05-16 modular refactor keeps the public facades stable while moving
-low-risk responsibilities into smaller modules:
-
-| Facade / Caller | Extracted module | Responsibility |
-|---|---|---|
-| `src/backtesting/signals.py` | `src/backtesting/signal_validation.py` | Signal config validation helpers |
-| `src/backtesting/engine.py` | `src/backtesting/execution.py` | Execution arrays, costs, and executable order columns |
-| `src/backtesting/engine.py` | `src/backtesting/equity.py` | Equity-curve dataframe construction and signal column attachment |
-| `src/backtesting/engine.py` | `src/backtesting/trades.py` | Long/flat trade-log extraction |
-| `src/backtesting/signals.py` | `src/backtesting/signal_math.py` | Expected-return, recommendation, volatility, regime, and volatility-threshold math |
-| `src/features/feature_pipeline.py` | `src/features/correlation_pruning.py` | Correlation graph pruning strategy |
-| `src/features/macro_pipeline.py` | `src/features/macro_transforms.py` | Pure macro date filtering, lag, and merge transforms |
-| `src/features/macro_pipeline.py` | `src/features/macro_feature_engineering.py` | Monthly rate/CPI and daily macro feature engineering |
-| `src/pipeline/signal_calibrator.py` | `src/pipeline/signal_calibration/grid.py` | Calibration grid generation, deterministic sampling, and coverage expansion |
-| `src/pipeline/signal_calibrator.py` | `src/pipeline/signal_calibration/selection.py` | Calibration trial summaries, ranking, and confirmed-row selection |
-| `src/pipeline/model_trainer.py` | `src/pipeline/model_factory.py` | Model constants, specs, and stage-aware factory helpers |
-
-The old import paths and private compatibility methods remain during the
-transition period. Large orchestration methods such as `DataManager`,
-`EvaluationManager`, `StockModelDB`, `ForecastRunner`, and XAI reporting are
-still planned decomposition targets; they require broader characterization
-tests because they own persistence, leakage, or user-facing output contracts.
-
-## Main Runtime Flow
-
-1. `python -m src.cli.interactive` asks for stock, validation mode, and model preset.
-2. `PipelineConfig` groups all runtime settings into `DataConfig`, `ValidationConfig`, `ModelConfig`, and `ExecutionConfig`.
-3. `ForecastingPipeline.run_all()` sets output directories, seeds randomness, loads data, engineers features, splits data, trains models, evaluates models, writes reports, and syncs `latest/`.
-4. In `single_split`, selected models are trained once and evaluated on the chronological test split.
-5. In `walk_forward`, each fold is trained independently, the best model is selected from validation behavior, and a final holdout can be evaluated.
-6. Results are written to run-scoped output directories, CSV experiment logs, JSON model registries, and SQLite.
-
-## Technology Stack
-
-| Area | Technologies |
-|---|---|
-| Data processing | pandas, numpy |
-| Technical indicators | ta |
-| Classical ML | scikit-learn, xgboost, optional lightgbm |
-| Statistical models | Yok (2026-11-16: statsmodels, Prophet kaldırıldı) |
-| Deep learning | Yok (2026-11-16: TensorFlow/Keras kaldırıldı). PyTorch yalnız Kol-B `TorchMLPModel` ensemble bacağı için |
-| Removed deps (2026-11-16) | tensorflow, prophet, statsmodels, protobuf, pandas-datareader (`requirements.txt`'ten silindi) |
-| HPO | Optuna with SQLite warm-start behavior |
-| Explainability | SHAP where supported, project-level XAI reports |
-| Backtesting | Custom engine in `src/backtesting/` |
-| Persistence | JSON registry, CSV logs, SQLite |
-| API | FastAPI, Pydantic |
-| Market calendars | Deterministic local BIST calendar; `pandas-market-calendars` (XIST) drives the E2 nightly trading-day gate (installed in `dl_env`) |
-| Pooled model (E2) | LightGBM native API, deterministic; cross-sectional rank target |
-| Serving DB (E2) | Isolated SQLite `data/serving_pool.db` (`PeerStore`) |
-| Scheduling (E2) | Windows Task Scheduler (`ts_forecasting_nightly`, daily 21:00) |
-| Testing | pytest/unittest style tests under `tests/` |
-| Formatting/static config | black, isort, mypy configured in `pyproject.toml` |
-
-## Configuration Objects
-
-`src/pipeline/config.py` is the central configuration layer.
-
-| Class | Responsibility |
-|---|---|
-| `DataConfig` | Data file, target mode, feature mode, scaling, macro options, training window, universe, data update options |
-| `ValidationConfig` | `single_split` or `walk_forward`, fold sizes, sliding/expanding windows, embargo, final holdout |
-| `ModelConfig` | Selected models, registry version, ensemble flag, model-specific settings |
-| `ExecutionConfig` | Backtest settings, costs, signal mode, calibration, diagnostics, report writing |
-| `PipelineConfig` | Root container passed into `ForecastingPipeline` |
-
-## Database Schema
-
-The main SQLite database path used by the pipeline is `data/stock_models.db`.
-
-| Table | Purpose |
-|---|---|
-| `experiments` | Every model run with metrics, feature metadata, dataset hash, model path, candidate flag, and run id |
-| `best_models` | Current best production candidate per symbol |
-| `forecast_runs` | Forward forecast run metadata and source experiment link |
-| `forecast_points` | Horizon-level bounded forecast points and eventual actuals |
-| `forecast_accuracy_summary` | Resolved forecast accuracy summary per forecast run |
-| `analysis_refresh_jobs` | Queued/running/completed/failed API refresh jobs |
-
-`StockModelDB` maintains schema migrations by adding missing columns when needed.
-
-## Output Structure
-
-Run outputs are scoped by stock symbol and run id:
-
-```text
-outputs/{SYMBOL}/
-|-- runs/{RUN_ID}/
-|   |-- models/
-|   |-- experiments/
-|   |-- xai/
-|   `-- reports and plots
-|-- latest/                 copied from the most recent successful run
-`-- forecast_models/         scaler/model workspace for forward forecasts
-
-outputs/batch_summaries/     batch CSV/JSON summaries
-data/optuna/                 Optuna warm-start SQLite files
-tools/archive/               arşivlenmiş tek seferlik araştırma/rapor scriptleri
-```
-
-The run id includes timestamp, symbol, validation mode, and a compact selected-model slug
-(`ForecastingPipeline._model_slug_for_run_id`). Slug rules:
-
-- selection covers all production candidates -> `ALL_MODELS`;
-- no explicit selection -> `models-All`;
-- 1 model -> `model-<Name>`; 2-3 -> `models-<A>-<B>-<C>`;
-- 4+ partial -> `models<N>-<sha8>` (visible names dropped).
-
-The 4+ and `ALL_MODELS` slugs stay short on purpose: long model-name lists previously
-pushed per-model export paths past the Windows 260-char `MAX_PATH` limit, aborting
-all-models runs in `model_result_exporter` (2026-06-02 fix).
-
-## Important Invariants
-
-- Time order must never be shuffled for validation.
-- Scalers must be fit only on the training slice currently being evaluated.
-- Walk-forward fold data must not leak into final holdout selection.
-- Final holdout must not be used for signal threshold optimization.
-- Benchmarks are used for comparison and selection pressure; they are not production candidates.
-- `outputs/{SYMBOL}/latest/` sync must stay inside the symbol output root.
-
-## Related Pages
-
-- [Data Pipeline](data-pipeline.md)
-- [Model Catalog](model-catalog.md)
-- [Validation and Backtesting](validation-and-backtesting.md)
-- [Persistence and API](persistence-and-api.md)
-- [Testing and Quality](testing-and-quality.md)
-- [E1 Owner-Forward Removal Epic](e1-owner-forward-epic.md)
-
-## Gece İşi ve Değerlendirme Katmanı (2026-11-15)
-
-- Gece işi tek modül: `python -m src.serving.nightly` (işlem günü kapısı + veri yenileme + skorlama
-  aynı süreçte). `tools/e2_nightly_pipeline.py` ve `tools/e2_faz5_nightly_scoring.py` ince
-  sarmalayıcıdır; `scripts/nightly_serving.ps1` yorumlayıcıyı `AI_CORE_PYTHON` -> `.venv` -> PATH
-  sırasıyla bulur ve `--fallback-dir data/yedek` geçer.
-- `EvaluationManager` yalnız `generate_predictions` ve üç `evaluate_*` girişini taşır; durum
-  `manager.state` (`EvaluationState`), yapılandırma `manager.context`
-  (`EvaluationContext.from_config(ExecutionConfig, ...)`). Property/setter yönlendirme ve
-  delegasyonlar kaldırıldı; servisler ortak `_EvaluationService(ctx, state)` tabanından türer.
-  `ModelTrainer` aynı şekilde `training_context`/`training_state` kullanır. `DataManager`
-  yönlendirme property'leri henüz duruyor (davranış riski nedeniyle ertelendi).
-- WF OOS girdileri `EvaluationState.wf_backtest_inputs` içinde tutulur; final holdout artifact
-  sidecar'ı interval kalibrasyonunu buradan üretir.
-- SQLite bağlantıları `src/database/connection.ClosingConnection` ile `with` sonunda kapanır.
-- **Gece işi sağlamlaştırma (2026-11-16):** `src/serving/run_status.py` her kosu başında ve
-  her fazda `data/nightly_status.json` yazar (atomik; kosu normal bitmezse `completed: false`
-  kalır). Bayat-pay kapısı: başarısız+bayat sembol oranı `--max-stale-fraction` (varsayılan
-  0.20) üstündeyse skorlama atlanır, çıkış kodu 3, son iyi PeerStore koşusu korunur. Ayrıntı:
-  [Persistence and API](persistence-and-api.md#nightly-automation-2026-11-16).
+Bkz. [Persistence and API](persistence-and-api.md), [Data Pipeline](data-pipeline.md), [Risk Modeli](risk-model.md).

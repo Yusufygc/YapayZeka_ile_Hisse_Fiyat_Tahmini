@@ -1,10 +1,12 @@
 ---
 title: DuckDB Analiz Katmanı
 type: architecture
-status: active
-last_updated: 2026-11-15
+status: historical
+last_updated: 2026-11-16
 owner: llm
 ---
+
+> **TARİHSEL (2026-11-16):** DuckDB analitik katmanı kodda yok. Güncel durum için [Architecture](architecture.md), [Persistence and API](persistence-and-api.md) ve [Risk Modeli](risk-model.md) sayfalarına bakın. Bu sayfa yalnız referans içindir; kod > test > wiki.
 
 # DuckDB Analiz Katmanı
 

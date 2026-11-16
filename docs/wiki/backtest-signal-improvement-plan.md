@@ -1,11 +1,13 @@
 ---
 title: Backtest Signal Improvement Plan
 type: feature-plan
-status: draft
-last_updated: 2026-05-24
+status: historical
+last_updated: 2026-11-16
 owner: llm
 source_count: 4
 ---
+
+> **TARİHSEL (2026-11-16):** Kol-A backtest/sinyal mantığı (karar "C") kaldırıldı; plan uygulanmayacak. Güncel durum için [Architecture](architecture.md), [Persistence and API](persistence-and-api.md) ve [Risk Modeli](risk-model.md) sayfalarına bakın. Bu sayfa yalnız referans içindir; kod > test > wiki.
 
 # Backtest Signal Improvement Plan
 

@@ -4,304 +4,39 @@ type: concept
 status: active
 last_updated: 2026-11-16
 owner: llm
-source_count: 6
 ---
 
 # Testing and Quality
 
-The repository has a meaningful test suite under `tests/`. The earlier skeleton
-claim that no test suite exists is stale and should not be repeated.
-
-## Test Command
-
-Run the full suite:
+## Komut
 
 ```bash
-python -m pytest tests
+# proje .venv, PYTHONIOENCODING=utf-8
+.venv/Scripts/python.exe -m pytest tests -q -p no:cacheprovider
 ```
 
-Run targeted suites:
+2026-11-16 durumu: tüm paket yeşil (Kol-A / makro / ölü kod testleri silindikten sonra ~460 test; sayı
+için komutun son satırına bakın). Pytest geçici dizinleri `.codex_tmp/` altındadır (git dışı).
 
-```bash
-python -m pytest tests/test_smoke.py -v
-python -m pytest tests/test_validation_protocol.py -v
-python -m pytest tests/test_forecasting.py -v
-```
+## Test alanları
 
-## Test Areas
-
-| Test file | Coverage intent |
+| Dosya(lar) | Kapsam |
 |---|---|
-| `test_smoke.py` | Basic construction and smoke coverage for pipeline components |
-| `test_validation_protocol.py` | Validation and leakage protocol behavior |
-| `test_leakage_guards.py` | Explicit leakage guard checks |
-| `test_model_scope_production.py` | Candidate vs benchmark production selection rules |
-| `test_evaluation_services.py` | Service composition in evaluation manager |
-| `test_data_services.py` | DataManager service composition, train-only scaler reporting, final holdout split exclusion |
-| `test_training_workflows.py` | ModelTrainer workflow composition, delegation, and selected-model skip policy |
-| `test_forecasting.py` | BIST forecast rules, calendar behavior, forecast persistence |
-| `test_reporting_metrics.py` | Reported metrics behavior |
-| `test_phase*_*.py` | Acceptance/regression tests for staged refactors |
-| `test_macro_cache_schema.py` | Macro cache schema behavior |
-| `test_run_id_naming.py` | Run id naming contracts |
-| `test_run_leaderboard.py` | Run-level final-holdout leaderboard, completeness, benchmark-clone, and reliability classification |
-| `test_curated_feature_set.py` | (2026-11-16) Kürate 19 özellik kümesinin tam eşitliği; |Spearman| > 0.95 çifti yok |
-| `test_removed_models_legacy_rows.py` | (2026-11-16) Silinmiş model satırlarının okunması ve `ModelNoLongerSupportedError` |
-(`test_prediction_date_aware.py` 2026-11-16 itibarıyla yoktur; Prophet yolu kaldırıldı.)
-| `test_signal_research.py` | Dry-run signal research universe and policy matrix helpers |
-| `test_xai_routing.py` | XAI output routing for validation modes |
-| `test_stock_model_db_repositories.py` | StockModelDB repository composition, schema idempotency, forecast idempotency/resolution |
-| `test_forecast_workflows.py` | ForecastRunner workflow composition and forecast helper characterization |
-| `test_xai_strategies.py` | SHAP/LIME strategy behavior and fallback coverage |
-| `test_xai_product_summary.py` / `test_xai_fold_stability.py` | XAI manifest/product summary metadata and fold-stability coverage |
-| `test_analysis_endpoint.py` | Analysis API status, refresh-job, forecast-source, and CORS contract coverage |
-| `test_operational_hardening.py` | Data updater failures, analysis refresh failures, DB backup-reset, and backtest metric backfill |
-| `test_pooled_oos.py` / `test_pooled_cv.py` | E2 per-symbol OOS aggregation, daily cross-sectional IC/ICIR, group-purged CV leakage |
-| `test_global_pooled_model.py` / `test_cross_sectional.py` | Pooled LightGBM feature build, target-leak guard, rank target/feature correctness |
-| `test_segment_ic.py` / `test_peer_scoring.py` | Segment IC stratification, peer score/percentile/label thresholds |
-| `test_peer_confidence.py` / `test_peer_store.py` | Confidence gates, `PeerStore` upsert/read + trend-column migration |
-| `test_nightly_scoring.py` / `test_peer_service.py` | `assemble_peer_table` (segment+confidence+trend), API peer-block enrichment |
-| `test_trend_tendency.py` | Trend label bands, quintile calibration monotonicity, `belirsiz` gate |
-| `test_nightly_pipeline.py` | E2 Faz 8 orchestrator: refresh aggregation, XIST gate + weekday fallback, `gate_target_date`, main skip/run flows |
+| `test_analysis_api_v2.py`, `test_serving_hardening_2026_11.py` | API v2 şekli/durumları, 503 ve `no_data` ayrımı, önbellek (LRU, no_data/unavailable alınmaz), `/health` (risk `failed` -> degraded, iç yol yok), as_of geriliği, risk NULL uyarıları, 500 genel mesaj, bind adresi, **okuyucuların DB'yi değiştirmediği** (eski şema: sütunlar, journal_mode, dosya baytları) |
+| `test_peer_service.py`, `test_peer_store.py`, `test_persistence_fixes_2026_11.py`, `test_serving_health.py`, `test_response_cache.py`, `test_rate_limit.py` | PeerStore, salt-okunur erişim, migrasyon, tazelik, önbellek |
+| `test_risk_features.py`, `test_risk_validation.py`, `test_risk_serving.py` | Risk özellikleri/hedef sızıntısızlığı, purged WF + kapı, model/band formülü (merkez 0), eski şema migrasyonu |
+| `test_nightly_*.py`, `test_p4_nightly_module.py`, `test_nightly_scoring.py` | Gece akışı, durum dosyası, bayat-pay kapısı, `--horizon` reddi, `.ps1` kuralları |
+| `test_pooled_*.py`, `test_clean_store.py`, `test_data_*`, `test_cross_sectional.py`, `test_curated_feature_set.py`, `test_calendar_features.py` | Havuz yükleyici (karantina, paralel birebirlik), temiz depo, veri düzeltmeleri, kürate 11 özellik (makrosuz) |
+| `test_global_pooled_model.py`, `test_ensemble_pooled_*.py`, `test_torch_mlp_model.py`, `test_peer_*.py`, `test_trend_tendency.py`, `test_xai_strategies.py`, `test_segment_ic.py`, `test_baselines.py` | Kol-B modelleri, skor, güven, trend, XAI, doğrulama |
+| `test_gui_smoke.py` | PySide6 offscreen duman testi (okuyucu salt-okunur) |
 
-Full suite currently **760 passed, 19 warnings** (run with `dl_env` python and
-`--basetemp=.pytest_tmp_full_xai_group_details`).
+## Kalite değişmezleri
 
-The 2026-06-14 XAI audit focused gate covers manifest/background handling,
-walk-forward fold attribution, sequence heatmaps, Analysis API `xai.status`,
-and Kol-B peer XAI observability:
+- Kronolojik doğrulama, purge/embargo `target_date` ile; ölçekleyici/kalibrasyon yalnız geçmişten.
+- Okuyucular (API/GUI) asla DB oluşturmaz/migre etmez; eski şema okunabilir kalır.
+- Boş `except` yok; tz-aware zaman; dosya <= 500 satır; sembol regex `^[A-Z0-9]{1,10}$`.
+- Ağ erişimi gerektiren test yok (sağlayıcılar enjekte/sahte).
+- Doğrulama: her modül `src/` ve `tools/` (arşiv hariç) import edilebilir; FastAPI `TestClient` ile
+  `/health`, `/symbols`, `/analysis/{symbol}` geçici PeerStore DB'sinde duman testi.
 
-```powershell
-$env:PYTHONDONTWRITEBYTECODE='1'
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_xai_strategies.py tests\test_xai_product_summary.py tests\test_xai_fold_stability.py tests\test_xai_routing.py tests\test_analysis_endpoint.py tests\test_peer_xai.py tests\test_peer_scoring.py tests\test_peer_store.py tests\test_peer_service.py -q --basetemp=.pytest_tmp_xai_audit
-```
-
-Latest focused result: **82 passed** in `dl_env`.
-
-The macro/indicator XAI group-summary extension adds a narrower product/API
-gate:
-
-```powershell
-$env:PYTHONDONTWRITEBYTECODE='1'
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_xai_product_summary.py tests\test_analysis_endpoint.py tests\test_peer_xai.py tests\test_peer_service.py tests\test_phase5_data_quality.py -q --basetemp=.pytest_tmp_xai_group_details
-```
-
-Latest macro/indicator XAI result: **59 passed** in `dl_env`.
-
-## Static Tooling
-
-`pyproject.toml` configures:
-
-- `black` line length 100
-- `isort` profile `black`
-- `mypy` Python 3.10 settings and missing-import ignores for optional ML libraries
-
-These tools may need to be installed separately depending on the environment.
-
-Common commands:
-
-```bash
-python -m black .
-python -m isort .
-python -m mypy src
-```
-
-## Code Complexity Review
-
-The 2026-05-16 review uses the `dl_env` Python runtime for static checks:
-
-```powershell
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m vulture src tests --min-confidence 80
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m radon cc src -s -a
-```
-
-Conservative cleanup decisions from that review:
-
-- Backtest CSV/Markdown/order reports must not depend on successful plot rendering.
-- Matplotlib users should prefer a headless-safe backend because `dl_env` can fail on Tk.
-- The old standalone Monte Carlo, Kelly sizing, and permutation-test research helpers were removed from the active codebase after import/reference checks.
-- `src/pipeline/report_writer.py` was a tombstoned deprecated file with no active imports.
-
-## Modular Refactor Gate
-
-The first modular extraction phase is intentionally compatibility-first:
-
-- Public facades and import paths remain stable while extracted modules take
-  single responsibilities.
-- New or changed helper modules should stay at radon `C` or better.
-- Refactors that touch leakage, persistence, forecast output, or XAI routing
-  must keep characterization tests ahead of behavior changes.
-
-Current targeted gate for this phase:
-
-```powershell
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_smoke.py tests\test_evaluation_services.py -q
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_leakage_guards.py tests\test_phase7_acceptance.py tests\test_phase8_acceptance.py tests\test_reporting_metrics.py -q
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_forecasting.py tests\test_model_scope_production.py tests\test_macro_cache_schema.py -q
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m radon cc src -s -a
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m vulture src tests --min-confidence 80
-```
-
-## Pipeline Decomposition Gate
-
-Phase 3 adds service-boundary tests around the public pipeline facades:
-
-```powershell
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_smoke.py tests\test_evaluation_services.py tests\test_data_services.py tests\test_training_workflows.py -q
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_leakage_guards.py tests\test_phase7_acceptance.py tests\test_phase8_acceptance.py tests\test_reporting_metrics.py tests\test_phase6_backtest_standard.py -q
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_forecasting.py tests\test_model_scope_production.py tests\test_macro_cache_schema.py -q
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m radon cc src/pipeline/evaluation_manager.py src/pipeline/data_manager.py src/pipeline/model_trainer.py src/pipeline/evaluation_workflows.py src/pipeline/data_services.py src/pipeline/training_workflows.py -s -a
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m vulture src tests --min-confidence 80
-```
-
-The intended standard for newly extracted workflow/service code is radon `C` or
-better, with facade methods staying at simple delegation level.
-
-## Persistence, Forecasting, and XAI Gate
-
-Phase 4 adds repository/workflow/strategy boundaries for SQLite persistence,
-forward forecasts, and model-family XAI:
-
-```powershell
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_forecasting.py tests\test_model_scope_production.py -q
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_xai_routing.py -q
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_smoke.py tests\test_evaluation_services.py -q
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_stock_model_db_repositories.py tests\test_forecast_workflows.py tests\test_xai_strategies.py -q
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m radon cc src/database src/forecasting src/xai -s -a
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m vulture src tests --min-confidence 80
-```
-
-## Operational Hardening Gate
-
-The 2026-05-20 serving changes add targeted regression coverage for refresh job
-deduplication, matching forecasts to the current best experiment, stale/missing
-forecast refresh reloads, failed refresh reason propagation, local-only CORS
-defaults, recursive forecast state updates, artifact-sidecar requirements,
-production ensemble eligibility, `AttentionLSTM v2` attention weights, run-aware
-XAI lookup, semicolon/BOM CSV parsing, and backtest metric backfill.
-
-Focused command:
-
-```powershell
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_analysis_endpoint.py tests\test_forecasting.py tests\test_forecast_workflows.py tests\test_model_scope_production.py tests\test_operational_hardening.py -q
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_xai_product_summary.py tests\test_stock_model_db_repositories.py tests\test_operational_hardening.py tests\test_analysis_endpoint.py -q
-```
-
-## Run-Level Holdout Diagnostics and Signal Research Gate
-
-The 2026-05-24 run-level diagnostics implementation adds run-level leaderboard
-diagnostics, cross-symbol sector summaries, data-history bucket summaries,
-Prophet Hybrid date-aware final holdout routing, signal research planning and
-sequential run execution, and lock-protected `latest/` synchronization. History buckets are
-diagnostic (`long_history`, `mid_history`, `short_history`, `missing_data`,
-`unknown`) and must not skip otherwise runnable symbols.
-
-Focused command:
-
-```powershell
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_run_leaderboard.py tests\test_run_manifest.py tests\test_operational_hardening.py tests\test_signal_research.py tests\test_forecast_workflows.py -q
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m src.cli.run_leaderboard --symbol ARDYZ --format json
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m src.cli.signal_research check-universe --symbols ARDYZ --format json
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m src.cli.signal_research ensure-data --symbols KCHOL,EREGL --format json
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m src.cli.signal_research plan-runs --symbols ARDYZ --models DLinear --policies V0,V1 --format json
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m src.cli.signal_research run --symbols ARDYZ --models DLinear --policies V0,V1 --resume --dry-run --format json
-```
-
-## Dynamic Sector Mapping Gate
-
-The 2026-05-24 dynamic sector mapping change makes `data/bist_universe.csv` the
-source for stock-to-sector-index resolution and keeps BIST100 fallback behavior
-visible in feature/cache metadata.
-
-Focused command:
-
-```powershell
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\python.exe' -m pytest tests\test_feature_improvements.py tests\test_phase5_data_quality.py tests\test_run_leaderboard.py tests\test_signal_research.py -q
-```
-
-## Graphify Knowledge Graph
-
-Graphify is installed in the `dl_env` conda environment via the PyPI package
-`graphifyy`; the CLI binary is:
-
-```powershell
-C:\Users\ysfygc\anaconda3\envs\dl_env\Scripts\graphify.exe
-```
-
-Use the AST-only refresh command after code changes when no LLM API key is
-available:
-
-```powershell
-& 'C:\Users\ysfygc\anaconda3\envs\dl_env\Scripts\graphify.exe' update .
-```
-
-This writes `graphify-out/graph.json`, `graphify-out/graph.html`, and
-`graphify-out/GRAPH_REPORT.md`. Full semantic extraction requires one of
-`GEMINI_API_KEY`, `GOOGLE_API_KEY`, `MOONSHOT_API_KEY`, `ANTHROPIC_API_KEY`, or
-`OPENAI_API_KEY`.
-
-## Runtime Dependencies
-
-`requirements.txt` includes:
-
-- pandas, numpy, scikit-learn
-- xgboost, lightgbm
-- torch (yalnız Kol-B `TorchMLPModel`)
-- ta
-- matplotlib
-- joblib
-- optuna
-- yfinance
-- requests
-- pandas-market-calendars
-- shap
-- pyarrow (Kol-B Parquet önbellek/temiz depo), duckdb (salt-okunur analiz)
-
-2026-11-16 itibarıyla tensorflow, prophet, statsmodels, protobuf ve pandas-datareader
-kaldırıldı.
-
-FastAPI, uvicorn, torch, pydantic, httpx, lime, filelock and pytest are listed
-in `requirements.txt` (2026-11-10). Install with
-`pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt`.
-
-**Python 3.13 (2026-11-15):** Proje venv'i Python 3.13.17 ile yeniden kuruldu
-(eski 3.10 ortamı yerelde `.venv_old_py310`, git dışı). CI yalnız 3.13 matrisini
-koşar, `requirements.txt`'ten kurar ve test hatasında durur (eski `|| true`
-kaldırıldı; `.github/`, `pyproject.toml`, `.flake8`, `.pre-commit-config.yaml`
-artık git'te). Tam suite: 954 passed. SQLite bağlantıları `ClosingConnection`
-fabrikasıyla `with` sonunda kapanır (3.13'te Windows dosya kilidi hatası).
-
-## Yerel Ortam ve Kol-B Denetim Testleri (2026-11-10)
-
-- Proje venv'i: `ts_forecasting_lab/.venv` (Python 3.10; `.gitignore` kapsar). Kurulum:
-  `python -m venv .venv`, `pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu`
-  (`torch` CPU wheel). `requirements.txt`e `torch`, `fastapi`, `uvicorn`, `pydantic`, `httpx`,
-  `lime`, `filelock`, `pytest`, `pytest-cov` eklendi.
-- Tam suite bu venv'de: **799 passed** (denetim öncesi 764 + 35 yeni test). Yeni dosyalar:
-  `test_baselines.py`, `test_pooled_dataset.py`, `test_panel_columns.py`, `test_serving_health.py`;
-  genişletilenler: `test_pooled_loader.py` (keep_unlabeled, delisting, fallback, karantina),
-  `test_pooled_oos.py`, `test_segment_ic.py`, `test_nightly_scoring.py`.
-- `test_v1_alias_route_registered` artık `app.openapi()["paths"]` kullanır (yeni FastAPI
-  `app.routes`i lazy `_IncludedRouter` ile döndürür, `.path` taşımaz).
-
-## Quality Invariants To Protect
-
-- Chronological order in all train/test and fold splits.
-- Train-only scaler fitting.
-- No final-holdout tuning.
-- Benchmarks excluded from production leader selection.
-- Run-scoped outputs stay under the symbol output root.
-- Forward forecast points respect BIST calendar and price rules.
-- Optional dependencies should fail gracefully where code expects optional behavior.
-
-## Pre-Change Checklist For Agents
-
-1. Read [Wiki Index](index.md).
-2. Identify which subsystem page applies.
-3. Inspect source code before changing behavior.
-4. Add or update tests when the change affects leakage boundaries, model selection, persistence, or public API behavior.
-5. Update the wiki if the change adds a decision, bug solution, or new feature plan.
-6. Add a top entry to [Log](log.md).
-7. When a commit is requested, use a clear Turkish commit message with correct Turkish characters.
-
-
+Bkz. [Architecture](architecture.md), [Persistence and API](persistence-and-api.md), [Change Management](change-management.md).

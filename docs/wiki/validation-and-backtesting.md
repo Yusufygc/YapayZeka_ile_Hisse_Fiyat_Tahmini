@@ -1,11 +1,13 @@
 ---
 title: Validation and Backtesting
 type: concept
-status: active
+status: historical
 last_updated: 2026-11-16
 owner: llm
 source_count: 9
 ---
+
+> **TARİHSEL (2026-11-16):** Single split / walk-forward / backtest Kol-A içindir; Kol-B ve risk doğrulaması `src/validation/pooled_*` ve `src/risk/validation.py` (bkz. Risk Modeli). Güncel durum için [Architecture](architecture.md), [Persistence and API](persistence-and-api.md) ve [Risk Modeli](risk-model.md) sayfalarına bakın. Bu sayfa yalnız referans içindir; kod > test > wiki.
 
 # Validation and Backtesting
 

@@ -1,11 +1,13 @@
 ---
 title: Refactor Analysis 2026-06-12
 type: audit
-status: active
-last_updated: 2026-06-14
+status: historical
+last_updated: 2026-11-16
 owner: llm
 source_count: 21
 ---
+
+> **TARİHSEL (2026-11-16):** Analiz, silinen Kol-A pipeline'ı ve `owner-state` iş akışı içindir. Güncel durum için [Architecture](architecture.md), [Persistence and API](persistence-and-api.md) ve [Risk Modeli](risk-model.md) sayfalarına bakın. Bu sayfa yalnız referans içindir; kod > test > wiki.
 
 # Refactor Analysis 2026-06-12
 

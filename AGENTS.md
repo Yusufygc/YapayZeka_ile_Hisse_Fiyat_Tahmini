@@ -56,31 +56,34 @@ For detailed wiki conventions, use `docs/wiki/wiki-guidelines.md`.
 - `docs/wiki/source-map.md`: Raw source map and where facts should be filed.
 - `docs/wiki/architecture.md`: System architecture, technology stack, config, outputs, database schema.
 - `docs/wiki/data-pipeline.md`: Data loading, features, scaling, targets, leakage boundaries.
-- `docs/wiki/model-catalog.md`: Benchmarks, candidates, model families, production scope.
-- `docs/wiki/validation-and-backtesting.md`: Single split, walk-forward, final holdout, signals, metrics.
-- `docs/wiki/persistence-and-api.md`: Outputs, SQLite, forecast persistence, FastAPI.
+- `docs/wiki/model-catalog.md`: Kol-B pooled model, risk model, retired Kol-A.
+- `docs/wiki/risk-model.md`: Pooled volatility risk model (target, features, calibration, gate, validation numbers).
+- `docs/wiki/validation-and-backtesting.md`: Historical Kol-A validation notes; Kol-B/risk validation pointers.
+- `docs/wiki/persistence-and-api.md`: PeerStore, nightly status, FastAPI API v2.
 - `docs/wiki/testing-and-quality.md`: Test areas, commands, quality invariants.
 - `docs/wiki/log.md`: Append-first chronological update log.
 
 ## Project Overview
 
-`ts_forecasting_lab` is a production-oriented time series forecasting platform
-for BIST equities. It supports data updating, technical and macro feature
-engineering, single-split and walk-forward validation, model benchmarking,
-financial backtesting, XAI reporting, model registries, SQLite persistence, and
-BIST-compliant forward forecasts.
+`ts_forecasting_lab` is a nightly pooled-model analysis service for BIST equities
+(decision support, not a trading bot). One pooled model (Kol-B: LightGBM + MLP
+ensemble) learns the whole universe; every night it ranks stocks against each other
+(peer score, calibrated trend tendency, confidence), and a pooled volatility risk
+model (`src/risk/`, HAR-X Ridge) sets the 5-day risk level and the 80% price band
+(`kolb_price_low/high`). Results go to `data/serving_pool.db` (`PeerStore`:
+`global_model_runs`, `peer_scores`) plus `data/nightly_status.json`. The API and the
+desktop GUI only READ that database (read-only `PeerStore.open_readonly`); no model
+is trained at request time.
 
-The top-level facade is `ForecastingPipeline` in `src/pipeline/orchestrator.py`.
+The per-symbol direction models (Kol-A), `ForecastingPipeline`, the backtest engine,
+`src.cli.*`, `model_scope.py` and `stock_model_db.py` were removed (decision "C";
+see git history and `docs/wiki/model-catalog.md`).
 
 ```text
-ForecastingPipeline
-|-- DataManager
-|-- ModelTrainer
-`-- EvaluationManager
-    |-- PredictionService
-    |-- BacktestService
-    |-- SignalCalibrationService
-    `-- MetricsReportingService
+data/*.csv -> src/serving/nightly.py -> data/serving_pool.db (PeerStore)
+              (trading-day gate, refresh,      |-> src/api  (FastAPI, API v2, read-only)
+               pooled scoring, risk model)     |-> src/gui  (PySide6 single table)
+                                               `-> data/nightly_status.json (/health)
 ```
 
 ## Main Commands
@@ -89,50 +92,48 @@ ForecastingPipeline
 # Install runtime dependencies
 pip install -r requirements.txt
 
-# Run interactive pipeline
-python -m src.cli.interactive
+# Nightly job (Windows Task Scheduler runs scripts/nightly_serving.ps1 at 21:00;
+# register with scripts/register_nightly_task.ps1). --horizon only accepts 5.
+python -m src.serving.nightly --db data/serving_pool.db --model ensemble --fallback-dir data/yedek
+python -m src.serving.nightly --help
 
-# Run tests
-python -m pytest tests
+# API (binds 127.0.0.1; override with AI_CORE_API_HOST / AI_CORE_API_PORT)
+uvicorn src.api.main:app --port 8000
 
-# Run selected test file
-python -m pytest tests/test_smoke.py -v
+# Desktop GUI
+python -m src.gui.main
 
-# Run BIST-compliant forward forecasts
-python -m src.cli.forecast --stocks TUPRS,ASELS --horizon-days 5
-
-# Serve registry/API data
-uvicorn src.api.main:app --reload --port 8000
+# Tests (use the project .venv; PYTHONIOENCODING=utf-8)
+.venv/Scripts/python.exe -m pytest tests -q -p no:cacheprovider
 ```
-
-`fastapi` and `uvicorn` may need to be installed separately if they are missing
-from the active environment.
 
 ## Architecture Rules
 
-- Preserve chronological ordering in all validation logic.
-- Fit scalers only on the training slice currently being evaluated.
-- Do not tune on final holdout data.
-- Treat naive models as benchmarks, not production candidates.
-- Keep production model scope aligned with `src/pipeline/model_scope.py`.
-- Keep run outputs under `outputs/{SYMBOL}/runs/{RUN_ID}/` and sync `latest/`
-  only inside that symbol output root.
-- Keep SQLite registry behavior aligned with `src/database/stock_model_db.py`.
-- Prefer existing config dataclasses in `src/pipeline/config.py` over new flat
-  argument lists.
+- Preserve chronological ordering in all validation logic; purge/embargo by `target_date`.
+- Fit scalers/calibrations only on data available before the evaluated slice (risk bias
+  `c` and conformal `z` come from PREVIOUS OOS blocks only). Never tune on the final holdout.
+- The product is served ONLY from the nightly output. API/GUI readers must open the DB
+  read-only (`PeerStore.open_readonly`); they never create, migrate or change journal mode.
+- Writers (`src/serving/nightly.py`) use `PeerStore(path)`; schema changes are additive
+  (`_PEER_MIGRATIONS`) and old DBs must stay readable (missing columns -> None).
+- Risk model and Kol-B quintile table are 5-day; do not add other horizons without
+  re-validating `src/risk/validation.py` (acceptance gate constants are pre-registered).
+- API: DB missing/locked/corrupt -> `analysis_status="unavailable"` (HTTP 503), symbol absent
+  -> `no_data`; neither is cached. 500 responses never echo exception text; `/health` exposes
+  no internal paths.
+- No empty `except`; timezone-aware datetimes (Istanbul = UTC+3); files <= 500 lines.
+- Keep generated runtime artifacts (`data/*.db`, `data/clean/`, caches) out of source control.
 
 ## Editing Guidance
 
-- Follow existing module boundaries before introducing new abstractions.
-- For data behavior, update or add tests around leakage, chronological splits,
-  target conversion, or scaler fitting.
-- For model selection, update tests around candidate/benchmark eligibility.
-- For persistence/API behavior, update tests around SQLite schema, forecast
-  records, endpoint contracts, or idempotency.
-- Keep generated runtime artifacts (`outputs/`, model files, caches, SQLite DBs)
-  out of source control unless explicitly requested.
-- When a commit is requested, write the commit message in clear Turkish and use
-  Turkish characters correctly.
+- Follow existing module boundaries; reachability roots are `src.api.main`, `src.gui.main`,
+  `src.serving.nightly`, `tools/*.py` and `scripts/*.ps1`. Code reachable from none of them is dead.
+- Data behavior: add tests around leakage, chronological splits, quarantine and target conversion.
+- Risk/serving behavior: test the gate (`mse_ratio`, DM t, coverage), `risk_method` fallback
+  and the API status mapping (`ok`/`stale_data`/`low_confidence`/`no_data`/`unavailable`).
+- API/GUI changes: use a temporary `PeerStore` DB; assert readers leave the DB unchanged.
+- When a commit is requested, write the commit message in clear Turkish with correct Turkish
+  characters and no AI attribution lines (`RULES.md`).
 
 ## Documentation Discipline
 

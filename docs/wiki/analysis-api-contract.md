@@ -1,11 +1,13 @@
 ---
 title: Analysis API Contract
 type: concept
-status: active
-last_updated: 2026-06-14
+status: historical
+last_updated: 2026-11-16
 owner: llm
 source_count: 7
 ---
+
+> **TARİHSEL (2026-11-16):** Bu sözleşme API v1 (Kol-A) içindir; `api_version=2` şekli Persistence and API sayfasında. Güncel durum için [Architecture](architecture.md), [Persistence and API](persistence-and-api.md) ve [Risk Modeli](risk-model.md) sayfalarına bakın. Bu sayfa yalnız referans içindir; kod > test > wiki.
 
 # Analysis API Contract
 

@@ -1,11 +1,13 @@
 ---
 title: Confidence and Risk Policy
 type: concept
-status: active
-last_updated: 2026-05-25
+status: historical
+last_updated: 2026-11-16
 owner: llm
 source_count: 4
 ---
+
+> **TARİHSEL (2026-11-16):** Politika Kol-A güven/sinyal tanısı içindir; güncel güven kuralları `analysis_service._confidence` ve Persistence and API sayfasındadır. Güncel durum için [Architecture](architecture.md), [Persistence and API](persistence-and-api.md) ve [Risk Modeli](risk-model.md) sayfalarına bakın. Bu sayfa yalnız referans içindir; kod > test > wiki.
 
 # Confidence and Risk Policy
 

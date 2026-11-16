@@ -1,10 +1,12 @@
 ---
 title: Staged Code Review Guide
 type: guide
-status: active
-last_updated: 2026-05-31
+status: historical
+last_updated: 2026-11-16
 owner: llm
 ---
+
+> **TARİHSEL (2026-11-16):** 8 aşamalı inceleme rehberi silinen Kol-A modüllerini kapsar. Güncel durum için [Architecture](architecture.md), [Persistence and API](persistence-and-api.md) ve [Risk Modeli](risk-model.md) sayfalarına bakın. Bu sayfa yalnız referans içindir; kod > test > wiki.
 
 # Staged Code Review Guide
 

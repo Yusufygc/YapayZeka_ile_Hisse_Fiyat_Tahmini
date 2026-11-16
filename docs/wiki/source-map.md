@@ -2,7 +2,7 @@
 title: Source Map
 type: source-map
 status: active
-last_updated: 2026-06-04
+last_updated: 2026-11-16
 owner: llm
 ---
 
@@ -15,34 +15,28 @@ deep inspection so source reads stay targeted.
 
 | Source | Role | Wiki Pages |
 |---|---|---|
-| `src/pipeline/` | Orchestration, config, training/evaluation services | [Architecture](architecture.md), [Validation and Backtesting](validation-and-backtesting.md) |
-| `src/data/` | CSV loading, schema normalization, corporate-action checks, updating | [Data Pipeline](data-pipeline.md) |
-| `src/features/` | Technical indicators, macro features, feature caching | [Data Pipeline](data-pipeline.md) |
-| `src/models/` | Model implementations and `BaseModel` contract | [Model Catalog](model-catalog.md) |
-| `src/validation/` | Walk-forward split execution; pooled purged CV, per-symbol OOS, segment IC (E2) | [Validation and Backtesting](validation-and-backtesting.md), [E2 Epic](e2-pooled-global-model-epic.md) |
-| `src/serving/` | E2 pooled-model serving: peer scoring, segment confidence, trend tendency, nightly scoring, `PeerStore` | [Persistence and API](persistence-and-api.md), [E2 Epic](e2-pooled-global-model-epic.md) |
-| `src/backtesting/` | Signals, execution simulation, metrics, trade extraction, reporting | [Validation and Backtesting](validation-and-backtesting.md) |
-| `src/evaluation/` | Forecast metrics, benchmark enrichment, and plots | [Validation and Backtesting](validation-and-backtesting.md) |
-| `src/database/` | SQLite experiment and forecast registry | [Persistence and API](persistence-and-api.md) |
-| `src/model_registry/` | Per-run JSON registry | [Persistence and API](persistence-and-api.md) |
-| `src/experiments/` | CSV experiment logging | [Persistence and API](persistence-and-api.md) |
-| `src/forecasting/` | Forward forecast runner, BIST rules, persistence | [Persistence and API](persistence-and-api.md) |
-| `src/api/` | FastAPI service around registry data and async pipeline jobs | [Persistence and API](persistence-and-api.md) |
-| `src/xai/` | Explainability, feature dictionary, report writer, narratives | [Architecture](architecture.md), [Testing and Quality](testing-and-quality.md) |
-| `tests/` | Behavioral contracts and regression coverage | [Testing and Quality](testing-and-quality.md) |
+| `src/data/` | OHLCV okuma/temizleme, panel yükleyici, temiz depo, tazelik, çapraz-kesit | [Data Pipeline](data-pipeline.md) |
+| `src/features/` | `feature_pipeline` (makrosuz), Parquet özellik önbelleği, kod parmak izi | [Data Pipeline](data-pipeline.md) |
+| `src/models/` | Kol-B modelleri (LightGBM, MLP, ensemble) | [Model Catalog](model-catalog.md) |
+| `src/risk/` | Havuzlu oynaklık modeli, doğrulama, servis | [Risk Modeli](risk-model.md) |
+| `src/validation/` | Pooled purged CV, OOS, segment IC, baz çizgileri | [E2 Epic](e2-pooled-global-model-epic.md), [Risk Modeli](risk-model.md) |
+| `src/serving/` | Gece işi, skorlama, `PeerStore`, güven, trend, XAI, durum dosyası | [Persistence and API](persistence-and-api.md), [Architecture](architecture.md) |
+| `src/api/` | FastAPI v2 (salt-okunur) | [Persistence and API](persistence-and-api.md) |
+| `src/gui/` | PySide6 özet tablosu | [Desktop GUI Application](desktop-gui-application.md) |
+| `src/xai/` | Özellik sözlüğü, SHAP/permütasyon, grup özeti | [Architecture](architecture.md) |
+| `src/forecasting/bist_calendar.py` | Takvim CSV bakım yardımcısı | [Data Pipeline](data-pipeline.md) |
+| `tests/` | Davranış sözleşmeleri | [Testing and Quality](testing-and-quality.md) |
 
 ## Entrypoints
 
 | Entrypoint | Purpose |
 |---|---|
-| `python -m src.cli.interactive` | Interactive training/evaluation entrypoint |
-| `python -m src.cli.batch` | Batch execution helper |
-| `python -m src.cli.forecast` | BIST-compliant forward forecast command |
-| `src/api/main.py` | HTTP service entrypoint |
-| `tools/e2_nightly_pipeline.py` | E2 nightly orchestrator: trading-day gate → data refresh → scoring |
-| `tools/e2_faz5_nightly_scoring.py` | E2 pooled-model universe scoring batch → `PeerStore` |
-| `scripts/nightly_serving.ps1` | Windows Task Scheduler target (daily 21:00) |
-| `scripts/register_nightly_task.ps1` | One-time scheduled-task registration |
+| `python -m src.serving.nightly` | Gece işi: işlem günü kapısı -> veri tazeleme -> skorlama + risk -> PeerStore |
+| `uvicorn src.api.main:app` | HTTP servisi (API v2) |
+| `python -m src.gui.main` | Masaüstü özet paneli |
+| `tools/*.py` | Veri denetim/onarım, Kol-B doğrulama sarmalayıcıları (`tools/archive/` arşiv) |
+| `scripts/nightly_serving.ps1` | Windows Task Scheduler hedefi (her gün 21:00) |
+| `scripts/register_nightly_task.ps1` | Tek seferlik görev kaydı |
 
 ## Reference Documents
 
@@ -60,12 +54,11 @@ deep inspection so source reads stay targeted.
 |---|---|
 | `data/*.csv` | OHLCV stock files, plus universe metadata |
 | `data/bist_universe.csv` | Stock universe metadata used for survivorship and listing checks |
-| `data/meta/bist_calendar.csv` | BIST trading calendar for forward forecasts |
-| `data/macro/` | Macro cache generated from external sources |
+| `data/meta/bist_calendar.csv` | BIST işlem takvimi (tazelik hesabı) |
 | `data/feature_cache/` | Feature cache generated from raw data and config |
 | `data/clean/` | Kol-B temizlenmiş OHLCV Parquet deposu (CSV'lerden türetilir, gitignored; bkz. data-pipeline.md) |
-| `data/stock_models.db` | SQLite registry, generated runtime artifact |
-| `data/serving_pool.db` | E2 isolated `PeerStore` (global_model_runs + peer_scores); generated runtime artifact |
+| `data/serving_pool.db` | `PeerStore` (global_model_runs + peer_scores); gece işi yazar, API/GUI salt-okunur okur |
+| `data/nightly_status.json` | Gece koşusu durumu (`risk` alanı dahil) |
 | `logs/nightly_*.log` | E2 nightly job logs (gitignored, 14-day retention) |
 
 ## Source-of-Truth Rule
