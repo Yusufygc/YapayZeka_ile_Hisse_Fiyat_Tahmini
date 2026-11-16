@@ -26,7 +26,6 @@ dusuk-guven bir kosu yazmak yerine onceki iyi kosu korunur.
 from __future__ import annotations
 
 import argparse
-import glob
 import logging
 import os
 import sys
@@ -41,6 +40,7 @@ from src.data.freshness import check_freshness, warn_if_stale
 from src.data.market_providers import DEFAULT_REFRESH_DEADLINE_S, abandoned_call_count
 from src.serving.nightly_risk import horizon_arg
 from src.serving.run_status import NightlyRunStatus, status_path_for_db
+from src.serving.universe_seed import csv_symbols as _universe_symbols, seed_missing_from_fallback
 from src.serving.nightly_scoring import (
     assemble_peer_table,
     coverage_warnings,
@@ -54,7 +54,6 @@ from src.serving.nightly_scoring import (
 _MARKET_CLOSE_HOUR = 19
 
 # Loader ile ayni: panel disi yardimci CSV'ler sembol degil.
-_EXCLUDE_STEMS = {"bist_universe", "advisory_history"}
 
 # Cikis kodlari: 0 basarili/bilincli atlama, 1 beklenmeyen hata, 3 tazeleme bayat orani asildi (skorlama atlandi).
 EXIT_STALE_REFRESH = 3
@@ -99,15 +98,6 @@ def gate_target_date(now: Optional[datetime] = None) -> date:
 
 
 # --------------------------------------------------------------- data refresh
-def _universe_symbols(data_dir: str) -> list[str]:
-    out = []
-    for p in glob.glob(os.path.join(data_dir, "*.csv")):
-        stem = os.path.basename(p)[:-4]
-        if stem not in _EXCLUDE_STEMS:
-            out.append(stem)
-    return sorted(out)
-
-
 def refresh_universe(data_dir: str, *, sleep_s: float = 0.0,
                      limit: int = 0, progress_every: int = 50,
                      stale_business_days: int = 5,
@@ -414,6 +404,8 @@ def _run_pipeline(args: argparse.Namespace, status: NightlyRunStatus) -> int:
         status.update(refresh=None, scoring="pending")
     else:
         status.update(phase="refresh")
+        seeded = seed_missing_from_fallback(args.data_dir, args.universe, args.fallback_dir)
+        _log(f"yedekten tohumlanan: {', '.join(seeded) or 'yok'}")
         counts = refresh_universe(
             args.data_dir, sleep_s=args.sleep_s, limit=args.limit,
             stale_business_days=args.stale_business_days, deadline_s=args.refresh_deadline_s)

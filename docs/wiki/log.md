@@ -1,3 +1,13 @@
+## [2026-11-16] Fix | Gece tazelemesi yedekte kalan evren sembollerini atlıyordu
+
+- Gerçek koşu kontrolünde KCHOL, SASA, TUPRS, SAHOL, ENKAI, LOGO ve ARDYZ'nin hiç skorlanmadığı
+  görüldü: evrende Active, ama CSV'leri yalnız `data/yedek` içindeydi. Tazeleme yalnız `data/*.csv`
+  dosyalarını güncellediği için bu semboller Mayıs'ta kalıp bayat sayılıyordu.
+- `src/serving/universe_seed.py`: tazelemeden önce evrendeki Active sembollerden birincil CSV'si
+  olmayanlar `--fallback-dir` içinden birincil klasöre kopyalanır (yedek yerinde kalır); sonra normal
+  artımlı tazeleme işler. Not: kapı, seans kapanışından (18:00) önce dünü hedef gün sayar; gün içi elle
+  koşu için `--skip-trading-gate` gerekir.
+
 ## [2026-11-16] Update | API peer bloğuna koşu IC metrikleri
 
 - `PeerBlock` `ic_mean` ve `pct_ic_positive` alanlarını taşır (`global_model_runs` satırından, satırın
