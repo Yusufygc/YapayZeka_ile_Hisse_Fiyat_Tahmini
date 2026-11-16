@@ -52,7 +52,7 @@ SHAP (XAI). `requests` kaldırıldı (kullanılmıyordu).
   n_symbols, n_rows, horizon, ic_mean, icir, pct_ic_positive, `config_json` (risk özeti, uyarılar,
   `risk.missing`, kapı değişimi, karantina/fallback sayıları).
 - `peer_scores` (run_id x symbol, UNIQUE): peer_score/percentile/label, segment_liq/vol/sector,
-  segment_icir, confidence_label/reasons/warnings, trend_label/prob_up/expected_return, xai_*,
+  segment_icir, confidence_label/reasons/warnings, trend_label/prob_up/expected_return/prob_outperform, xai_*,
   `kolb_price_p50/low/high`, `kolb_horizon_days`, `kolb_band_level`, `risk_sigma_5d`,
   `risk_sigma_naive_5d`, `risk_vol_percentile`, `risk_level`, `risk_z`, `risk_band_level`,
   `risk_horizon_days`, `risk_method`. Şema değişiklikleri eklemelidir (`_PEER_MIGRATIONS`, ALTER).

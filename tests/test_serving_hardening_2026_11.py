@@ -257,7 +257,7 @@ def test_missing_risk_method_run_level_failure_warns_and_downgrades(env):
     _write_market(env.data, "TUPRS", "2026-11-16")
     body = env.client().get("/analysis/TUPRS").json()
     assert body["confidence"]["label"] == "medium"          # high -> medium (tek basamak)
-    assert any("bu gece calismadi" in w for w in body["confidence"]["warnings"])
+    assert any("bu gece çalışmadı" in w for w in body["confidence"]["warnings"])
 
 
 def test_missing_risk_method_short_history_warns_differently(env):
@@ -267,7 +267,7 @@ def test_missing_risk_method_short_history_warns_differently(env):
     body = env.client().get("/analysis/TUPRS").json()
     warns = " ".join(body["confidence"]["warnings"])
     assert body["confidence"]["label"] == "medium"
-    assert "risk tahmini yok" in warns and "calismadi" not in warns
+    assert "risk tahmini yok" in warns and "çalışmadı" not in warns
 
 
 # ------------------------------------------------------------- 4. as_of geriligi
@@ -277,7 +277,7 @@ def test_as_of_behind_csv_by_more_than_one_trading_day_is_stale(env):
     _write_market(env.data, "TUPRS", "2026-11-16")
     body = env.client().get("/analysis/TUPRS").json()
     assert body["analysis_status"] == "stale_data" and body["confidence"]["label"] == "low"
-    assert any("2026-11-09 kapanisina" in w and "fiyat" in w.lower() for w in body["confidence"]["warnings"])
+    assert any("2026-11-09 kapanışına" in w and "fiyat" in w.lower() for w in body["confidence"]["warnings"])
 
 
 def test_as_of_one_trading_day_behind_is_not_flagged(env):
@@ -429,7 +429,7 @@ def test_explain_missing_risk_classifies_reasons():
 
 
 @pytest.mark.parametrize("reason,needle", [
-    ("quarantine", "olcek kirigi"), ("short_history", "yetersiz"), ("gap", "eksik/islemsiz")])
+    ("quarantine", "ölçek kırığı"), ("short_history", "yetersiz"), ("gap", "eksik/işlemsiz")])
 def test_api_missing_risk_warning_names_the_reason(env, reason, needle):
     _make_pool(env.pool, [_peer_row("ASELS", risk_method=None, risk_sigma_5d=None, risk_z=None)],
                config={"risk": {"method": "har_x_ridge", "missing": {"ASELS": reason}}})

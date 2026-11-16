@@ -21,7 +21,8 @@ import numpy as np
 import pandas as pd
 
 from src.risk.serving import RISK_COLUMNS
-from src.serving.confidence import ConfidenceThresholds, peer_confidence, select_segment_icir
+from src.serving.confidence import (
+    ConfidenceThresholds, peer_confidence, relative_thresholds, select_segment_icir)
 from src.serving.peer_scoring import PeerScoringConfig, score_latest_universe
 from src.serving.trend_tendency import TrendCalibration, trend_from_peer
 
@@ -142,7 +143,7 @@ def assemble_peer_table(
         low/high = Close * exp(exp_ret -/+ risk_z * risk_sigma_5d). Yoksa bant None.
     """
     scoring_cfg = scoring_cfg or PeerScoringConfig()
-    thr = thr or ConfidenceThresholds()
+    thr_fixed = thr
     tradable_for = tradable_for or (lambda s: True)
     stale_for = stale_for or (lambda s: False)
 
@@ -168,6 +169,8 @@ def assemble_peer_table(
         merged["segment_icir"] = merged[seg_key_col].map(
             lambda b: float(smap.get(b, float("nan"))) if b is not None else float("nan"))
 
+    # thr verilmezse esikler skorlama gununun evreni icinde tertil (kalibrasyon 2026-11-16)
+    thr = thr_fixed or relative_thresholds(merged["segment_icir"])
     universe_ok = int(merged["universe_size"].iloc[0]) >= scoring_cfg.min_names
     labels, reasons, warns = [], [], []
     for _, r in merged.iterrows():
@@ -188,16 +191,18 @@ def assemble_peer_table(
 
     # --- mutlak trend eğilimi (Faz 7 kalibrasyonu) ---
     tcfg = trend_cfg or TrendCalibration()
-    t_labels, t_pup, t_exp, t_src = [], [], [], []
+    t_labels, t_pup, t_exp, t_beat, t_src = [], [], [], [], []
     for _, r in merged.iterrows():
         t = trend_from_peer(r["peer_percentile"], r["universe_size"], tcfg)
         t_src.append(t.probability_source)
         t_labels.append(t.label)
         t_pup.append(t.prob_up)
         t_exp.append(t.expected_return)
+        t_beat.append(t.prob_outperform)
     merged["trend_label"] = t_labels
     merged["trend_prob_up"] = t_pup
     merged["trend_expected_return"] = t_exp
+    merged["trend_prob_outperform"] = t_beat
     # PeerStore'da kolon yok (peer_store.py bu gorevde degistirilmez): tablo kolonu +
     # run config'inde saklanir; store eksik kolonlari yok sayar.
     merged["probability_source"] = t_src

@@ -13,6 +13,10 @@ ve MONOTON bir eğilim taşıdığını gösterdi (full-evren, 217k OOS satır):
     Q5        0.541       +0.0090
     base      0.498        (nominal drift yok)
 
+2026-11-16 yeniden ölçüm: sabitler 3 yıllık OOS ile güncellendi (TrendCalibration). Mutlak
+prob_up Brier 0.2488 ~ yazı-tura 0.2500 (piyasa yönü baskın); ürün göreli olasılığı
+(`prob_outperform`, P(getiri > evren medyanı)) göstermeli.
+
 Bu modül peer_percentile'ı bu OOS frekans tablosuyla MUTLAK eğilim etiketine çevirir:
     label : yukarı | yatay | aşağı | belirsiz
     prob_up : OOS frekans tablosu (tek dönem, tarih-kümelenmiş belirsizlik
@@ -45,9 +49,14 @@ import numpy as np
 @dataclass(frozen=True)
 class TrendCalibration:
     min_names: int = 15        # bundan az evren -> belirsiz
-    # Faz 7 mutlak-yön OOS frekans tablosu (full-evren OOS, quintile Q1..Q5).
-    quintile_prob_up: tuple = (0.435, 0.487, 0.509, 0.519, 0.541)
-    quintile_expected_return: tuple = (-0.0066, 0.0032, 0.0050, 0.0062, 0.0090)
+    # 2026-11-16 kalibrasyon raporu (tools/calibration_report.py): 13 pencere walk-forward OOS,
+    # 2023-08..2026-11, 449.765 satir; ortusmeyen tarih ortalamalari. Eski Faz 7 tablosu
+    # (0.435..0.541 / -0.66%..+0.90%) her quintile'da ~2 puan iyimserdi.
+    quintile_prob_up: tuple = (0.417, 0.467, 0.485, 0.501, 0.525)
+    quintile_expected_return: tuple = (-0.0098, 0.0013, 0.0026, 0.0036, 0.0058)
+    # P(h-gun getiri > gunun evren medyani): urunun gercekten tahmin ettigi (goreli) olasilik.
+    # Dar CI (Q5 0.550 [0.541, 0.559]); mutlak prob_up'in CI'si piyasa yonu yuzunden genis.
+    quintile_prob_outperform: tuple = (0.428, 0.480, 0.512, 0.528, 0.550)
 
 
 @dataclass(frozen=True)
@@ -55,6 +64,7 @@ class TrendTendency:
     label: str                                  # yukarı | yatay | aşağı | belirsiz
     prob_up: Optional[float] = None             # OOS frekans tablosu P(getiri>0)
     expected_return: Optional[float] = None     # OOS tablosu ort. h-gün log-getiri
+    prob_outperform: Optional[float] = None     # OOS tablosu P(getiri > evren medyanı)
     basis: str = ""                             # kısa açıklama
     reasons: list = field(default_factory=list)
     probability_source: Optional[str] = None    # "oos_quintile_frequency" (belirsiz -> None)
@@ -106,6 +116,7 @@ def trend_from_peer(
         f"beklenen ~{exp_ret:+.2%} (h-gün). Olasılıksal eğilim, garanti değil."
     ]
     return TrendTendency(label, prob_up, exp_ret,
+                         prob_outperform=float(cfg.quintile_prob_outperform[qi]),
                          basis=("Faz 7 OOS frekans tablosu (tek dönem, tarih-kümelenmiş "
                                 "belirsizlik raporlanmadı; mutlak yön)."),
                          reasons=reasons, probability_source=PROBABILITY_SOURCE)

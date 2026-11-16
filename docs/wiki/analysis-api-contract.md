@@ -359,12 +359,13 @@ when no peer data exists for the symbol; existing absolute `forecast`/
 | `universe_size` | int | names ranked that date |
 | `segment_liq/vol/sector` | string | liquidity/volatility/sector bucket |
 | `segment_icir` | float | composite segment ICIR (tradability-aware) |
-| `confidence_label` | string | low / medium / high (ICIR × tradability gates) |
+| `confidence_label` | string | low / medium / high: segment ICIR'inin skorlama günü evrenindeki tertili (üst 1/3 high); bayat veri / ince evren → low. Likidite etiketi düşürmez, `confidence_warnings`'e "Likidite düşük" uyarısı ekler (2026-11-16) |
 | `confidence_reasons` / `confidence_warnings` | string[] | human-readable |
 | `model_run_id` | int | `global_model_runs.run_id` |
 | `icir_overall` | float | run-level ICIR |
 | `trend_label` | string | **yukarı / yatay / aşağı / belirsiz** (Faz 7b) |
-| `trend_prob_up` | float \| null | calibrated P(h-day return > 0) |
+| `trend_prob_up` | float \| null | OOS frekansı P(h-gün getiri > 0); yazı-turadan ayırt edilemez (Brier 0,249 vs 0,250), geriye uyum için |
+| `trend_prob_outperform` | float \| null | OOS frekansı P(h-gün getiri > günün evren medyanı); ürünün göstermesi gereken olasılık (Q1 0,428 … Q5 0,550) |
 | `trend_expected_return` | float \| null | calibrated mean h-day log return |
 | `xai_available` | bool | true when peer XAI rows are attached |
 | `xai_method` | string \| null | peer XAI method, e.g. `ensemble_permutation` |

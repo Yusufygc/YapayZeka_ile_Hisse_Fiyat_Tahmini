@@ -17,6 +17,41 @@ happened if these AL/SAT/TUT signals were traded?" with a long/flat, cost-free
 simulation. More complex cost-aware signal modes remain available as opt-in
 research paths.
 
+## Kalibrasyon Ölçümü (2026-11-16, `tools/calibration_report.py`)
+
+Ürünün söylediği olasılık ve güven etiketi gerçekte tutuyor mu? LightGBM walk-forward OOS
+(13 pencere × 63 gün, 2023-08 – 2026-11, 449.765 satır, 819 tarih). Güven aralıkları örtüşmeyen
+tarihler (her 5. gün) üzerinden. Güven etiketleri ileriye dönük: her pencerenin segment ICIR'i
+yalnız kronolojik olarak ÖNCEKİ pencerelerin OOS tahminlerinden (fold indeksi kronolojik değildir;
+0 = en yeni pencere, araç test başlangıcına göre sıralar).
+
+Bulgular:
+- **Göreli sıralama gerçek ve kararlı:** Q5−Q1 5 günlük getiri farkı +%1,57 [+1,26, +1,88];
+  13 pencerenin 13'ünde Q5 > Q1.
+- **Mutlak yön olasılığı (`trend_prob_up`) bilgi taşımıyor:** Brier 0,2488, yazı-tura 0,2500.
+  Sabit tablo her quintile'da ~2 puan iyimser (Q5 tablo 0,541, OOS 0,525 [0,488, 0,561]).
+  Pencere taban oranı 0,35–0,58 arasında oynuyor (günlük std 0,21): mutlak yönü piyasa belirliyor.
+- **Güven etiketi ayırt edici değil:** satırların %95'i `medium`; `high` %1 ve daha kötü
+  (IC −0,12, geniş CI); `low` (%4, çoğu likidite kapısı) IC 0,159 ile en iyisi.
+- **Sürekli segment ICIR'i ise bilgi taşıyor:** önceki ICIR tertili sonraki IC'yi sıralıyor
+  (alt 0,067 → orta 0,105 → üst 0,116). Sorun eşiklerde (1,0 / 0,5), sinyalde değil.
+
+Yapılan düzeltmeler (aynı gün):
+- `TrendCalibration` sabitleri bu 3 yıllık OOS ile güncellendi (prob_up Q1..Q5 0,417..0,525;
+  ort. getiri −%0,98..+%0,58; band merkezi de buradan gelir). Yeni `quintile_prob_outperform`
+  (0,428..0,550) → `trend_prob_outperform` kolonu/alanı; arayüz ve danışman metni bunu gösterir.
+- Güven etiketi: `relative_thresholds` (src/serving/confidence.py) skorlama günü evreninde segment
+  ICIR tertilleri; likidite kapısı etiketi düşürmez, ayrı uyarı. İleriye dönük ölçüm:
+
+  | şema | high | medium | low |
+  |---|---|---|---|
+  | yeni (tertil, likidite ayrı) | %28, IC 0,116 | %39, IC 0,101 | %33, IC 0,067 |
+  | eski (1,0/0,5, likidite→low) | %1, IC −0,12 | %95, IC 0,096 | %4, IC 0,159 |
+
+  Yeni şema monoton; high ile medium'un güven aralıkları örtüşüyor (fark küçük), low açıkça zayıf.
+
+Çıktı: `outputs/_audits/calibration_<tarih>.json|.md` (gitignore'da).
+
 ## Validation Modes
 
 ### Walk-Forward (default, 2026-05-25)

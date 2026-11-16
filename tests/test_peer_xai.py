@@ -62,7 +62,7 @@ def test_single_model_attribution_shape():
         assert len(rec["top_negative"]) <= 3
         assert rec["top_positive"] or rec["top_negative"]
         assert rec["group_summaries"]
-        assert all("akran siralamas" in g["reason"] for g in rec["group_summaries"])
+        assert all("akran sıralamas" in g["reason"] for g in rec["group_summaries"])
         for f in rec["top_positive"] + rec["top_negative"]:
             assert _FACTOR_KEYS <= set(f.keys())
             assert f["importance"] >= 0

@@ -27,9 +27,9 @@ class Phase5DataQualityTests(unittest.TestCase):
     def test_feature_group_product_labels_and_reasons(self):
         self.assertEqual(feature_group_label("macro"), "Makro ekonomik sinyaller")
         reason = feature_group_reason("macro", "asagi", context="forecast")
-        self.assertIn("model tahminini asagi", reason)
+        self.assertIn("model tahminini aşağı", reason)
         peer_reason = feature_group_reason("technical", "yukari", context="peer")
-        self.assertIn("akran siralamasini yukari", peer_reason)
+        self.assertIn("akran sıralamasını yukarı", peer_reason)
 
     def test_feature_pipeline_adds_lag_features_and_drops_volume_features(self):
         try:

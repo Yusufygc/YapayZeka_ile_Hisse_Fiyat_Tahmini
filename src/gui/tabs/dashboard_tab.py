@@ -45,7 +45,7 @@ COLUMNS: List[Tuple[str, str, _Fmt]] = [
     ("Akran Etiketi", "peer_label", _text),
     ("Akran Yüzdeliği", "peer_percentile", _num(1)),
     ("Trend", "trend_label", _text),
-    ("Yükseliş Olasılığı", "trend_prob_up", _num(3)),
+    ("Akranı Geçme Olasılığı", "trend_prob_outperform", _num(3)),
     ("Risk Seviyesi", "risk_level", _text),
     ("Fiyat Bandı Alt", "kolb_price_low", _num(2)),
     ("Fiyat Bandı Üst", "kolb_price_high", _num(2)),

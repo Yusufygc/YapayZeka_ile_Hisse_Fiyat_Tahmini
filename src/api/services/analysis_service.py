@@ -118,7 +118,7 @@ class AnalysisService:
                 generated_at=generated_at,
                 confidence=ConfidenceBlock(
                     label="low",
-                    warnings=["Gecelik havuz veritabani su an okunamiyor (unavailable); "
+                    warnings=["Gecelik havuz veritabanı şu an okunamıyor (unavailable); "
                               "daha sonra tekrar deneyin."],
                 ),
                 disclaimer=INVESTMENT_DISCLAIMER,
@@ -131,7 +131,7 @@ class AnalysisService:
                 generated_at=generated_at,
                 confidence=ConfidenceBlock(
                     label="low",
-                    warnings=["Sembol son gecelik havuz kosusunda bulunamadi (no_data)."],
+                    warnings=["Sembol son gecelik havuz koşusunda bulunamadı (no_data)."],
                 ),
                 disclaimer=INVESTMENT_DISCLAIMER,
                 serving_run=serving_run,
@@ -214,12 +214,12 @@ class AnalysisService:
         pool_stale = bool(pool.get("stale"))
         if data_stale:
             warnings.append(
-                f"Piyasa verisi {data.staleness_days} islem gunu eski; analiz dikkatli yorumlanmali."
+                f"Piyasa verisi {data.staleness_days} işlem günü eski; analiz dikkatli yorumlanmalı."
             )
         if pool_stale:
             warnings.append(
-                f"Gecelik havuz kosusu {pool.get('age_days')} gun once "
-                f"({pool.get('as_of_date')}); sonuclar guncel olmayabilir."
+                f"Gecelik havuz koşusu {pool.get('age_days')} gün önce "
+                f"({pool.get('as_of_date')}); sonuçlar güncel olmayabilir."
             )
         as_of_lag = self._as_of_lag_warning(peer, csv_last_date)
         if as_of_lag:
@@ -233,20 +233,20 @@ class AnalysisService:
             label = _lower(label)
         elif risk_method == "naive_fallback":
             warnings.append(
-                "Risk modeli yedek (naive) yonteme dustu; risk seviyesi ve fiyat araligi "
-                "dusuk guvenlidir."
+                "Risk modeli yedek (naive) yönteme düştü; risk seviyesi ve fiyat aralığı "
+                "düşük güvenlidir."
             )
             label = _lower(label)
 
         if dq.psi_status == "major_drift" and dq.psi_30d is not None:
-            warnings.append(f"Veri dagilimi belirgin kaydi (PSI 30g={dq.psi_30d:.2f}).")
+            warnings.append(f"Veri dağılımı belirgin kaydı (PSI 30g={dq.psi_30d:.2f}).")
             label = "low"
         elif dq.psi_status == "moderate_drift" and dq.psi_30d is not None:
-            warnings.append(f"Veri dagilimi orta duzeyde kaydi (PSI 30g={dq.psi_30d:.2f}).")
+            warnings.append(f"Veri dağılımı orta düzeyde kaydı (PSI 30g={dq.psi_30d:.2f}).")
             if label == "high":
                 label = "medium"
         elif dq.psi_status == "stable" and label != "low":
-            reasons.append("Veri dagilimi stabil (PSI 30g dusuk).")
+            reasons.append("Veri dağılımı stabil (PSI 30g düşük).")
 
         risk_level: Any = getattr(peer, "risk_level", None)
         if risk_level and label != "low":
@@ -278,9 +278,9 @@ class AnalysisService:
         if lag <= _AS_OF_LAG_MAX_TRADING_DAYS:
             return None
         return (
-            f"Gecelik havuz {as_of} kapanisina gore uretildi; piyasa verisi {csv_last_date[:10]} "
-            f"tarihine ilerledi ({lag} islem gunu). Fiyat araligi ve fiyat capasi eski "
-            f"{as_of} kapanisina aittir."
+            f"Gecelik havuz {as_of} kapanışına göre üretildi; piyasa verisi {csv_last_date[:10]} "
+            f"tarihine ilerledi ({lag} işlem günü). Fiyat aralığı ve fiyat çapası eski "
+            f"{as_of} kapanışına aittir."
         )
 
     @staticmethod
@@ -288,19 +288,19 @@ class AnalysisService:
         """risk_method None: kosu-duzeyi hata mi, yoksa sembole ozgu neden mi (run config 'missing')?"""
         val = peer.risk_validation if isinstance(peer.risk_validation, dict) else {}
         if val.get("error"):
-            return ("Risk modeli bu gece calismadi (kosu-duzeyi hata); risk seviyesi ve "
-                    "fiyat araligi uretilemedi.")
+            return ("Risk modeli bu gece çalışmadı (koşu düzeyi hata); risk seviyesi ve "
+                    "fiyat aralığı üretilemedi.")
         missing = val.get("missing") if isinstance(val.get("missing"), dict) else {}
         reason = missing.get(symbol)
         if reason == "quarantine":
-            return ("Sembolde yakin zamanda olcek kirigi (bolunme/duzeltilmemis fiyat) saptandi; "
-                    "ilgili gunler karantinaya alindi ve risk modelinin gerektirdigi temiz gecmis "
-                    "(~63 islem gunu + pencere) henuz olusmadi; risk seviyesi ve fiyat araligi yok.")
+            return ("Sembolde yakın zamanda ölçek kırığı (bölünme/düzeltilmemiş fiyat) saptandı; "
+                    "ilgili günler karantinaya alındı ve risk modelinin gerektirdiği temiz geçmiş "
+                    "(~63 işlem günü + pencere) henüz oluşmadı; risk seviyesi ve fiyat aralığı yok.")
         if reason == "short_history":
-            return ("Sembolun fiyat gecmisi risk modeli icin yetersiz (<64 islem gunu); "
-                    "risk seviyesi ve fiyat araligi uretilemedi.")
+            return ("Sembolün fiyat geçmişi risk modeli için yetersiz (<64 işlem günü); "
+                    "risk seviyesi ve fiyat aralığı üretilemedi.")
         if reason == "gap":
-            return ("Sembolun son gunlerinde eksik/islemsiz gunler var (risk penceresi dolmadi); "
-                    "birkac gun icinde duzelmesi beklenir. Risk seviyesi ve fiyat araligi yok.")
-        return ("Bu sembol icin risk tahmini yok (yetersiz/kesintili fiyat gecmisi veya "
-                "olcek kirigi karantinasi); fiyat araligi uretilemedi.")
+            return ("Sembolün son günlerinde eksik/işlemsiz günler var (risk penceresi dolmadı); "
+                    "birkaç gün içinde düzelmesi beklenir. Risk seviyesi ve fiyat aralığı yok.")
+        return ("Bu sembol için risk tahmini yok (yetersiz/kesintili fiyat geçmişi veya "
+                "ölçek kırığı karantinası); fiyat aralığı üretilemedi.")

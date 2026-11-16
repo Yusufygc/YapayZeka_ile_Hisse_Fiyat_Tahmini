@@ -86,7 +86,10 @@ class PeerBlock(BaseModel):
     pct_ic_positive: Optional[float] = None  # IC > 0 olan gunlerin orani (0..1)
     # E2 Faz 7 — peer rank -> mutlak trend egilimi (kalibre, olasiliksal).
     trend_label: Optional[str] = None             # yukarı | yatay | aşağı | belirsiz
-    trend_prob_up: Optional[float] = None         # kalibre P(h-gun getiri > 0)
+    # Mutlak yon olasiligi: OOS'ta yazi-turadan ayirt edilemez (Brier 0.249 vs 0.250);
+    # geriye uyum icin duruyor, urunde `trend_prob_outperform` gosterilmeli.
+    trend_prob_up: Optional[float] = None         # OOS frekansi P(h-gun getiri > 0)
+    trend_prob_outperform: Optional[float] = None  # OOS frekansi P(h-gun getiri > evren medyani)
     trend_expected_return: Optional[float] = None  # kalibre ort. h-gun log-getiri
     # E2 Kol-B pooled fiyat bandı
     kolb_price_p50: Optional[float] = None

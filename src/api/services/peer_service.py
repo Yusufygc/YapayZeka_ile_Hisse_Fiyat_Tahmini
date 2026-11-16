@@ -155,6 +155,7 @@ class PeerEnrichmentService:
             trend_label=row.get("trend_label"),
             trend_prob_up=row.get("trend_prob_up"),
             trend_expected_return=row.get("trend_expected_return"),
+            trend_prob_outperform=row.get("trend_prob_outperform"),
             kolb_price_p50=row.get("kolb_price_p50"),
             kolb_price_low=row.get("kolb_price_low"),
             kolb_price_high=row.get("kolb_price_high"),

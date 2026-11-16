@@ -4,6 +4,7 @@
 import numpy as np
 import pandas as pd
 
+from src.serving.confidence import ConfidenceThresholds
 from src.serving.nightly_scoring import (
     assemble_peer_table,
     composite_icir,
@@ -52,18 +53,19 @@ def test_assemble_schema_and_segment_join():
 def test_segment_icir_drives_confidence():
     out = assemble_peer_table(_StubModel(), _latest_panel(), ["f0"],
                               _seg_table(), _ICIR).set_index("symbol")
-    # Q1 segment ICIR 1.35 -> high (tradable varsayilan); Q5 ICIR 0.30 -> low
+    # evren ici tertil: Q1 segment ICIR 1.35 -> high; Q5 ICIR 0.30 (alt tertil) -> low
     assert out.loc["S0", "segment_icir"] == 1.35
     assert out.loc["S0", "confidence_label"] == "high"
     assert out.loc["S19", "confidence_label"] == "low"
 
 
-def test_tradability_gate_overrides_strong_segment():
-    # en az likit (Q1, guclu IC) ama islem yapilamiyor -> low
+def test_untradable_keeps_label_and_adds_liquidity_warning():
+    # kalibrasyon 2026-11-16: likidite etiketi dusurmez, ayri uyari
     out = assemble_peer_table(
         _StubModel(), _latest_panel(), ["f0"], _seg_table(), _ICIR,
         tradable_for=lambda s: False).set_index("symbol")
-    assert (out["confidence_label"] == "low").all()
+    assert out.loc["S0", "confidence_label"] == "high"
+    assert all(any("Likidite düşük" in w for w in ws) for ws in out["confidence_warnings"])
 
 
 def test_segment_icir_from_table():
@@ -78,16 +80,6 @@ def test_liqlog_floor_from_turnover():
     assert abs(liqlog_floor_from_turnover(3_000_000) - np.log1p(3_000_000)) < 1e-9
     assert liqlog_floor_from_turnover(0) == 0.0
     assert liqlog_floor_from_turnover(-5) == 0.0  # negatif -> kapi etkisiz
-
-
-def test_turnover_floor_gates_illiquid_in_assemble():
-    """Medyan cirosu taban altindaki (az likit) guclu-sinyal hisse -> low."""
-    floor = liqlog_floor_from_turnover(3_000_000)  # liq_log ~14.91
-    # S0..S9 Q1 (guclu IC) ama ciro dusuk; tradable_for taban altinda -> low
-    out = assemble_peer_table(
-        _StubModel(), _latest_panel(), ["f0"], _seg_table(), _ICIR,
-        tradable_for=lambda s: 10.0 >= floor).set_index("symbol")  # 10 < 14.91 -> hicbiri tradable degil
-    assert (out["confidence_label"] == "low").all()
 
 
 _MAPS = {
@@ -124,8 +116,8 @@ def test_blended_path_lifts_liquid_highvol_above_pure_liq():
         "liq_bucket": ["Q5"] * 20, "vol_bucket": ["Q5"] * 20,
         "sector": ["Industrials"] * 20})
     out = assemble_peer_table(_StubModel(), _latest_panel(), ["f0"], seg,
-                              icir_maps=_MAPS).set_index("symbol")
-    # harman = 0.5*0.39+0.3*1.23+0.2*1.20 = 0.804 -> medium (>=0.5)
+                              icir_maps=_MAPS, thr=ConfidenceThresholds()).set_index("symbol")
+    # harman = 0.5*0.39+0.3*1.23+0.2*1.20 = 0.804 -> sabit esikte medium (>=0.5)
     assert abs(out["segment_icir"].iloc[0] - 0.804) < 1e-6
     assert (out["confidence_label"] == "medium").all()
 
@@ -134,7 +126,7 @@ def test_assemble_adds_trend_columns():
     # Test case 1: Close is missing
     out = assemble_peer_table(_StubModel(), _latest_panel(), ["f0"],
                               _seg_table(), _ICIR).set_index("symbol")
-    for c in ["trend_label", "trend_prob_up", "trend_expected_return",
+    for c in ["trend_label", "trend_prob_up", "trend_expected_return", "trend_prob_outperform",
               "kolb_price_p50", "kolb_price_low", "kolb_price_high",
               "kolb_horizon_days", "kolb_band_level"]:
         assert c in out.columns

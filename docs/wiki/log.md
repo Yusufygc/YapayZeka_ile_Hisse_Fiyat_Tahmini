@@ -1,3 +1,27 @@
+## [2026-11-16] Fix | Güven etiketi göreli tertil, trend tablosu yeniden kalibre, prob_outperform
+
+- `src/serving/confidence.py`: `relative_thresholds` (segment ICIR'inin evren içi tertilleri);
+  likidite kapısı etiketi düşürmez, "Likidite düşük" uyarısı ekler. `nightly_scoring.assemble_peer_table`
+  `thr` verilmezse bunu kullanır.
+- `src/serving/trend_tendency.py`: sabitler 3 yıllık OOS ile; yeni `prob_outperform`.
+- `peer_scores.trend_prob_outperform` (additive migrasyon), API `PeerBlock.trend_prob_outperform`,
+  GUI tablosunda "Akranı Geçme Olasılığı". PortfoySimulasyonu istemcisi de bu alanı gösterir.
+- Ölçüm ve tablo: [Validation](validation-and-backtesting.md).
+
+## [2026-11-16] Add | Kalibrasyon raporu aracı ve ilk ölçüm
+
+- `tools/calibration_report.py`: trend olasılık tablosu ve güven etiketlerini ileriye dönük OOS ile ölçer.
+- Sonuç: göreli sıralama sağlam (Q5−Q1 +%1,57), mutlak `prob_up` yazı-turadan ayırt edilemiyor,
+  güven etiketi %95 `medium` ve ayırt edici değil. Ayrıntı: [Validation](validation-and-backtesting.md).
+
+## [2026-11-16] Update | API uyarıları Türkçe karakterli
+
+- `src/api/services/analysis_service.py` (güven uyarıları: bayat veri, havuz geriliği, as_of geriliği,
+  risk yok/naive, PSI) ve `src/serving/confidence.py` (Kol-B güven gerekçeleri) artık doğru Türkçe
+  karakterle yazılır (ör. "ölçek kırığı", "fiyat aralığı üretilemedi"). XAI grup etiketleri ve grup
+  gerekçeleri (`src/xai/feature_dictionary.py`) de düzeltildi; iç yön anahtarları (`yukari`/`asagi`) değişmedi.
+- `confidence.py` gerekçeleri gece koşusunda DB'ye yazılır; eski satırlar bir sonraki gece koşusuna kadar ASCII kalır.
+
 ## [2026-11-16] Update | API varsayılan portu 8001
 
 - `python -m src.api.main` artık varsayılan olarak `127.0.0.1:8001` dinler (8000 bu makinede başka bir

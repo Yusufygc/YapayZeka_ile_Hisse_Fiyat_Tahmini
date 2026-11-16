@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS peer_scores (
     trend_label TEXT,
     trend_prob_up REAL,
     trend_expected_return REAL,
+    trend_prob_outperform REAL,
     xai_top_features TEXT,
     xai_method TEXT,
     xai_approximate INTEGER,
@@ -88,7 +89,8 @@ _PEER_COLS = [
     "symbol", "as_of_date", "peer_score", "peer_percentile", "peer_label",
     "raw_pred", "universe_size", "segment_liq", "segment_vol", "segment_sector",
     "segment_icir", "confidence_label", "confidence_reasons", "confidence_warnings",
-    "trend_label", "trend_prob_up", "trend_expected_return", "xai_top_features",
+    "trend_label", "trend_prob_up", "trend_expected_return", "trend_prob_outperform",
+    "xai_top_features",
     "xai_method", "xai_approximate", "xai_error", "xai_generated_at",
     "kolb_price_p50", "kolb_price_low", "kolb_price_high", "kolb_horizon_days",
     "kolb_band_level",
@@ -120,6 +122,8 @@ _PEER_MIGRATIONS = {
     "risk_band_level": "REAL",
     "risk_horizon_days": "INTEGER",
     "risk_method": "TEXT",
+    # Kalibrasyon 2026-11-16: P(5g getiri > gunun evren medyani), OOS quintile frekansi.
+    "trend_prob_outperform": "REAL",
 }
 
 

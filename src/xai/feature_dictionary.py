@@ -105,18 +105,18 @@ def compute_dictionary_coverage(feature_names: Iterable[str]) -> dict:
 
 _GROUP_LABELS = {
     "macro": "Makro ekonomik sinyaller",
-    "technical": "Teknik gostergeler",
-    "market_relative": "Piyasa ve sektor goreli guc",
-    "volume": "Hacim ve para akisi",
+    "technical": "Teknik göstergeler",
+    "market_relative": "Piyasa ve sektöre göre göreli güç",
+    "volume": "Hacim ve para akışı",
     "calendar": "Takvim etkileri",
-    "volatility": "Volatilite ve fiyat araligi",
+    "volatility": "Volatilite ve fiyat aralığı",
     "regime": "Piyasa rejimi",
-    "lag": "Gecikmeli fiyat davranisi",
-    "cross_sectional": "Akran goreli sinyaller",
+    "lag": "Gecikmeli fiyat davranışı",
+    "cross_sectional": "Akranlara göre göreli sinyaller",
     "meta": "Sembol ve likidite meta sinyalleri",
-    "signal": "Sinyal kurallari",
-    "model_summary": "Model ozeti",
-    "other": "Diger model sinyalleri",
+    "signal": "Sinyal kuralları",
+    "model_summary": "Model özeti",
+    "other": "Diğer model sinyalleri",
 }
 
 
@@ -130,18 +130,18 @@ def feature_group_reason(group: str, direction: str, context: str = "forecast") 
     """Return a short, non-causal product reason for a grouped XAI signal."""
     label = feature_group_label(group)
     direction_text = {
-        "yukari": "yukari yonde",
-        "asagi": "asagi yonde",
-        "notr": "notr yonde",
+        "yukari": "yukarı yönde",
+        "asagi": "aşağı yönde",
+        "notr": "nötr yönde",
         "dikkat": "dikkat edilmesi gereken",
     }.get(str(direction or "dikkat"), "dikkat edilmesi gereken")
     if context == "peer":
         if direction in {"yukari", "asagi"}:
-            return f"{label} akran siralamasini {direction_text} etkileyen faktorler arasinda."
-        return f"{label} akran siralamasinda izlenen faktorler arasinda."
+            return f"{label} akran sıralamasını {direction_text} etkileyen faktörler arasında."
+        return f"{label} akran sıralamasında izlenen faktörler arasında."
     if direction in {"yukari", "asagi"}:
-        return f"{label} model tahminini {direction_text} etkileyen faktorler arasinda."
-    return f"{label} model tahmininde izlenen faktorler arasinda."
+        return f"{label} model tahminini {direction_text} etkileyen faktörler arasında."
+    return f"{label} model tahmininde izlenen faktörler arasında."
 
 
 def feature_group(feature_name: str) -> str:

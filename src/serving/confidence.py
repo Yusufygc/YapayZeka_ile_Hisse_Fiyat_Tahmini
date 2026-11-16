@@ -2,10 +2,16 @@
 """Peer-signal confidence for serving — E2 Faz 5.
 
 Faz 6 bulgusu: sinyal segment-bagimli ve sinyalin en guclu oldugu yerde
-(en az likit) islem yapilabilirlik en zayif. Bu yuzden guven SADECE IC degil:
-    confidence = f(segment_ICIR)  AND-gated by  tradability + freshness
-Sert kapilar her zaman bastirir: islem yapilamayan / bayat / ince-evren ->
-ne kadar guclu IC olursa olsun `low`.
+(en az likit) islem yapilabilirlik en zayif.
+    confidence = f(segment_ICIR)  AND-gated by  freshness + evren
+Sert kapilar her zaman bastirir: bayat / ince-evren -> `low`.
+
+2026-11-16 kalibrasyon olcumu (`tools/calibration_report.py`, docs/wiki/validation-and-backtesting.md):
+sabit 1.0/0.5 esikleri satirlarin %95'ini `medium` yapiyordu ve etiket ayirt edici degildi;
+surekli segment ICIR'i ise sonraki IC'yi siraliyordu. Bu yuzden serving esikleri
+`relative_thresholds` ile skorlama gununun evreni icinde TERTILDIR (ust 1/3 high).
+Likidite kapisi artik etiketi dusurmez: en az likit segmentte sinyal en guclu cikti
+(IC 0.159); bunun yerine ayri "islem zor" uyarisi eklenir.
 
 ICIR esikleri (1.0 / 0.5) ve n_eff esigi (50) HEURISTIKTIR, kalibre edilmis
 istatistiksel esikler degildir. Esiklerin uygulanacagi ICIR ORTUSMEYEN
@@ -22,6 +28,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
+
 
 @dataclass(frozen=True)
 class ConfidenceThresholds:
@@ -29,6 +37,24 @@ class ConfidenceThresholds:
     icir_high: float = 1.0     # bu ICIR'in ustunde sinyal guclu
     icir_medium: float = 0.5   # bu ICIR'in ustunde sinyal orta
     min_n_eff_high: int = 50   # "high" icin gereken min ortusmeyen tarih sayisi
+
+
+def relative_thresholds(
+    icirs, base: ConfidenceThresholds | None = None, floor: float = 0.0,
+) -> ConfidenceThresholds:
+    """Evren ici tertil esikleri: segment ICIR'i ust 1/3 -> high, orta 1/3 -> medium.
+
+    `floor` mutlak alt sinir: ICIR < floor olan segment tertili ne olursa olsun `low`.
+    3'ten az sonlu deger -> `base` (sabit esikler).
+    """
+    base = base or ConfidenceThresholds()
+    v = np.asarray([float(x) for x in icirs if x is not None and np.isfinite(x)], dtype=float)
+    if len(v) < 3:
+        return base
+    lo, hi = np.quantile(v, [1.0 / 3.0, 2.0 / 3.0])
+    lo = float(np.nextafter(lo, np.inf))   # alt tertil siniri dahil low (esit degerlerde)
+    return ConfidenceThresholds(icir_high=float(max(hi, floor)), icir_medium=float(max(lo, floor)),
+                                min_n_eff_high=base.min_n_eff_high)
 
 
 def select_segment_icir(stats: dict | None) -> tuple[float | None, int | None]:
@@ -79,15 +105,16 @@ def peer_confidence(
     reasons: list[str] = []
     warnings: list[str] = []
 
-    # --- sert kapilar (her zaman low) ---
+    # --- likidite: etiketi dusurmez, ayri uyari (kalibrasyon 2026-11-16) ---
     if not tradable:
-        warnings.append("Likidite/islem kapisi: islem yapilabilirlik dusuk.")
-        return PeerConfidence("low", reasons, warnings)
+        warnings.append("Likidite düşük: işlem yapmak zor olabilir (fiyat kayması, "
+                        "emir derinliği); sinyalin gücünden bağımsız bir uyarıdır.")
+    # --- sert kapilar (her zaman low) ---
     if stale:
-        warnings.append("Veri bayat: guncel fiyat yok.")
+        warnings.append("Veri bayat: güncel fiyat yok.")
         return PeerConfidence("low", reasons, warnings)
     if not universe_ok or peer_label == "unknown":
-        warnings.append("Cross-sectional evren yetersiz: goreli skor anlamsiz.")
+        warnings.append("Cross-sectional evren yetersiz: göreli skor anlamsız.")
         return PeerConfidence("low", reasons, warnings)
 
     # --- sinyal gucu (segment ICIR) ---
@@ -99,18 +126,18 @@ def peer_confidence(
         if n_eff is not None and n_eff < thr.min_n_eff_high:
             reasons.append(
                 f"Segment cross-sectional sinyali orta (ICIR {segment_icir:.2f}; "
-                f"yuksek icin yetersiz ornek).")
+                f"yüksek için yetersiz örnek).")
             warnings.append(
-                f"n_eff={n_eff} < {thr.min_n_eff_high}: ortusmeyen ornek az, "
+                f"n_eff={n_eff} < {thr.min_n_eff_high}: örtüşmeyen örnek az, "
                 f"'high' verilmedi.")
             label = "medium"
         else:
-            reasons.append(f"Segment cross-sectional sinyali guclu (ICIR {segment_icir:.2f}).")
+            reasons.append(f"Segment cross-sectional sinyali güçlü (ICIR {segment_icir:.2f}).")
             label = "high"
     elif segment_icir >= thr.icir_medium:
         reasons.append(f"Segment cross-sectional sinyali orta (ICIR {segment_icir:.2f}).")
         label = "medium"
     else:
-        reasons.append(f"Segment cross-sectional sinyali zayif (ICIR {segment_icir:.2f}).")
+        reasons.append(f"Segment cross-sectional sinyali zayıf (ICIR {segment_icir:.2f}).")
         label = "low"
     return PeerConfidence(label, reasons, warnings)
